@@ -3,6 +3,9 @@ export class User {
   private fullName: string;
   private phone: string;
   private email: string;
+  private isPaying: boolean;
+  private isTeacher: boolean;
+  private level: string;
   private objectives: string;
   private prognosis: string;
 
@@ -10,6 +13,9 @@ export class User {
     fullName: string,
     phone: string,
     email: string,
+    isPaying: boolean,
+    isTeacher: boolean,
+    level: string,
     objectives: string,
     prognosis: string,
     id?: string,
@@ -17,6 +23,9 @@ export class User {
     this.fullName = fullName;
     this.phone = phone;
     this.email = email;
+    this.isPaying = isPaying;
+    this.isTeacher = isTeacher;
+    this.level = level;
     this.objectives = objectives;
     this.prognosis = prognosis;
     this.id = id;

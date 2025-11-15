@@ -25,6 +25,9 @@ export class UserFirestoreRepository implements UserRepository {
                 data.fullName,
                 data.phone,
                 data.email,
+                data.isPaying,
+                data.isTeacher,
+                data.level,
                 data.objectives,
                 data.prognosis,
                 doc.id
