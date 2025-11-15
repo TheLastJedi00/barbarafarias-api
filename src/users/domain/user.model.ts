@@ -30,4 +30,21 @@ export class User {
     this.prognosis = prognosis;
     this.id = id;
   }
+
+  getId(): string {
+    return this.id!;
+  }
+
+  toPlainObject() {
+    return {
+      fullName: this.fullName,
+      phone: this.phone,
+      email: this.email,
+      isPaying: this.isPaying,
+      isTeacher: this.isTeacher,
+      level: this.level,
+      objectives: this.objectives,
+      prognosis: this.prognosis,
+    };
+  }
 }
