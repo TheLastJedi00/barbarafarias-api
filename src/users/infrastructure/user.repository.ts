@@ -10,6 +10,7 @@ export class UserFirestoreRepository implements UserRepository {
   constructor() {
     this.db = admin.firestore();
   }
+  
 
   async save(user: User): Promise<string> {
     const userObject = user.toPlainObject();
@@ -59,6 +60,26 @@ export class UserFirestoreRepository implements UserRepository {
       return user;
     }
     return null;
+  }
+
+  async findByEmail(email: string): Promise<User | null> {
+    const snapshot = await this.db.collection('users').where('email', '==', email).get();
+    let user: User | null = null;
+    snapshot.docs.forEach((doc) => {
+      const data = doc.data();
+      user = new User(
+        data.fullName,
+        data.phone,
+        data.email,
+        data.isPaying,
+        data.isTeacher,
+        data.level,
+        data.objectives,
+        data.prognosis,
+        doc.id,
+      );
+    });
+    return user;
   }
 
   async update(user: User): Promise<void> {

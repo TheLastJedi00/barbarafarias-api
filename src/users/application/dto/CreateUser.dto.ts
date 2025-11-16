@@ -1,4 +1,5 @@
 import { IsEmail, IsNotEmpty, IsString } from "class-validator";
+import { IsEmailUnique } from "src/users/infrastructure/decorators/isEmailUnique.decorator";
 
 export class CreateUserDto {
     @IsNotEmpty({message: "Name is required"})
@@ -6,7 +7,14 @@ export class CreateUserDto {
     @IsString({message: "Phone is required"})
     phone: string;
     @IsEmail(undefined, {message: "Invalid email format"})
+    @IsEmailUnique({message: "Email already exists"})
     email: string;
+    @IsNotEmpty({message: "this user is paying or not?"})
+    isPaying: boolean;
+    @IsNotEmpty({message: "this user is a teacher or not?"})
+    isTeacher: boolean;
+    @IsString({message: "Level is required"})
+    level: string;
     @IsString({message: "Password is required"})
     password: string;
     @IsString({message: "Objectives is required"})

@@ -12,6 +12,9 @@ export class UserService{
             dto.fullName, 
             dto.phone, 
             dto.email, 
+            dto.isPaying, 
+            dto.isTeacher, 
+            dto.level, 
             dto.objectives, 
             dto.prognosys);
         this.userRepository.save(user);

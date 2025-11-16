@@ -3,6 +3,7 @@ import { AppModule } from './app.module';
 import { ValidationPipe } from '@nestjs/common';
 import { ServiceAccount } from 'firebase-admin';
 import * as admin from 'firebase-admin';
+import { useContainer } from 'class-validator';
 
 async function bootstrap() {
   const serviceAccount = require('../serviceAccountKey.json') as ServiceAccount;
@@ -17,6 +18,7 @@ async function bootstrap() {
       transform: true,
     }),
   );
+  useContainer(app.select(AppModule), { fallbackOnErrors: true }),
   await app.listen(process.env.PORT ?? 8080); 
 }
 bootstrap();
