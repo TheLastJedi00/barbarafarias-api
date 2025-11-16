@@ -2,7 +2,7 @@ import { User } from "./user.model";
 
 export interface UserRepository{
     findByEmail(email: string): Promise<User | null>;
-    save(user: User): Promise<string | void>;
+    save(user: User): Promise<string>;
     findAll(): Promise<User[]>;
     findById(id: string): Promise<User | null>;
     update(user: User): Promise<void>;
