@@ -3,6 +3,7 @@ import { User } from '../domain/user.model';
 import { CreateUserDto } from '../application/dto/CreateUser.dto';
 import type { UserRepository } from '../domain/user.repository.port';
 import { UpdateUserDto } from './dto/UpdateUser.dto';
+import * as admin from 'firebase-admin';
 
 @Injectable()
 export class UserService {
@@ -12,6 +13,21 @@ export class UserService {
   ) {}
 
   async createUser(dto: CreateUserDto): Promise<string> {
+    let userRecord;
+    try{
+      userRecord = await admin.auth().createUser({
+        email: dto.email,
+        emailVerified: false,
+        phoneNumber: dto.phone,
+        password: dto.password,
+        displayName: dto.fullName,
+        disabled: false,
+      });
+    } catch (error) {
+      console.error('Error creating user:', error);
+      throw new Error('Error creating Auth');
+    }
+    const uid = userRecord.uid;
     const user = new User(
       dto.fullName,
       dto.phone,
@@ -22,7 +38,7 @@ export class UserService {
       dto.objectives,
       dto.prognosys,
     );
-    return await this.userRepository.save(user);
+    return await this.userRepository.save(user, uid);
   }
 
   async getAllUsers(): Promise<User[]> {
