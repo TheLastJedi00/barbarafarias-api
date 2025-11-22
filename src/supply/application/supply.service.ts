@@ -1,8 +1,9 @@
-import { Inject } from "@nestjs/common";
+import { Inject, Injectable } from "@nestjs/common";
 import type { SupplyRepository } from "../domain/supply.repository.port";
 import { StudentSupplyDto } from "./dtos/CreateSupply.dto";
 import { Supply } from "../domain/supply.model";
 
+@Injectable()
 export class SupplyService {
     constructor(@Inject('SupplyRepository') private supplyRepository: SupplyRepository) {}
 
