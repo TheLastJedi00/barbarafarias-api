@@ -1,6 +1,6 @@
 import { Inject } from "@nestjs/common";
 import type { SupplyRepository } from "../domain/supply.repository.port";
-import { StudentSupplyDto } from "./dtos/CreateSupplie.dto";
+import { StudentSupplyDto } from "./dtos/CreateSupply.dto";
 import { Supply } from "../domain/supply.model";
 
 export class SupplyService {
