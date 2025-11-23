@@ -5,7 +5,7 @@ import { UserService } from "./user.service";
 import { IsEmailUnique } from "../infrastructure/validators/IsEmailUnique.constraint";
 
 @Module({
-  imports: [ UserModule ],
+  imports: [],
   controllers: [UserController],
   providers: [
     UserService, {

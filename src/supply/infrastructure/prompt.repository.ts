@@ -9,7 +9,7 @@ import { Injectable } from '@nestjs/common';
 export class PromptFirestoreRepository implements PromptRepository {
   private readonly db: Firestore;
   private readonly collectionName = 'prompts';
-  constructor(db: Firestore) {
+  constructor() {
     this.db = admin.firestore();
   }
   async getPromptByLevel(level: Level): Promise<Prompt | null> {

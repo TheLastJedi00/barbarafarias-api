@@ -4,10 +4,11 @@ import { SupplyFirestoreRepository } from "../infrastructure/supply.repository";
 import { SupplyController } from "./supply.controller";
 import { GeminiProvider } from "../infrastructure/gemini";
 import { PromptFirestoreRepository } from "../infrastructure/prompt.repository";
+import { UserModule } from "src/users/application/user.module";
 
 @Module(
     {
-    imports: [],
+    imports: [ UserModule ],
     controllers: [ SupplyController ],
     providers: [
       SupplyService,
