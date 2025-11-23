@@ -1,23 +1,15 @@
-import {
-  Body,
-  Controller,
-  Delete,
-  Get,
-  Param,
-  Post,
-  Put,
-} from '@nestjs/common';
+import { Body, Controller, Get, Param, Post } from '@nestjs/common';
 import { SupplyService } from './supply.service';
-import { StudentSupplyDto } from './dtos/CreateSupply.dto';
 import { Supply } from '../domain/models/supply.model';
 import { SupplyInfoDto } from './dtos/SupplyInfo.dto';
+import type { Level } from '../domain/types/student.level';
 
 @Controller('/supplies')
 export class SupplyController {
   constructor(private readonly supplyService: SupplyService) {}
 
   @Post()
-  async createSupply(@Body() data: SupplyInfoDto): Promise<void> {
+  async createSupply(@Body() data: SupplyInfoDto): Promise<string> {
     return this.supplyService.createSupply(data);
   }
 
@@ -29,21 +21,8 @@ export class SupplyController {
   @Get(':studentId/:level')
   async getSupplyByLevel(
     @Param('studentId') studentId: string,
-    @Param('level') level: string,
+    @Param('level') level: Level,
   ): Promise<Supply | null> {
     return this.supplyService.findSupplyByStudentAndLevel(studentId, level);
-  }
-
-  @Put()
-  async updateSupply(@Body() data: StudentSupplyDto): Promise<void> {
-    return this.supplyService.updateSupply(data);
-  }
-
-  @Delete(':studentId/:level')
-  async deleteSupply(
-    @Param('studentId') studentId: string,
-    @Param('level') level: string,
-  ): Promise<void> {
-    return this.supplyService.deleteSupply(studentId, level);
   }
 }
