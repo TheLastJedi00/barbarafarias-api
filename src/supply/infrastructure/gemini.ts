@@ -17,7 +17,7 @@ export class GeminiProvider implements GenerativeAIService {
     }
     this.genAI = new GoogleGenerativeAI(apiKey);
     const modelName =
-      this.configService.get<string>('GEMINI_MODEL') || 'gemini-3-pro-preview';
+      this.configService.get<string>('GEMINI_MODEL') || 'gemini-2.5-pro';
 
     this.model = this.genAI.getGenerativeModel({
       model: modelName,
@@ -48,7 +48,7 @@ export class GeminiProvider implements GenerativeAIService {
       console.error('Falha ao processar resposta do Gemini.');
       console.error('Erro:', error);
       console.error('Texto recebido (Raw):', cleanText);
-      throw new Error('Failed to generate content with Gemini');
+      throw new Error(`Failed to generate content with Gemini: ${error.message}`);
     }
   }
 }

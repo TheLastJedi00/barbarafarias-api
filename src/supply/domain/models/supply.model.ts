@@ -9,7 +9,7 @@ export class Supply {
     constructor(studentId: string, level: Level, modules: Module[]) {
         this.studentId = studentId;
         this.level =  level;
-        this.modules = [];
+        this.modules = modules;
     }
 
     toPlainObject(){

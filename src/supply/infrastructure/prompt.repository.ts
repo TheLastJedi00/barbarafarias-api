@@ -14,13 +14,14 @@ export class PromptFirestoreRepository implements PromptRepository {
   }
   async getPromptByLevel(level: Level): Promise<Prompt | null> {
     try {
-      const doc = await this.db
+      const snapshot = await this.db
         .collection(this.collectionName)
-        .doc(level.toString())
+        .where('level', '==', level)
         .get();
-      if (!doc.exists) {
+      if (snapshot.empty) {
         return null;
       }
+      const doc = snapshot.docs[0];
       const data = doc.data();
       return new Prompt(level, data!.prompt);
     } catch (error) {
