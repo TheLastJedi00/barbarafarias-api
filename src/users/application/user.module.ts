@@ -5,7 +5,7 @@ import { UserService } from "./user.service";
 import { IsEmailUnique } from "../infrastructure/validators/IsEmailUnique.constraint";
 
 @Module({
-  imports: [],
+  imports: [ UserModule ],
   controllers: [UserController],
   providers: [
     UserService, {
@@ -13,5 +13,6 @@ import { IsEmailUnique } from "../infrastructure/validators/IsEmailUnique.constr
     useClass: UserFirestoreRepository},
     IsEmailUnique
   ],
+  exports: [ 'UserRepository' ]
 })
 export class UserModule {}

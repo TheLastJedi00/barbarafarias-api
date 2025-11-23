@@ -7,13 +7,13 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import type { SupplyRepository } from '../domain/supply.repository.port';
-import { StudentSupplyDto } from './dtos/CreateSupply.dto';
 import { Supply } from '../domain/models/supply.model';
 import { SupplyInfoDto } from './dtos/SupplyInfo.dto';
 import type { UserRepository } from 'src/users/domain/user.repository.port';
 import type { GenerativeAIService } from '../domain/genai.port';
-import type { PromptRepository } from '../infrastructure/prompt.repository';
+import type { PromptRepository } from '../domain/prompt.repository.port';
 import { StudentInfo } from '../domain/types/student.info';
+import { Level } from '../domain/types/student.level';
 
 @Injectable()
 export class SupplyService {
@@ -26,19 +26,8 @@ export class SupplyService {
     @Inject('GenerativeAIService') private readonly genAi: GenerativeAIService,
   ) {}
 
-  async createSupply(dto: SupplyInfoDto): Promise<void> {
+  async createSupply(dto: SupplyInfoDto): Promise<string> {
     try {
-      //check if supply already exists
-      const existingSupply = await this.supplyRepository.findByStudentAndLevel(
-        dto.studentId,
-        dto.level,
-      );
-      //error 409 if supply already exists
-      if (existingSupply) {
-        throw new ConflictException(
-          'Supply for this student and level already exists',
-        );
-      }
       //get student data and prompt by level
       const student = await this.userRepository.findById(dto.studentId);
       const prompt = await this.promptRepository.getPromptByLevel(dto.level);
@@ -69,7 +58,9 @@ export class SupplyService {
         throw error;
       }
       console.error('Error creating supply:', error);
-      throw new InternalServerErrorException(`Failed to create supply: ${error.message}`);
+      throw new InternalServerErrorException(
+        `Failed to create supply: ${error.message}`,
+      );
     }
   }
 
@@ -79,16 +70,11 @@ export class SupplyService {
 
   async findSupplyByStudentAndLevel(
     studentId: string,
-    level: string,
+    level: Level,
   ): Promise<Supply | null> {
-    return this.supplyRepository.findByStudentAndLevel(studentId, level as any);
+    return this.supplyRepository.findByStudentAndLevel(studentId, level);
   }
-
-  async updateSupply(dto: StudentSupplyDto): Promise<void> {
-    const supply = new Supply(dto.studentId, dto.level, dto.content);
-    return this.supplyRepository.update(supply);
-  }
-  async deleteSupply(studentId: string, level: string): Promise<void> {
-    return this.supplyRepository.delete(studentId, level as any);
+  async deleteSupply(studentId: string, level: Level): Promise<void> {
+    return this.supplyRepository.delete(studentId, level);
   }
 }

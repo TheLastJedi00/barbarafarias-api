@@ -3,9 +3,10 @@ import * as admin from "firebase-admin";
 import { Supply } from "../domain/models/supply.model";
 import { Level } from "../domain/types/student.level";
 import { Injectable } from "@nestjs/common";
+import { SupplyRepository } from "../domain/supply.repository.port";
 
 @Injectable()
-export class SupplyFirestoreRepository {
+export class SupplyFirestoreRepository implements SupplyRepository {
     private readonly db: Firestore;
     private readonly collectionName = 'student_supplies';
 
@@ -13,10 +14,11 @@ export class SupplyFirestoreRepository {
         this.db = admin.firestore();
     }
 
-    async save(supply: Supply): Promise<void> {
+    async save(supply: Supply): Promise<string> {
         const docId = supply.getDocumentId();
         const data = supply.toPlainObject();
         await this.db.collection(this.collectionName).doc(docId).set(data, { merge: true });
+        return docId;
     }
 
     async findByStudentId(studentId: string): Promise<Supply[]> {
@@ -53,7 +55,7 @@ export class SupplyFirestoreRepository {
         );
     }
 
-    async update(supply: Supply): Promise<void> {
+    async update(supply: Supply): Promise<string> {
         return this.save(supply);
     }
 

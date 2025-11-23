@@ -3,7 +3,9 @@ import { GenerativeAIService } from '../domain/genai.port';
 import { ConfigService } from '@nestjs/config';
 import { StudentInfo } from '../domain/types/student.info';
 import { Module } from '../domain/types/student.supply';
+import { Injectable } from '@nestjs/common';
 
+@Injectable()
 export class GeminiProvider implements GenerativeAIService {
   private genAI: GoogleGenerativeAI;
   private model: any;
