@@ -1,6 +1,6 @@
 import { Firestore } from "firebase-admin/firestore";
 import * as admin from "firebase-admin";
-import { Supply } from "../domain/supply.model";
+import { Supply } from "../domain/models/supply.model";
 import { Level } from "../domain/types/student.level";
 import { Injectable } from "@nestjs/common";
 

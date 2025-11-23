@@ -9,14 +9,15 @@ import {
 } from '@nestjs/common';
 import { SupplyService } from './supply.service';
 import { StudentSupplyDto } from './dtos/CreateSupply.dto';
-import { Supply } from '../domain/supply.model';
+import { Supply } from '../domain/models/supply.model';
+import { SupplyInfoDto } from './dtos/SupplyInfo.dto';
 
 @Controller('/supplies')
 export class SupplyController {
   constructor(private readonly supplyService: SupplyService) {}
 
   @Post()
-  async createSupply(@Body() data: StudentSupplyDto): Promise<void> {
+  async createSupply(@Body() data: SupplyInfoDto): Promise<void> {
     return this.supplyService.createSupply(data);
   }
 

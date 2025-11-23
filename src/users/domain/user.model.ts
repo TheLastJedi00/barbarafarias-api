@@ -34,6 +34,15 @@ export class User {
   getId(): string {
     return this.id!;
   }
+  getFullName(): string {
+    return this.fullName;
+  }
+  getObjectives(): string {
+    return this.objectives;
+  }
+  getPrognosis(): string {
+    return this.prognosis;
+  }
 
   toPlainObject() {
     return {
