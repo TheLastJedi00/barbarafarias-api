@@ -1,11 +1,10 @@
 import { Module } from "@nestjs/common";
-import { TeacherModule } from "src/teacher/application/teacher.module";
-import { UserModule } from "src/users/application/user.module";
 import { FirebaseAuthGuard } from "../infrastructure/firebase.guard";
+import { RolesGuard } from "../infrastructure/roles.guard";
 
 @Module({
-    providers: [ FirebaseAuthGuard ],
-    exports: [],
+    providers: [ FirebaseAuthGuard, RolesGuard ],
+    exports: [ FirebaseAuthGuard, RolesGuard ],
     controllers: [],
     imports: [],
 })
