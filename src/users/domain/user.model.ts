@@ -43,6 +43,9 @@ export class User {
   getPrognosis(): string {
     return this.prognosis;
   }
+  haveTeacherRole(): boolean {
+    return this.isTeacher;
+  }
 
   toPlainObject() {
     return {
