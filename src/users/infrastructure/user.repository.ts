@@ -15,7 +15,7 @@ export class UserFirestoreRepository implements UserRepository {
   async save(user: User, uid: string): Promise<string> {
     const userObject = user.toPlainObject();
     try {
-      const docRef = await this.db.collection('users').doc(uid).set(userObject);
+      await this.db.collection('users').doc(uid).set(userObject);
       return uid;
     } catch (error) {
       console.error('Erro no Repositório ao salvar usuário:', error);

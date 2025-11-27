@@ -1,4 +1,4 @@
-import { Inject, Injectable } from '@nestjs/common';
+import { Inject, Injectable, NotFoundException } from '@nestjs/common';
 import { User } from '../domain/user.model';
 import { CreateUserDto } from '../application/dto/CreateUser.dto';
 import type { UserRepository } from '../domain/user.repository.port';
@@ -24,8 +24,7 @@ export class UserService {
         disabled: false,
       });
     } catch (error) {
-      console.error('Error creating user:', error);
-      throw new Error('Error creating Auth');
+      throw new Error('Error creating Auth:' + error);
     }
     const uid = userRecord.uid;
     const user = new User(
@@ -68,7 +67,7 @@ export class UserService {
   async findById(id: string): Promise<User> { 
     const user = await this.userRepository.findById(id);
     if (!user) {
-      throw new Error('User not found');
+      throw new NotFoundException('User not found');
     }
     return user;
   }

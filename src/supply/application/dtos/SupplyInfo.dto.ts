@@ -9,4 +9,9 @@ export class SupplyInfoDto {
   @IsNotEmpty()
   @IsEnum(['A1', 'A2', 'B1', 'B2'])
   level: Level;
+
+  constructor(studentId: string, level: Level) {
+    this.studentId = studentId;
+    this.level = level;
+  }
 }
