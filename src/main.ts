@@ -8,6 +8,7 @@ import { useContainer } from 'class-validator';
 import * as fs from 'fs';
 import * as path from 'path';
 
+//Variáveis de ambiente carregadas pelo NestJS a partir do painel da Vercel ou do arquivo .env local
 async function bootstrap() {
   
   // --- INICIALIZAÇÃO DO FIREBASE ---
