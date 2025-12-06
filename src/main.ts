@@ -10,7 +10,6 @@ import * as path from 'path';
 
 //Variáveis de ambiente carregadas pelo NestJS a partir do painel da Vercel ou do arquivo .env local
 async function bootstrap() {
-  
   // --- INICIALIZAÇÃO DO FIREBASE ---
   const localKeyPath = path.resolve(process.cwd(), 'serviceAccountKey.json');
   let serviceAccount: ServiceAccount;
@@ -18,19 +17,19 @@ async function bootstrap() {
   if (fs.existsSync(localKeyPath)) {
     // LOCAL
     serviceAccount = require(localKeyPath);
-    console.log('🔥 Firebase: Modo Local (Arquivo JSON detectado).');
+    console.log('Firebase Local (Arquivo JSON detectado).');
   } else {
     // VERCEL
-    console.log('☁️ Firebase: Modo Nuvem (Lendo Base64...).');
+    console.log('Firebase Nuvem (Lendo Base64...).');
     const base64 = process.env.FIREBASE_SERVICE_ACCOUNT_BASE64;
-    
+
     if (!base64) {
-      throw new Error('FATAL: Credenciais do Firebase não encontradas (Nem arquivo, nem Base64).');
+      throw new Error('FATAL: Credenciais do Firebase não encontradas.');
     }
 
     const buffer = Buffer.from(base64, 'base64');
     serviceAccount = JSON.parse(buffer.toString('utf-8'));
-    console.log('✅ Firebase: Credenciais decodificadas com sucesso.');
+    console.log('Firebase: Credenciais decodificadas com sucesso.');
   }
 
   // Erro de re-inicialização em hot-reload
@@ -43,7 +42,18 @@ async function bootstrap() {
   const app = await NestFactory.create(AppModule);
 
   // CORS
-  app.enableCors(); 
+  app.enableCors({
+    origin: [
+      // Staging environment
+      'https://dev.barbarafarias.com.br',
+      // Production environment
+      'https://barbarafarias.com.br',
+      'https://www.barbarafarias.com.br',
+      // Local development
+      'http://localhost:3000',
+      'http://localhost:4200',
+    ],
+  });
 
   app.useGlobalPipes(
     new ValidationPipe({
@@ -59,9 +69,9 @@ async function bootstrap() {
   const port = process.env.PORT || configService.get<number>('PORT') || 8080;
 
   const server = await app.listen(port);
-  // Timeout de 5 minutos 
-  server.setTimeout(300000); 
-  
+  // Timeout de 5 minutos
+  server.setTimeout(300000);
+
   console.log(`Application is running on: ${await app.getUrl()}`);
 }
 bootstrap();
