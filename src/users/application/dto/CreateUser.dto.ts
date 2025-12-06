@@ -1,5 +1,5 @@
 import { IsEmail, IsNotEmpty, IsString } from "class-validator";
-import { IsEmailUnique } from "src/users/infrastructure/decorators/isEmailUnique.decorator";
+import { IsEmailUnique } from "../../infrastructure/decorators/isEmailUnique.decorator";
 
 export class CreateUserDto {
     @IsNotEmpty({message: "Name is required"})
