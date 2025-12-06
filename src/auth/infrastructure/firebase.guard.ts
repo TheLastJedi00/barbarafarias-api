@@ -1,15 +1,16 @@
-import { CanActivate, ExecutionContext, Injectable, UnauthorizedException } from '@nestjs/common';
+import { CanActivate, ExecutionContext, forwardRef, Inject, Injectable, UnauthorizedException } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import * as admin from 'firebase-admin'; // Precisamos do Admin para validar o token
 import { ROLES_KEY } from './decorators/roles.decorator';
-import { TeacherService } from 'src/teacher/application/teacher.service';
-import { UserService } from 'src/users/application/user.service';
+import { TeacherService } from '../../teacher/application/teacher.service';
+import { UserService } from '../../users/application/user.service';
 
 @Injectable()
 export class FirebaseAuthGuard implements CanActivate {
   constructor(
     private reflector: Reflector,
     private teacherService: TeacherService,
+    @Inject(forwardRef(() => UserService))
     private userService: UserService
   ) {}
 
