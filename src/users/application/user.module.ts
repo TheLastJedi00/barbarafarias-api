@@ -4,9 +4,13 @@ import { UserFirestoreRepository } from '../infrastructure/user.repository';
 import { UserService } from './user.service';
 import { IsEmailUnique } from '../infrastructure/validators/IsEmailUnique.constraint';
 import { AuthModule } from '../../auth/application/auth.module';
+import { TeacherModule } from '../../teacher/application/teacher.module';
 
 @Module({
-  imports: [ forwardRef(() => AuthModule)],
+  imports: [ 
+    forwardRef(() => AuthModule),
+    TeacherModule
+  ],
   controllers: [UserController],
   providers: [
     UserService,
