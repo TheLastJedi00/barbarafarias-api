@@ -43,12 +43,16 @@ export class FirebaseAuthGuard implements CanActivate {
     // Search in firestore
     if (requiredRoles.includes('teacher')) {
       const teacherFromDb = await this.teacherService.findTeacherById(userFromToken.uid);
+      console.log(teacherFromDb);
+
       if (teacherFromDb?.isTeacher) {
         request['user'] = { ...userFromToken, ...teacherFromDb };
         return true;
       }
 
       const userFromDb = await this.userService.findById(userFromToken.uid);
+      console.log(userFromDb);
+
       if (userFromDb?.haveTeacherRole()) {
         request['user'] = { ...userFromToken, ...userFromDb };
         return true;
