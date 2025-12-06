@@ -43,19 +43,26 @@ async function bootstrap() {
 
   // CORS
   app.enableCors({
-    origin: [
-      // Staging environment
+  origin: (origin, callback) => {
+    console.log('Origem recebida:', origin); // <--- Adicione isso
+    
+    const allowed = [
       'https://dev.barbarafarias.com.br',
-      // Production environment
       'https://barbarafarias.com.br',
       'https://www.barbarafarias.com.br',
-      // Local development
       'http://localhost:3000',
-      'localhost:3000',
       'http://localhost:4200',
-      'localhost:4200',
-    ],
-  });
+    ];
+
+    if (!origin || allowed.includes(origin)) {
+      callback(null, true);
+    } else {
+      console.log('Bloqueado:', origin);
+      callback(new Error('Not allowed by CORS'));
+    }
+  },
+  credentials: true,
+});
 
   app.useGlobalPipes(
     new ValidationPipe({
