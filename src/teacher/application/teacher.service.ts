@@ -9,8 +9,12 @@ export class TeacherService {
         private readonly teacherRepository: TeacherRepository
     ) {}
 
-    async findTeacherById(teacherId: string): Promise<Teacher | null> {
-        return this.teacherRepository.findById(teacherId);
+    async findTeacherById(teacherId: string): Promise<Teacher> {
+        const teacher = await this.teacherRepository.findById(teacherId);
+        if (!teacher) {
+            throw new Error('Teacher not found');
+        }
+        return teacher;
     }
 
 }
