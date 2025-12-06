@@ -4,11 +4,10 @@ import { CreateUserDto } from './dto/CreateUser.dto';
 import { User } from '../domain/user.model';
 import { UpdateUserDto } from './dto/UpdateUser.dto';
 import { FirebaseAuthGuard } from 'src/auth/infrastructure/firebase.guard';
-import { RolesGuard } from 'src/auth/infrastructure/roles.guard';
 import { Roles } from 'src/auth/infrastructure/decorators/roles.decorator';
 
 @Controller('/users')
-@UseGuards( FirebaseAuthGuard, RolesGuard )
+@UseGuards( FirebaseAuthGuard )
 export class UserController {
   constructor(private service: UserService) {}
 
