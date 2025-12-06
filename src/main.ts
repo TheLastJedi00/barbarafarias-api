@@ -51,7 +51,9 @@ async function bootstrap() {
       'https://www.barbarafarias.com.br',
       // Local development
       'http://localhost:3000',
+      'localhost:3000',
       'http://localhost:4200',
+      'localhost:4200',
     ],
   });
 
