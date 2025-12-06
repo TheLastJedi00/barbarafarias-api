@@ -12,6 +12,6 @@ import { TeacherFirebaseRepository } from "../infrastructure/teacherRepository";
             useClass: TeacherFirebaseRepository
         }
      ],
-    exports: []
+    exports: [ TeacherService ]
 })
 export class TeacherModule {}
