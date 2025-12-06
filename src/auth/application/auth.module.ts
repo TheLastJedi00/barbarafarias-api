@@ -1,8 +1,8 @@
 import { forwardRef, Module } from '@nestjs/common';
 import { FirebaseAuthGuard } from '../infrastructure/firebase.guard';
 import { RolesGuard } from '../infrastructure/roles.guard';
-import { UserModule } from 'src/users/application/user.module';
-import { TeacherModule } from 'src/teacher/application/teacher.module';
+import { UserModule } from '../..//users/application/user.module';
+import { TeacherModule } from '../../teacher/application/teacher.module';
 
 @Module({
   providers: [
