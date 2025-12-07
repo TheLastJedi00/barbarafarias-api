@@ -1,6 +1,6 @@
 import { CanActivate, ExecutionContext, forwardRef, Inject, Injectable, UnauthorizedException } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
-import * as admin from 'firebase-admin'; // Precisamos do Admin para validar o token
+import * as admin from 'firebase-admin';
 import { ROLES_KEY } from './decorators/roles.decorator';
 import { TeacherService } from '../../teacher/application/teacher.service';
 import { UserService } from '../../users/application/user.service';

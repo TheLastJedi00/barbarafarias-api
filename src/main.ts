@@ -10,6 +10,9 @@ import * as path from 'path';
 
 //Variáveis de ambiente carregadas pelo NestJS a partir do painel da Vercel ou do arquivo .env local
 async function bootstrap() {
+  console.log('AUTH EMULATOR:', process.env.FIREBASE_AUTH_EMULATOR_HOST);
+  console.log('FIRESTORE EMULATOR:', process.env.FIRESTORE_EMULATOR_HOST);
+  console.log('PROJECT ID:', process.env.FIREBASE_PROJECT_ID);
   // --- INICIALIZAÇÃO DO FIREBASE ---
   const localKeyPath = path.resolve(process.cwd(), 'serviceAccountKey.json');
   let serviceAccount: ServiceAccount;
