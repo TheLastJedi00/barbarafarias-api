@@ -5,6 +5,7 @@ import { User } from '../domain/user.model';
 import { UpdateUserDto } from './dto/UpdateUser.dto';
 import { FirebaseAuthGuard } from 'src/auth/infrastructure/firebase.guard';
 import { Roles } from 'src/auth/infrastructure/decorators/roles.decorator';
+import { ResponseUserDto } from './dto/ResponseUser.dto';
 
 @Controller('/users')
 @UseGuards( FirebaseAuthGuard )
@@ -13,7 +14,7 @@ export class UserController {
 
   @Post()
   @Roles('teacher')
-  async createUser(@Body() user: CreateUserDto): Promise<string> {
+  async createUser(@Body() user: CreateUserDto): Promise<ResponseUserDto> {
     return this.service.createUser(user);
   }
   @Get()

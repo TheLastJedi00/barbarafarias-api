@@ -4,40 +4,49 @@ import { CreateUserDto } from '../application/dto/CreateUser.dto';
 import type { UserRepository } from '../domain/user.repository.port';
 import { UpdateUserDto } from './dto/UpdateUser.dto';
 import * as admin from 'firebase-admin';
+import { ResponseUserDto } from './dto/ResponseUser.dto';
 
 @Injectable()
 export class UserService {
-  
   constructor(
     @Inject('UserRepository') private userRepository: UserRepository,
   ) {}
 
-  async createUser(dto: CreateUserDto): Promise<string> {
+  async createUser(dto: CreateUserDto): Promise<ResponseUserDto> {
     let userRecord;
-    try{
+    try {
       userRecord = await admin.auth().createUser({
         email: dto.email,
-        emailVerified: false,
-        phoneNumber: dto.phone,
         password: dto.password,
-        displayName: dto.fullName,
-        disabled: false,
       });
+      console.log('User created:', userRecord.email);
     } catch (error) {
       throw new Error('Error creating Auth:' + error);
     }
-    const uid = userRecord.uid;
-    const user = new User(
-      dto.fullName,
-      dto.phone,
-      dto.email,
-      dto.isPaying,
-      dto.isTeacher,
-      dto.level,
-      dto.objectives,
-      dto.prognosys,
-    );
-    return await this.userRepository.save(user, uid);
+    try {
+      const uid = userRecord.uid;
+      const user = new User(
+        dto.fullName,
+        dto.phone,
+        dto.email,
+        dto.isPaying,
+        dto.isTeacher,
+        dto.level,
+        dto.objectives,
+        dto.prognosys,
+      );
+      console.log('Creating User:' + user.getFullName());
+      const id = await this.userRepository.save(user, uid);
+      const response = new ResponseUserDto(
+        id,
+        user.getFullName(),
+        user.getCreatedAt(),
+        user.getUpdatedAt(),
+      );
+      return response;
+    } catch (error) {
+      throw new Error('Error creating User:' + error);
+    }
   }
 
   async getAllUsers(): Promise<User[]> {
@@ -64,7 +73,7 @@ export class UserService {
     return user;
   }
 
-  async findById(id: string): Promise<User> { 
+  async findById(id: string): Promise<User> {
     const user = await this.userRepository.findById(id);
     if (!user) {
       throw new NotFoundException('User not found');
@@ -73,10 +82,10 @@ export class UserService {
   }
 
   delete(id: string): Promise<void> {
-      const user = this.userRepository.delete(id);
-      if (!user) {
-        throw new Error('User not found');
-      }
-      return user;
+    const user = this.userRepository.delete(id);
+    if (!user) {
+      throw new Error('User not found');
+    }
+    return user;
   }
 }

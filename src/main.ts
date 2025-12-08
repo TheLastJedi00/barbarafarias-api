@@ -47,7 +47,7 @@ async function bootstrap() {
   // CORS
   app.enableCors({
   origin: (origin, callback) => {
-    console.log('Origem recebida:', origin); // <--- Adicione isso
+    console.log('Origem recebida:', origin);
     
     const allowed = [
       'https://dev.barbarafarias.com.br',
@@ -64,6 +64,7 @@ async function bootstrap() {
       callback(new Error('Not allowed by CORS'));
     }
   },
+  methods: 'GET,HEAD,PUT,PATCH,POST,DELETE',
   credentials: true,
 });
 

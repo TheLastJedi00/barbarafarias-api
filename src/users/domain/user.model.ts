@@ -46,6 +46,12 @@ export class User {
   haveTeacherRole(): boolean {
     return this.isTeacher;
   }
+  getCreatedAt(): Date {
+    return new Date();
+  }
+  getUpdatedAt(): Date {
+    return new Date();
+  }
 
   toPlainObject() {
     return {

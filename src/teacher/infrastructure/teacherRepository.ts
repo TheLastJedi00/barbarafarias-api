@@ -14,6 +14,7 @@ export class TeacherFirebaseRepository implements TeacherRepository {
   }
 
   async findById(teacherId: string): Promise<Teacher | null> {
+    console.log('Searching for Teacher ID:', teacherId);
     try {
       const doc = await this.db
         .collection(this.collectionName)
