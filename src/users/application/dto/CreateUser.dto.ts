@@ -20,5 +20,5 @@ export class CreateUserDto {
     @IsString({message: "Objectives is required"})
     objectives: string;
     @IsString({message: "Prognosys is required"})
-    prognosys: string;
+    prognosis: string;
 }

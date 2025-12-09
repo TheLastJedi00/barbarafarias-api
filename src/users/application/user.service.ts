@@ -33,7 +33,7 @@ export class UserService {
         dto.isTeacher,
         dto.level,
         dto.objectives,
-        dto.prognosys,
+        dto.prognosis,
       );
       console.log('Creating User:' + user.getFullName());
       const id = await this.userRepository.save(user, uid);
@@ -81,11 +81,7 @@ export class UserService {
     return user;
   }
 
-  delete(id: string): Promise<void> {
-    const user = this.userRepository.delete(id);
-    if (!user) {
-      throw new Error('User not found');
-    }
-    return user;
+  async delete(id: string): Promise<void> {
+    return await this.userRepository.delete(id);
   }
 }
