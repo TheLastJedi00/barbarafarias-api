@@ -26,7 +26,7 @@ export class SupplyService {
     @Inject('GenerativeAIService') private readonly genAi: GenerativeAIService,
   ) {}
 
-  async createSupply(dto: SupplyInfoDto): Promise<string> {
+  async createSupply(dto: SupplyInfoDto): Promise<SupplyInfoDto> {
     try {
       //get student data and prompt by level
       const student = await this.userRepository.findById(dto.studentId);
@@ -52,7 +52,8 @@ export class SupplyService {
       );
       //create supply entity and save it
       const supply = new Supply(dto.studentId, dto.level, modules);
-      return this.supplyRepository.save(supply);
+      this.supplyRepository.save(supply);
+      return dto;
     } catch (error) {
       if (error instanceof HttpException) {
         throw error;

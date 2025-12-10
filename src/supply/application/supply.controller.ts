@@ -14,7 +14,7 @@ export class SupplyController {
 
   @Post()
   @Roles('teacher')
-  async createSupply(@Body() data: SupplyInfoDto): Promise<string> {
+  async createSupply(@Body() data: SupplyInfoDto): Promise<SupplyInfoDto> {
     return this.supplyService.createSupply(data);
   }
 
