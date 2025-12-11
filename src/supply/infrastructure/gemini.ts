@@ -1,4 +1,4 @@
-import { GoogleGenerativeAI } from '@google/generative-ai';
+import { GoogleGenerativeAI, SchemaType } from '@google/generative-ai';
 import { GenerativeAIService } from '../domain/genai.port';
 import { ConfigService } from '@nestjs/config';
 import { StudentInfo } from '../domain/types/student.info';
@@ -23,11 +23,49 @@ export class GeminiProvider implements GenerativeAIService {
       model: modelName,
       generationConfig: {
         responseMimeType: 'application/json',
+        maxOutputTokens: 50000,
+        temperature: 0.3,
+        // responseSchema: {
+        //   type: SchemaType.ARRAY,
+        //   items: {
+        //     type: SchemaType.OBJECT,
+        //     properties: {
+        //       title: { type: SchemaType.STRING },
+        //       text: { type: SchemaType.STRING },
+        //       topics: {
+        //         type: SchemaType.ARRAY,
+        //         items: {
+        //           type: SchemaType.OBJECT,
+        //           properties: {
+        //             topic: { type: SchemaType.STRING },
+        //             description: { type: SchemaType.STRING },
+        //             examples: { type: SchemaType.STRING },
+        //             curiosity: { type: SchemaType.STRING },
+        //             roleplayInstruction: { type: SchemaType.STRING },
+        //             roleplayDialog: { type: SchemaType.STRING },
+        //           },
+        //           required: [
+        //             'topic',
+        //             'description',
+        //             'examples',
+        //             'curiosity',
+        //             'roleplayInstruction',
+        //             'roleplayDialog',
+        //           ],
+        //         },
+        //       },
+        //     },
+        //     required: ['title', 'text', 'topics'],
+        //   },
+        // },
       },
     });
   }
 
-  async generateContent(prompt: string, studentInfo: StudentInfo): Promise<Module[]> {
+  async generateContent(
+    prompt: string,
+    studentInfo: StudentInfo,
+  ): Promise<Module[]> {
     let cleanText = '';
     try {
       const fullPrompt = `${prompt}\n
@@ -38,6 +76,7 @@ export class GeminiProvider implements GenerativeAIService {
       const result = await this.model.generateContent(fullPrompt);
       const response = await result.response;
       const text: string = response.text();
+      console.log(text);
       cleanText = text
         .replace(/```json/g, '')
         .replace(/```/g, '')
@@ -48,7 +87,9 @@ export class GeminiProvider implements GenerativeAIService {
       console.error('Falha ao processar resposta do Gemini.');
       console.error('Erro:', error);
       console.error('Texto recebido (Raw):', cleanText);
-      throw new Error(`Failed to generate content with Gemini: ${error.message}`);
+      throw new Error(
+        `Failed to generate content with Gemini: ${error.message}`,
+      );
     }
   }
 }
