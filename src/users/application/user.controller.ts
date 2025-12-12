@@ -23,7 +23,6 @@ export class UserController {
     return this.service.getAllUsers();
   }
   @Get(':id')
-  @Roles('teacher')
   async findById(@Param('id') id: string): Promise<User | null> {
     return this.service.findById(id);
   }
