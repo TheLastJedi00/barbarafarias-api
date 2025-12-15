@@ -11,3 +11,9 @@ export interface Topic {
     roleplayInstruction: string;
     roleplayDialog: string;
 }
+
+export interface Word {
+    english: string;
+    portuguse: string;
+    proununce: string;
+}
