@@ -6,14 +6,22 @@ export interface Module {
 export interface Topic {
     topic: string;
     description: string;
-    examples: string;
+    examples: string[];
     curiosity: string;
     roleplayInstruction: string;
-    roleplayDialog: string;
+    roleplayDialog: string[];
+    words: Word[];
+    music: Music;
 }
 
 export interface Word {
     english: string;
     portuguse: string;
-    proununce: string;
+    pronounce: string;
+}
+
+export interface Music {
+    title: string;
+    artist: string;
+    youtube: string;
 }
