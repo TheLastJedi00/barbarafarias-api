@@ -18,7 +18,7 @@ export class CreateUserDto {
     @IsString({message: "Password is required"})
     password: string;
     @IsString({message: "Objectives is required"})
-    objectives: string;
+    objective: string;
     @IsString({message: "Prognosys is required"})
     prognosis: string;
 }

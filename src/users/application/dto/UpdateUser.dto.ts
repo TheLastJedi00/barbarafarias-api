@@ -31,7 +31,7 @@ export class UpdateUserDto {
 
     @IsString()
     @IsOptional()
-    objectives: string;
+    objective: string;
 
     @IsString()
     @IsOptional()

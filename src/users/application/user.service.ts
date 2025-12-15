@@ -32,7 +32,7 @@ export class UserService {
         dto.isPaying,
         dto.isTeacher,
         dto.level,
-        dto.objectives,
+        dto.objective,
         dto.prognosis,
       );
       console.log('Creating User:' + user.getFullName());
@@ -65,7 +65,7 @@ export class UserService {
       dto.isPaying,
       dto.isTeacher,
       dto.level,
-      dto.objectives,
+      dto.objective,
       dto.prognosis,
       foundUser.getId(),
     );

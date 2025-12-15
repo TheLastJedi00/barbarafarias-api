@@ -34,7 +34,7 @@ export class UserFirestoreRepository implements UserRepository {
         data.isPaying,
         data.isTeacher,
         data.level,
-        data.objectives,
+        data.objective,
         data.prognosis,
         doc.id,
       );
@@ -53,7 +53,7 @@ export class UserFirestoreRepository implements UserRepository {
         data!.isPaying,
         data!.isTeacher,
         data!.level,
-        data!.objectives,
+        data!.objective,
         data!.prognosis,
         doc.id,
       );
@@ -74,7 +74,7 @@ export class UserFirestoreRepository implements UserRepository {
         data.isPaying,
         data.isTeacher,
         data.level,
-        data.objectives,
+        data.objective,
         data.prognosis,
         doc.id,
       );

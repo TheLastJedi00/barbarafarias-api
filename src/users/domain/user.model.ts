@@ -6,7 +6,7 @@ export class User {
   private isPaying: boolean;
   private isTeacher: boolean;
   private level: string;
-  private objectives: string;
+  private objective: string;
   private prognosis: string;
 
   constructor(
@@ -16,7 +16,7 @@ export class User {
     isPaying: boolean,
     isTeacher: boolean,
     level: string,
-    objectives: string,
+    objective: string,
     prognosis: string,
     id?: string,
   ) {
@@ -26,7 +26,7 @@ export class User {
     this.isPaying = isPaying;
     this.isTeacher = isTeacher;
     this.level = level;
-    this.objectives = objectives;
+    this.objective = objective;
     this.prognosis = prognosis;
     this.id = id;
   }
@@ -38,7 +38,7 @@ export class User {
     return this.fullName;
   }
   getObjectives(): string {
-    return this.objectives;
+    return this.objective;
   }
   getPrognosis(): string {
     return this.prognosis;
@@ -61,7 +61,7 @@ export class User {
       isPaying: this.isPaying,
       isTeacher: this.isTeacher,
       level: this.level,
-      objectives: this.objectives,
+      objectives: this.objective,
       prognosis: this.prognosis,
     };
   }
