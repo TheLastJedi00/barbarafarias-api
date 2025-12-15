@@ -61,7 +61,7 @@ export class User {
       isPaying: this.isPaying,
       isTeacher: this.isTeacher,
       level: this.level,
-      objectives: this.objective,
+      objective: this.objective,
       prognosis: this.prognosis,
     };
   }
