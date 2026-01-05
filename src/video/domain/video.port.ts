@@ -1,5 +1,6 @@
 import { VideoModule } from "./models/module.model";
 
 export interface VideoRepository {
-    getVideoByLevel(level: string): Promise<VideoModule[]>;
+    save(videoModule: VideoModule): Promise<void>;
+    getByLevel(level: string): Promise<VideoModule[]>;
 }

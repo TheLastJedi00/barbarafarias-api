@@ -1,7 +1,18 @@
+import { Type } from "class-transformer";
 import { VideoTopic } from "./topic.model";
+import { IsEnum } from "class-validator";
 
+enum VideoLevel {
+    A1 = 'A1',
+    A2 = 'A2',
+    B1 = 'B1',
+    B2 = 'B2',
+}
 export class VideoModule {
     index: number;
+    @IsEnum(VideoLevel)
+    level: VideoLevel;
+    @Type(() => VideoTopic) //Mapper Field by Field
     topic: VideoTopic[];
 
     constructor(index: number, topic: VideoTopic[]) {
@@ -9,3 +20,4 @@ export class VideoModule {
         this.topic = topic;
     }
 }
+
