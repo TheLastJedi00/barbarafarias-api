@@ -2,6 +2,7 @@ import { Body, Controller, Get, Param, Post } from '@nestjs/common';
 import { VideoService } from './video.service';
 import { VideoModule } from '../domain/models/module.model';
 import { VideoModuleDto } from '../domain/dto/module.dto';
+import { Roles } from 'src/auth/infrastructure/decorators/roles.decorator';
 
 @Controller('video')
 export class VideoController {
@@ -13,6 +14,7 @@ export class VideoController {
     }
 
     @Post()
+    @Roles('teacher')
     async createOrUpdateVideoModule(@Body() data: VideoModuleDto): Promise<void>{
         return this.videoService.saveVideoModule(data);
     }
