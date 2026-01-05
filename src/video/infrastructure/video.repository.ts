@@ -12,12 +12,11 @@ export class VideoFirestoreRepository implements VideoRepository {
   constructor() {
     this.db = admin.firestore();
   }
-  async save(videoModule: VideoModule): Promise<void> {
+  async save(videoModule: VideoModule, docId: string): Promise<void> {
     try {
-      const docId = `${videoModule.level}_${videoModule.index}`;
       await this.db.collection(this.collection).doc(docId).set(instanceToPlain(videoModule));
     } catch (error) {
-      console.error('Erro no Repositório ao salvar módulo de vídeo:', error);
+      console.error('[Repository] Erro no Repositório ao salvar módulo de vídeo:', error);
       throw error;
     }
   }
