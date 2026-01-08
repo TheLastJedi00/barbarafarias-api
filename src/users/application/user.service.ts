@@ -40,8 +40,6 @@ export class UserService {
       const response = new ResponseUserDto(
         id,
         user.getFullName(),
-        user.getCreatedAt(),
-        user.getUpdatedAt(),
       );
       return response;
     } catch (error) {

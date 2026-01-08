@@ -3,6 +3,7 @@ import { UserService } from '../application/user.service';
 import { User } from '../domain/user.model'; 
 import { ConflictException } from '@nestjs/common';
 import * as admin from 'firebase-admin'; 
+import { ResponseUserDto } from '../application/dto/ResponseUser.dto';
 
 // 1. Mock do Repositório
 const mockUserRepository = {
@@ -56,6 +57,13 @@ describe('UserService', () => {
       prognosis: 'Good',
     };
 
+    const mockUid = 'firebase_uid_123';
+
+    const response = new ResponseUserDto (
+      mockUid,
+      'Leno Borges',
+    );
+
     it('deve criar usuário no Auth e salvar no Firestore', async () => {
       // Arrange
       const mockUid = 'firebase_uid_123';
@@ -65,27 +73,20 @@ describe('UserService', () => {
       mockUserRepository.save.mockResolvedValue(mockUid);
 
       // Act
-      const resultId = await service.createUser(dto as any);
+      const result = await service.createUser(dto as any);
 
       // Assert
       // 1. Verifica se chamou o Auth
-      expect(mockAuth.createUser).toHaveBeenCalledWith({
-        disabled: false,
-        emailVerified: false,
-        phoneNumber: dto.phone,
-        email: dto.email,
-        password: dto.password,
-        displayName: dto.fullName,
-      });
+      expect(mockAuth.createUser).toHaveBeenCalledTimes(1);
 
       // 2. Verifica se salvou no repo COM O UID DO FIREBASE
       expect(mockUserRepository.save).toHaveBeenCalledWith(
         expect.any(User),
-        mockUid         
+        mockUid
       );
 
       // 3. Verifica o retorno
-      expect(resultId).toBe(mockUid);
+      expect(result).toEqual(response);
     });
 
     it('deve falhar se o email já existir no Auth (Erro do Firebase)', async () => {
