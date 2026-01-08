@@ -1,12 +1,13 @@
-import { Injectable } from '@nestjs/common';
+import { Inject, Injectable, NotFoundException } from '@nestjs/common';
 import { VideoModuleDto } from '../domain/dto/module.dto';
-import type { VideoRepository } from '../domain/video.port';
+import { VideoRepository } from '../domain/video.port';
 import { plainToInstance } from 'class-transformer';
 import { VideoModule } from '../domain/models/module.model';
 
 @Injectable()
 export class VideoService {
-  constructor(private videoRepository: VideoRepository) {}
+  @Inject(VideoRepository)
+  private readonly videoRepository: VideoRepository;
 
   async saveVideoModule(data: VideoModuleDto) {
     try {
@@ -20,8 +21,10 @@ export class VideoService {
   }
 
   async getVideosByLevel(level: string): Promise<VideoModule[]> {
-    try {
-      return await this.videoRepository.getByLevel(level);
+    try { 
+      const data = await this.videoRepository.getByLevel(level);
+      if(data === null ) {throw new NotFoundException(`Módulo de nível ${level} não encontrado.`)};
+      return data;
     } catch (error) {
       console.error(
         '[Service] Erro ao buscar módulos de vídeo por nível:',

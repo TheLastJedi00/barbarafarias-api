@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
 import { VideoRepository } from '../domain/video.port';
 import * as admin from 'firebase-admin';
 import { Firestore } from 'firebase-admin/firestore';
@@ -31,7 +31,7 @@ export class VideoFirestoreRepository implements VideoRepository {
     }
     const videoModules: VideoModule[] = videosQuerySnapshot.docs.map((doc) => {
       const data = doc.data();
-      return new VideoModule(data.index, data.topic);
+      return new VideoModule(data.index, data.level, data.topic);
     });
     return videoModules;
   }
