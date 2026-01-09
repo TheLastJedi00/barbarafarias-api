@@ -8,7 +8,7 @@ on:
 
 jobs:
   quality-check:
-    name: Quality Check (Test & Lint)
+    name: Quality Check
     runs-on: ubuntu-latest
 
     strategy:
