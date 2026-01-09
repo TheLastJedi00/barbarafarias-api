@@ -10,7 +10,6 @@ export class UserFirestoreRepository implements UserRepository {
   constructor() {
     this.db = admin.firestore();
   }
-  
 
   async save(user: User, uid: string): Promise<string> {
     const userObject = user.toPlainObject();
@@ -63,7 +62,10 @@ export class UserFirestoreRepository implements UserRepository {
   }
 
   async findByEmail(email: string): Promise<User | null> {
-    const snapshot = await this.db.collection('users').where('email', '==', email).get();
+    const snapshot = await this.db
+      .collection('users')
+      .where('email', '==', email)
+      .get();
     let user: User | null = null;
     snapshot.docs.forEach((doc) => {
       const data = doc.data();

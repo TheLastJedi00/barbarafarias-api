@@ -8,7 +8,7 @@ import { FirebaseAuthGuard } from 'src/auth/infrastructure/firebase.guard';
 import { RolesGuard } from 'src/auth/infrastructure/roles.guard';
 
 @Controller('/supplies')
-@UseGuards(FirebaseAuthGuard )
+@UseGuards(FirebaseAuthGuard)
 export class SupplyController {
   constructor(private readonly supplyService: SupplyService) {}
 

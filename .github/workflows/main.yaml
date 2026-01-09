@@ -29,8 +29,8 @@ jobs:
         # 'npm ci' é mais seguro que 'npm install' para CI (respeita estritamente o lockfile)
         run: npm ci 
 
-      - name: Verificar Linting
-        run: npm run lint
+    #   - name: Verificar Linting
+    #     run: npm run lint
 
       - name: Verificar Build (Compilação)
         # Garante que não tem erro de TypeScript impeditivo

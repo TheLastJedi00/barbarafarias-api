@@ -1,8 +1,8 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { UserService } from '../application/user.service';
-import { User } from '../domain/user.model'; 
+import { User } from '../domain/user.model';
 import { ConflictException } from '@nestjs/common';
-import * as admin from 'firebase-admin'; 
+import * as admin from 'firebase-admin';
 import { ResponseUserDto } from '../application/dto/ResponseUser.dto';
 
 // 1. Mock do Repositório
@@ -59,15 +59,12 @@ describe('UserService', () => {
 
     const mockUid = 'firebase_uid_123';
 
-    const response = new ResponseUserDto (
-      mockUid,
-      'Leno Borges',
-    );
+    const response = new ResponseUserDto(mockUid, 'Leno Borges');
 
     it('deve criar usuário no Auth e salvar no Firestore', async () => {
       // Arrange
       const mockUid = 'firebase_uid_123';
-      
+
       // Simulam que o Firebase Auth criou com sucesso e retornou o UID
       mockAuth.createUser.mockResolvedValue({ uid: mockUid });
       mockUserRepository.save.mockResolvedValue(mockUid);
@@ -82,7 +79,7 @@ describe('UserService', () => {
       // 2. Verifica se salvou no repo COM O UID DO FIREBASE
       expect(mockUserRepository.save).toHaveBeenCalledWith(
         expect.any(User),
-        mockUid
+        mockUid,
       );
 
       // 3. Verifica o retorno
@@ -95,9 +92,7 @@ describe('UserService', () => {
       mockAuth.createUser.mockRejectedValue(firebaseError);
 
       // Act & Assert
-      await expect(service.createUser(dto as any))
-        .rejects
-        .toThrow();
+      await expect(service.createUser(dto as any)).rejects.toThrow();
 
       // NÃO PODE salvar no banco se o Auth falhou
       expect(mockUserRepository.save).not.toHaveBeenCalled();
@@ -106,7 +101,17 @@ describe('UserService', () => {
 
   describe('findById', () => {
     it('deve retornar um usuário se encontrado', async () => {
-      const mockUser = new User('Leno', 'phone', 'email', true, true, 'level', 'obj', 'prog', '123');
+      const mockUser = new User(
+        'Leno',
+        'phone',
+        'email',
+        true,
+        true,
+        'level',
+        'obj',
+        'prog',
+        '123',
+      );
       mockUserRepository.findById.mockResolvedValue(mockUser);
 
       const result = await service.findById('123');
@@ -118,9 +123,9 @@ describe('UserService', () => {
     it('deve retornar NotFoundException se não encontrado', async () => {
       mockUserRepository.findById.mockResolvedValue(null);
 
-      await expect(service.findById('nonexistent_id'))
-        .rejects
-        .toThrow('User not found');
+      await expect(service.findById('nonexistent_id')).rejects.toThrow(
+        'User not found',
+      );
     });
   });
 });

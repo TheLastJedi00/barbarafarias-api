@@ -1,26 +1,26 @@
-import { Level } from "../types/student.level";
-import { Module } from "../types/student.supply";
+import { Level } from '../types/student.level';
+import { Module } from '../types/student.supply';
 
 export class Supply {
-    private studentId: string;
-    private level: Level;
-    private modules: Module[];
+  private studentId: string;
+  private level: Level;
+  private modules: Module[];
 
-    constructor(studentId: string, level: Level, modules: Module[]) {
-        this.studentId = studentId;
-        this.level =  level;
-        this.modules = modules;
-    }
+  constructor(studentId: string, level: Level, modules: Module[]) {
+    this.studentId = studentId;
+    this.level = level;
+    this.modules = modules;
+  }
 
-    toPlainObject(){
-        return{
-            studentId: this.studentId,
-            level: this.level,
-            modules: this.modules,
-        }
-    }
+  toPlainObject() {
+    return {
+      studentId: this.studentId,
+      level: this.level,
+      modules: this.modules,
+    };
+  }
 
-    getDocumentId(): string {
-        return `${this.studentId}_${this.level}`;
-    }
+  getDocumentId(): string {
+    return `${this.studentId}_${this.level}`;
+  }
 }

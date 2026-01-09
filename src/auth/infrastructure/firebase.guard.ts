@@ -1,4 +1,11 @@
-import { CanActivate, ExecutionContext, forwardRef, Inject, Injectable, UnauthorizedException } from '@nestjs/common';
+import {
+  CanActivate,
+  ExecutionContext,
+  forwardRef,
+  Inject,
+  Injectable,
+  UnauthorizedException,
+} from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import * as admin from 'firebase-admin';
 import { ROLES_KEY } from './decorators/roles.decorator';
@@ -11,7 +18,7 @@ export class FirebaseAuthGuard implements CanActivate {
     private reflector: Reflector,
     private teacherService: TeacherService,
     @Inject(forwardRef(() => UserService))
-    private userService: UserService
+    private userService: UserService,
   ) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
@@ -42,7 +49,9 @@ export class FirebaseAuthGuard implements CanActivate {
 
     // Search in firestore
     if (requiredRoles.includes('teacher')) {
-      const teacherFromDb = await this.teacherService.findTeacherById(userFromToken.uid);
+      const teacherFromDb = await this.teacherService.findTeacherById(
+        userFromToken.uid,
+      );
       console.log(teacherFromDb);
 
       if (teacherFromDb?.isTeacher) {

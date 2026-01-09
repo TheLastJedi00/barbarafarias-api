@@ -44,11 +44,11 @@ describe('RolesGuard', () => {
   });
 
   it('deve permitir acesso se a rota não tiver roles (Pública para logados)', () => {
-    // Mocka o reflector para retornar NULL 
+    // Mocka o reflector para retornar NULL
     jest.spyOn(reflector, 'getAllAndOverride').mockReturnValue(null);
 
     const context = createMockContext({ role: 'student' });
-    
+
     expect(guard.canActivate(context)).toBe(true);
   });
 
@@ -57,10 +57,10 @@ describe('RolesGuard', () => {
     jest.spyOn(reflector, 'getAllAndOverride').mockReturnValue(['teacher']);
 
     // Usuário tem a flag isTeacher: true
-    const context = createMockContext({ 
-      uid: '123', 
+    const context = createMockContext({
+      uid: '123',
       email: 'teacher@test.com',
-      isTeacher: true 
+      isTeacher: true,
     });
 
     expect(guard.canActivate(context)).toBe(true);
@@ -71,9 +71,9 @@ describe('RolesGuard', () => {
     jest.spyOn(reflector, 'get').mockReturnValue(['teacher']);
 
     // Usuário tem isTeacher: false (ou undefined)
-    const context = createMockContext({ 
-      uid: '456', 
-      isTeacher: false 
+    const context = createMockContext({
+      uid: '456',
+      isTeacher: false,
     });
 
     expect(guard.canActivate(context)).toBe(false);

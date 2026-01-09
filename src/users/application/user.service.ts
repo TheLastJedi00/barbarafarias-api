@@ -37,10 +37,7 @@ export class UserService {
       );
       console.log('Creating User:' + user.getFullName());
       const id = await this.userRepository.save(user, uid);
-      const response = new ResponseUserDto(
-        id,
-        user.getFullName(),
-      );
+      const response = new ResponseUserDto(id, user.getFullName());
       return response;
     } catch (error) {
       throw new Error('Error creating User:' + error);
