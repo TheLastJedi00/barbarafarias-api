@@ -1,20 +1,18 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { VideoService } from '../application/video.service';
-import { VideoRepository } from '../domain/video.port';
+import { VideoRepository } from '../domain/repository.port';
 import { NotFoundException } from '@nestjs/common';
-import { VideoModule, VideoLevel } from '../domain/models/module.model';
-import { VideoTopic } from '../domain/models/topic.model';
-import { Video } from '../domain/models/video.model';
-import { VideoModuleDto } from '../domain/dto/module.dto';
+import { Video, VideoLevel, VideoInfo, VideoTopic } from '../domain/video.model';
+import { VideoModuleDto } from '../domain/video.dto';
 import { instanceToPlain } from 'class-transformer';
 
 const mockRepository = {
   save: jest.fn(),
   getByLevel: jest.fn()
 }
-const video = new Video('teste', 'teste', 'teste', 1)
+const video = new VideoInfo('teste', 'teste', 'teste', 1)
 const topic = new VideoTopic('teste', 'teste', [video])
-const videoByLevel = new VideoModule(1, 'A1', [topic])
+const videoByLevel = new Video(1, 'A1', [topic])
 const videoDto = instanceToPlain(videoByLevel) as VideoModuleDto;
 
 describe('VideoService', () => {
@@ -56,6 +54,6 @@ describe('VideoService', () => {
   it('Should return Success', async () => {
     mockRepository.save.mockResolvedValue(undefined)
     await service.saveVideoModule(videoDto);
-    expect(mockRepository).toHaveBeenCalledTimes(1);
+    expect(mockRepository.save).toHaveBeenCalledTimes(1);
   })
 });

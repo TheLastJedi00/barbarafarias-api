@@ -1,8 +1,8 @@
 import { Inject, Injectable, NotFoundException } from '@nestjs/common';
-import { VideoModuleDto } from '../domain/dto/module.dto';
-import { VideoRepository } from '../domain/video.port';
+import { VideoModuleDto } from '../domain/video.dto';
+import { VideoRepository } from '../domain/repository.port';
 import { plainToInstance } from 'class-transformer';
-import { VideoModule } from '../domain/models/module.model';
+import { Video } from '../domain/video.model';
 
 @Injectable()
 export class VideoService {
@@ -12,7 +12,7 @@ export class VideoService {
   async saveVideoModule(data: VideoModuleDto) {
     try {
       const docId = `${data.level}_${data.index}`;
-      const entity = plainToInstance(VideoModule, data);
+      const entity = plainToInstance(Video, data);
       await this.videoRepository.save(entity, docId);
     } catch (error) {
       console.error('[Service] Erro ao salvar módulo de vídeo:', error);
@@ -20,7 +20,7 @@ export class VideoService {
     }
   }
 
-  async getVideosByLevel(level: string): Promise<VideoModule[]> {
+  async getVideosByLevel(level: string): Promise<Video[]> {
     try { 
       const data = await this.videoRepository.getByLevel(level);
       if(data === null ) {throw new NotFoundException(`Módulo de nível ${level} não encontrado.`)};

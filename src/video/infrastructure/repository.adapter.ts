@@ -1,8 +1,8 @@
 import { Injectable } from '@nestjs/common';
-import { VideoRepository } from '../domain/video.port';
+import { VideoRepository } from '../domain/repository.port';
 import * as admin from 'firebase-admin';
 import { Firestore } from 'firebase-admin/firestore';
-import { VideoModule } from '../domain/models/module.model';
+import { Video } from '../domain/video.model';
 import { instanceToPlain } from 'class-transformer';
 
 @Injectable()
@@ -12,16 +12,16 @@ export class VideoFirestoreRepository implements VideoRepository {
   constructor() {
     this.db = admin.firestore();
   }
-  async save(videoModule: VideoModule, docId: string): Promise<void> {
+  async save(video: Video, docId: string): Promise<void> {
     try {
-      await this.db.collection(this.collection).doc(docId).set(instanceToPlain(videoModule));
+      await this.db.collection(this.collection).doc(docId).set(instanceToPlain(video));
     } catch (error) {
       console.error('[Repository] Erro no Repositório ao salvar módulo de vídeo:', error);
       throw error;
     }
   }
 
-  async getByLevel(level: string): Promise<VideoModule[]> {
+  async getByLevel(level: string): Promise<Video[]> {
     const videosQuerySnapshot = await this.db
       .collection(this.collection)
       .where('level', '==', level)
@@ -29,10 +29,10 @@ export class VideoFirestoreRepository implements VideoRepository {
     if (!videosQuerySnapshot) {
       return [];
     }
-    const videoModules: VideoModule[] = videosQuerySnapshot.docs.map((doc) => {
+    const videos: Video[] = videosQuerySnapshot.docs.map((doc) => {
       const data = doc.data();
-      return new VideoModule(data.index, data.level, data.topic);
+      return new Video(data.index, data.level, data.topic);
     });
-    return videoModules;
+    return videos;
   }
 }

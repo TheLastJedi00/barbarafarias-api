@@ -1,7 +1,7 @@
 import { Body, Controller, Get, Param, Post } from '@nestjs/common';
 import { VideoService } from './video.service';
-import { VideoModule } from '../domain/models/module.model';
-import { VideoModuleDto } from '../domain/dto/module.dto';
+import { Video } from '../domain/video.model';
+import { VideoModuleDto } from '../domain/video.dto';
 import { Roles } from 'src/auth/infrastructure/decorators/roles.decorator';
 
 @Controller('video')
@@ -9,7 +9,7 @@ export class VideoController {
     constructor(private videoService: VideoService){}
 
     @Get('/:level')
-    async getVideoModuleByLevel(@Param('level') level: string): Promise<VideoModule[]> {
+    async getVideoModuleByLevel(@Param('level') level: string): Promise<Video[]> {
         return this.videoService.getVideosByLevel(level);
     }
 
