@@ -46,27 +46,27 @@ async function bootstrap() {
 
   // CORS
   app.enableCors({
-  origin: (origin, callback) => {
-    console.log('Origem recebida:', origin);
-    
-    const allowed = [
-      'https://dev.barbarafarias.com.br',
-      'https://barbarafarias.com.br',
-      'https://www.barbarafarias.com.br',
-      'http://localhost:3000',
-      'http://localhost:4200',
-    ];
+    origin: (origin, callback) => {
+      console.log('Origem recebida:', origin);
 
-    if (!origin || allowed.includes(origin)) {
-      callback(null, true);
-    } else {
-      console.log('Bloqueado:', origin);
-      callback(new Error('Not allowed by CORS'));
-    }
-  },
-  methods: 'GET,HEAD,PUT,PATCH,POST,DELETE',
-  credentials: true,
-});
+      const allowed = [
+        'https://dev.barbarafarias.com.br',
+        'https://barbarafarias.com.br',
+        'https://www.barbarafarias.com.br',
+        'http://localhost:3000',
+        'http://localhost:4200',
+      ];
+
+      if (!origin || allowed.includes(origin)) {
+        callback(null, true);
+      } else {
+        console.log('Bloqueado:', origin);
+        callback(new Error('Not allowed by CORS'));
+      }
+    },
+    methods: 'GET,HEAD,PUT,PATCH,POST,DELETE',
+    credentials: true,
+  });
 
   app.useGlobalPipes(
     new ValidationPipe({

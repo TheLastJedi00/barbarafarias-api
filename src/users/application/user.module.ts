@@ -7,10 +7,7 @@ import { AuthModule } from '../../auth/application/auth.module';
 import { TeacherModule } from '../../teacher/application/teacher.module';
 
 @Module({
-  imports: [ 
-    forwardRef(() => AuthModule),
-    TeacherModule
-  ],
+  imports: [forwardRef(() => AuthModule), TeacherModule],
   controllers: [UserController],
   providers: [
     UserService,

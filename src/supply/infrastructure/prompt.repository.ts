@@ -23,7 +23,7 @@ export class PromptFirestoreRepository implements PromptRepository {
       }
       const doc = snapshot.docs[0];
       const data = doc.data();
-      return new Prompt(level, data!.prompt);
+      return new Prompt(level, data.prompt);
     } catch (error) {
       console.error('Error fetching prompt by level:', error);
       throw error;

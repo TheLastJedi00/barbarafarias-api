@@ -1,5 +1,5 @@
 export interface StudentInfo {
-    firstName: string;
-    objectives: string;
-    prognosis: string;
+  firstName: string;
+  objectives: string;
+  prognosis: string;
 }

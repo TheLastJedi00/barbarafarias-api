@@ -1,0 +1,40 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches: [ "main", "dev" ] # Roda na main e develop
+  pull_request:
+    branches: [ "main" ] # Roda em qualquer PR aberto para a main
+
+jobs:
+  quality-check:
+    name: Quality Check
+    runs-on: ubuntu-latest
+
+    strategy:
+      matrix:
+        node-version: [18.x] # Use a versão do Node do seu projeto
+
+    steps:
+      - name: Checkout do Código
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: 'npm' # Cache inteligente (deixa o npm install rapidão)
+
+      - name: Instalar Dependências
+        # 'npm ci' é mais seguro que 'npm install' para CI (respeita estritamente o lockfile)
+        run: npm ci 
+
+    #   - name: Verificar Linting
+    #     run: npm run lint
+
+      - name: Verificar Build (Compilação)
+        # Garante que não tem erro de TypeScript impeditivo
+        run: npm run build 
+
+      - name: Rodar Testes Unitários
+        run: npm run test
