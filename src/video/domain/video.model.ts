@@ -46,5 +46,12 @@ export class VideoInfo {
         this.internalHash = internalHash;
         this.order = order;
     }
+
+    delete(){
+        this.youtubeId = '';
+        this.title = '';
+        this.internalHash = '';
+        this.order = -1;
+    }
 }
 
