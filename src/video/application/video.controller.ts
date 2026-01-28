@@ -4,7 +4,7 @@ import { Video } from '../domain/video.model';
 import { VideoModuleDto } from '../domain/video.dto';
 import { Roles } from 'src/auth/infrastructure/decorators/roles.decorator';
 
-@Controller('video')
+@Controller('videos')
 export class VideoController {
     constructor(private videoService: VideoService){}
 
