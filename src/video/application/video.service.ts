@@ -21,15 +21,36 @@ export class VideoService {
   }
 
   async getVideosByLevel(level: string): Promise<Video[]> {
-    try { 
+    try {
       const data = await this.videoRepository.getByLevel(level);
-      if(data === null ) {throw new NotFoundException(`Módulo de nível ${level} não encontrado.`)};
+      if (data === null) {
+        throw new NotFoundException(`Módulo de nível ${level} não encontrado.`);
+      }
       return data;
     } catch (error) {
       console.error(
         '[Service] Erro ao buscar módulos de vídeo por nível:',
         error,
       );
+      throw error;
+    }
+  }
+
+  async deleteVideo(
+    level: string,
+    index: number,
+    topic: string,
+    youtubeId: string,
+  ): Promise<void> {
+    try {
+      await this.videoRepository.deleteByLevelAndIndexAndTopicAndYoutubeId(
+        level,
+        index,
+        topic,
+        youtubeId,
+      );
+    } catch (error) {
+      console.error('[Service] Erro ao deletar vídeo:', error);
       throw error;
     }
   }
