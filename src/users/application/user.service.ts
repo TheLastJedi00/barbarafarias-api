@@ -37,12 +37,7 @@ export class UserService {
       );
       console.log('Creating User:' + user.getFullName());
       const id = await this.userRepository.save(user, uid);
-      const response = new ResponseUserDto(
-        id,
-        user.getFullName(),
-        user.getCreatedAt(),
-        user.getUpdatedAt(),
-      );
+      const response = new ResponseUserDto(id, user.getFullName());
       return response;
     } catch (error) {
       throw new Error('Error creating User:' + error);
@@ -80,7 +75,6 @@ export class UserService {
     }
     return user;
   }
-
   async delete(id: string): Promise<void> {
     return await this.userRepository.delete(id);
   }

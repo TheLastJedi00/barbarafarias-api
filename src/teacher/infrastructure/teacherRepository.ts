@@ -24,11 +24,7 @@ export class TeacherFirebaseRepository implements TeacherRepository {
         throw new NotFoundException('Teacher not found');
       }
       const data = doc.data();
-      const teacher = new Teacher(
-        data!.fullName,
-        data!.email,
-        data!.isTeacher
-      );
+      const teacher = new Teacher(data!.fullName, data!.email, data!.isTeacher);
       return teacher;
     } catch (error) {
       console.error('Error fetching teacher by ID:', error);

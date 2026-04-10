@@ -1,4 +1,13 @@
-import { Body, Controller, Delete, Get, Param, Post, Put, UseGuards } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Delete,
+  Get,
+  Param,
+  Post,
+  Put,
+  UseGuards,
+} from '@nestjs/common';
 import { UserService } from './user.service';
 import { CreateUserDto } from './dto/CreateUser.dto';
 import { User } from '../domain/user.model';
@@ -8,7 +17,7 @@ import { Roles } from 'src/auth/infrastructure/decorators/roles.decorator';
 import { ResponseUserDto } from './dto/ResponseUser.dto';
 
 @Controller('/users')
-@UseGuards( FirebaseAuthGuard )
+@UseGuards(FirebaseAuthGuard)
 export class UserController {
   constructor(private service: UserService) {}
 
@@ -28,7 +37,10 @@ export class UserController {
   }
   @Put(':id')
   @Roles('teacher')
-  async update(@Param('id') id: string, @Body() user: UpdateUserDto): Promise<User> {
+  async update(
+    @Param('id') id: string,
+    @Body() user: UpdateUserDto,
+  ): Promise<User> {
     return this.service.updateUser(id, user);
   }
   @Delete(':id')

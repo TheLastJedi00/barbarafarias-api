@@ -5,15 +5,9 @@ import { UserModule } from '../../users/application/user.module';
 import { TeacherModule } from '../../teacher/application/teacher.module';
 
 @Module({
-  providers: [
-    FirebaseAuthGuard,
-    RolesGuard,
-  ],
+  providers: [FirebaseAuthGuard, RolesGuard],
   exports: [FirebaseAuthGuard, RolesGuard],
   controllers: [],
-  imports: [
-    forwardRef(() => UserModule),
-    TeacherModule,
-  ],
+  imports: [forwardRef(() => UserModule), TeacherModule],
 })
 export class AuthModule {}
