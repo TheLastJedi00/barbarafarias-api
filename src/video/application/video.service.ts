@@ -6,8 +6,10 @@ import { Video } from '../domain/video.model';
 
 @Injectable()
 export class VideoService {
-  @Inject(VideoRepository)
-  private readonly videoRepository: VideoRepository;
+  constructor(
+    @Inject(VideoRepository)
+    private readonly videoRepository: VideoRepository,
+  ) {}
 
   async saveVideoModule(data: VideoModuleDto) {
     try {
