@@ -2,6 +2,7 @@
 FROM node:24-alpine AS builder
 WORKDIR /app
 COPY ["package.json", "package-lock.json*", "npm-shrinkwrap.json*", "./"]
+ENV NODE_ENV=development
 RUN npm install --only=production
 COPY . .
 RUN npm run build
