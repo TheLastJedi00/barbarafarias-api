@@ -81,7 +81,7 @@ async function bootstrap() {
   const configService = app.get(ConfigService);
   const port = process.env.PORT || configService.get<number>('PORT') || 8080;
 
-  const server = await app.listen(port);
+  const server = await app.listen(port, '0.0.0.0');
   // Timeout de 5 minutos
   server.setTimeout(300000);
 
