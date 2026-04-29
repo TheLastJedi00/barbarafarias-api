@@ -41,6 +41,7 @@ lerna-debug.log*
 .env.test.local
 .env.production.local
 .env.local
+barbarafarias-dev-firebase-adminsdk-fbsvc-556d898b26.json
 
 # temp directory
 .temp
