@@ -3,11 +3,12 @@ import { SupplyService } from './supply.service';
 import { Supply } from '../domain/models/supply.model';
 import { SupplyInfoDto } from './dtos/SupplyInfo.dto';
 import type { Level } from '../domain/types/student.level';
-import { Roles } from '../../auth/infrastructure/decorators/roles.decorator';
-import { FirebaseAuthGuard } from '../../auth/infrastructure/firebase.guard';
+import { Roles } from '../../decorators/roles.decorator';
+import { FirebaseAuthGuard } from '../../auth/guards/firebase.guard';
+import { RolesGuard } from '../../auth/guards/roles.guard';
 
 @Controller('/supplies')
-@UseGuards(FirebaseAuthGuard)
+@UseGuards(FirebaseAuthGuard, RolesGuard)
 export class SupplyController {
   constructor(private readonly supplyService: SupplyService) {}
 

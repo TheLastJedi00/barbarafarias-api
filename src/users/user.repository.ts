@@ -50,7 +50,7 @@ export class UserRepository {
     if(snapshot.empty){
       return null;
     }  
-    const data: {} = snapshot[0].data()
+    const data: {} = snapshot.docs[0].data()
     const user: User = plainToInstance(User, data)
     return user;
   }

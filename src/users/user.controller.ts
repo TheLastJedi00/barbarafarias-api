@@ -11,13 +11,14 @@ import {
 import { CreateUserDto } from './dto/CreateUser.dto';
 import { User } from './entities/user.entity';
 import { UpdateUserDto } from './dto/UpdateUser.dto';
-import { FirebaseAuthGuard } from '../auth/infrastructure/firebase.guard';
-import { Roles } from '../auth/infrastructure/decorators/roles.decorator';
+import { FirebaseAuthGuard } from '../auth/guards/firebase.guard';
+import { RolesGuard } from '../auth/guards/roles.guard';
+import { Roles } from '../decorators/roles.decorator';
 import { ResponseUserDto } from './dto/ResponseUser.dto';
 import { UserService } from './user.service';
 
 @Controller('/users')
-@UseGuards(FirebaseAuthGuard)
+@UseGuards(FirebaseAuthGuard, RolesGuard)
 export class UserController {
   constructor(private service: UserService) {}
 

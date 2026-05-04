@@ -2,30 +2,33 @@ import { Inject, Injectable, NotFoundException } from '@nestjs/common';
 import { User } from './entities/user.entity';
 import { CreateUserDto } from './dto/CreateUser.dto';
 import { UpdateUserDto } from './dto/UpdateUser.dto';
-import * as admin from 'firebase-admin';
 import { ResponseUserDto } from './dto/ResponseUser.dto';
 import { UserRepository } from './user.repository';
+import { AuthService } from '../auth/auth.service';
+import { v4 as uuidv4 } from 'uuid';
 
 @Injectable()
 export class UserService {
   constructor(
     private userRepository: UserRepository,
+    private authService: AuthService,
   ) {}
 
   async createUser(dto: CreateUserDto): Promise<ResponseUserDto> {
-    let userRecord;
+    const uid = uuidv4();
+
     try {
-      userRecord = await admin.auth().createUser({
+      const role = dto.isTeacher ? 'teacher' : 'student';
+
+      await this.authService.registerCredentials({
+        id: uid,
         email: dto.email,
         password: dto.password,
+        role: role,
       });
-      console.log('User created:', userRecord.email);
-    } catch (error) {
-      throw new Error('Error creating Auth:' + error);
-    }
-    try {
-      const uid = userRecord.uid;
+
       const user = new User(dto);
+      user.id = uid;
       const id = await this.userRepository.save(user, uid);
       const response = new ResponseUserDto(id, user.fullName);
       return response;
@@ -55,6 +58,7 @@ export class UserService {
     }
     return user;
   }
+  
   async delete(id: string): Promise<void> {
     return await this.userRepository.delete(id);
   }
