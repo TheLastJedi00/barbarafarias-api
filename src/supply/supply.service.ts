@@ -12,7 +12,7 @@ import { UserService } from '../users/user.service';
 import { SupplyRepository } from './supply.repository';
 import { PromptService } from '../prompts/prompt.service';
 import { GeminiProvider } from './gemini/gemini.service';
-import { Supply } from './entities/supply.model';
+import { Supply } from './supply.model';
 import { SupplyModulesSchema } from '../types/student.supply';
 
 @Injectable()

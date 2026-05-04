@@ -2,7 +2,7 @@ import { NotFoundError } from 'rxjs';
 import * as admin from 'firebase-admin';
 import { Firestore } from 'firebase-admin/firestore';
 import { Injectable, NotFoundException } from '@nestjs/common';
-import { Teacher } from './entities/teacher.entity';
+import { Teacher } from './teacher.entity';
 
 @Injectable()
 export class TeacherRepository implements TeacherRepository {

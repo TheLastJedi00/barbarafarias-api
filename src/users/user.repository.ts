@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import { User } from './entities/user.entity';
+import { User } from './user.entity';
 import { Firestore } from 'firebase-admin/firestore';
 import * as admin from 'firebase-admin';
 import { instanceToPlain, plainToInstance } from 'class-transformer';
@@ -26,7 +26,7 @@ export class UserRepository {
     const querySnapshot = await this.db.collection('users').get();
     const users = querySnapshot.docs.map((doc) => {
       const data = doc.data();
-      return plainToInstance(User, data)
+      return plainToInstance(User, data);
     });
     return users;
   }
@@ -35,7 +35,7 @@ export class UserRepository {
     const doc = await this.db.collection('users').doc(id).get();
     if (doc.exists) {
       const data = doc.data();
-      const user = plainToInstance(User, data)
+      const user = plainToInstance(User, data);
       return user;
     }
     return null;
@@ -47,11 +47,11 @@ export class UserRepository {
       .where('email', '==', email)
       .limit(1)
       .get();
-    if(snapshot.empty){
+    if (snapshot.empty) {
       return null;
-    }  
-    const data: {} = snapshot.docs[0].data()
-    const user: User = plainToInstance(User, data)
+    }
+    const data: {} = snapshot.docs[0].data();
+    const user: User = plainToInstance(User, data);
     return user;
   }
 

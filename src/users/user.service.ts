@@ -1,5 +1,5 @@
 import { Inject, Injectable, NotFoundException } from '@nestjs/common';
-import { User } from './entities/user.entity';
+import { User } from './user.entity';
 import { CreateUserDto } from './dto/CreateUser.dto';
 import { UpdateUserDto } from './dto/UpdateUser.dto';
 import { ResponseUserDto } from './dto/ResponseUser.dto';
@@ -58,7 +58,7 @@ export class UserService {
     }
     return user;
   }
-  
+
   async delete(id: string): Promise<void> {
     return await this.userRepository.delete(id);
   }

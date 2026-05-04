@@ -1,14 +1,11 @@
-import { Body, Controller, Get, Param, Post, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Param, Post } from '@nestjs/common';
 import { SupplyService } from './supply.service';
 import { SupplyInfoDto } from './dtos/SupplyInfo.dto';
 import type { Level } from '../types/student.level';
 import { Roles } from '../decorators/roles.decorator';
-import { FirebaseAuthGuard } from '../auth/guards/firebase.guard';
-import { RolesGuard } from '../auth/guards/roles.guard';
-import { Supply } from './entities/supply.model';
+import { Supply } from './supply.model';
 
 @Controller('/supplies')
-@UseGuards(FirebaseAuthGuard, RolesGuard)
 export class SupplyController {
   constructor(private readonly supplyService: SupplyService) {}
 

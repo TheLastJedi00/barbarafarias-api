@@ -2,7 +2,7 @@ import { Firestore } from 'firebase-admin/firestore';
 import * as admin from 'firebase-admin';
 import { Level } from '../types/student.level';
 import { Injectable } from '@nestjs/common';
-import { Supply } from './entities/supply.model';
+import { Supply } from './supply.model';
 
 @Injectable()
 export class SupplyRepository {

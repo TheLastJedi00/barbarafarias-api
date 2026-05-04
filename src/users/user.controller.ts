@@ -6,19 +6,15 @@ import {
   Param,
   Post,
   Put,
-  UseGuards,
 } from '@nestjs/common';
 import { CreateUserDto } from './dto/CreateUser.dto';
-import { User } from './entities/user.entity';
+import { User } from './user.entity';
 import { UpdateUserDto } from './dto/UpdateUser.dto';
-import { FirebaseAuthGuard } from '../auth/guards/firebase.guard';
-import { RolesGuard } from '../auth/guards/roles.guard';
 import { Roles } from '../decorators/roles.decorator';
 import { ResponseUserDto } from './dto/ResponseUser.dto';
 import { UserService } from './user.service';
 
 @Controller('/users')
-@UseGuards(FirebaseAuthGuard, RolesGuard)
 export class UserController {
   constructor(private service: UserService) {}
 
