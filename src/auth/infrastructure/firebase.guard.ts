@@ -10,7 +10,7 @@ import { Reflector } from '@nestjs/core';
 import * as admin from 'firebase-admin';
 import { ROLES_KEY } from './decorators/roles.decorator';
 import { TeacherService } from '../../teacher/application/teacher.service';
-import { UserService } from '../../users/application/user.service';
+import { UserService } from '../../users/user.service';
 
 @Injectable()
 export class FirebaseAuthGuard implements CanActivate {
@@ -62,7 +62,7 @@ export class FirebaseAuthGuard implements CanActivate {
       const userFromDb = await this.userService.findById(userFromToken.uid);
       console.log(userFromDb);
 
-      if (userFromDb?.haveTeacherRole()) {
+      if (userFromDb?.isTeacher) {
         request['user'] = { ...userFromToken, ...userFromDb };
         return true;
       }

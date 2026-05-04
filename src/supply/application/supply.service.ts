@@ -1,5 +1,4 @@
 import {
-  ConflictException,
   HttpException,
   Inject,
   Injectable,
@@ -9,27 +8,26 @@ import {
 import type { SupplyRepository } from '../domain/supply.repository.port';
 import { Supply } from '../domain/models/supply.model';
 import { SupplyInfoDto } from './dtos/SupplyInfo.dto';
-import type { UserRepository } from 'src/users/domain/user.repository.port';
 import type { GenerativeAIService } from '../domain/genai.port';
 import type { PromptRepository } from '../domain/prompt.repository.port';
 import { StudentInfo } from '../domain/types/student.info';
 import { Level } from '../domain/types/student.level';
+import { UserService } from '../../users/user.service';
 
 @Injectable()
 export class SupplyService {
   constructor(
     @Inject('SupplyRepository')
     private readonly supplyRepository: SupplyRepository,
-    @Inject('UserRepository') private readonly userRepository: UserRepository,
+    private readonly userService: UserService,
     @Inject('PromptRepository')
     private readonly promptRepository: PromptRepository,
     @Inject('GenerativeAIService') private readonly genAi: GenerativeAIService,
   ) {}
-
   async createSupply(dto: SupplyInfoDto): Promise<SupplyInfoDto> {
     try {
       //get student data and prompt by level
-      const student = await this.userRepository.findById(dto.studentId);
+      const student = await this.userService.findById(dto.studentId);
       const prompt = await this.promptRepository.getPromptByLevel(dto.level);
       //error 404 if student not found
       if (!student) {
@@ -41,9 +39,9 @@ export class SupplyService {
       }
       //filter student info
       const studentInfo: StudentInfo = {
-        firstName: student.getFullName().split(' ')[0],
-        objectives: student.getObjectives(),
-        prognosis: student.getPrognosis(),
+        firstName: student.fullName.split(' ')[0],
+        objectives: student.objective,
+        prognosis: student.prognosis,
       };
       //receive modules from genAI service
       const modules = await this.genAi.generateContent(
@@ -60,7 +58,7 @@ export class SupplyService {
       }
       console.error('Error creating supply:', error);
       throw new InternalServerErrorException(
-        `Failed to create supply: ${error.message}`,
+        `Failed to create supply: ${error}`,
       );
     }
   }

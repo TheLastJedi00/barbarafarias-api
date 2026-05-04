@@ -4,7 +4,7 @@ import { SupplyFirestoreRepository } from '../infrastructure/supply.repository';
 import { SupplyController } from './supply.controller';
 import { GeminiProvider } from '../infrastructure/gemini';
 import { PromptFirestoreRepository } from '../infrastructure/prompt.repository';
-import { UserModule } from 'src/users/application/user.module';
+import { UserModule } from '../../users/user.module';
 import { TeacherModule } from '../../teacher/application/teacher.module';
 
 @Module({
@@ -23,7 +23,7 @@ import { TeacherModule } from '../../teacher/application/teacher.module';
     {
       provide: 'PromptRepository',
       useClass: PromptFirestoreRepository,
-    },
+    }
   ],
 })
 export class SupplyModule {}
