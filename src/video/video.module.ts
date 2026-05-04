@@ -1,17 +1,10 @@
 import { Module } from '@nestjs/common';
-import { VideoService } from './application/video.service';
-import { VideoFirestoreRepository } from './infrastructure/repository.adapter';
-import { VideoController } from './application/video.controller';
-import { VideoRepository } from './domain/repository.port';
+import { VideoService } from './video.service';
+import { VideoController } from './video.controller';
+import { VideoRepository } from './video.repository';
 
 @Module({
-  providers: [
-    VideoService,
-    {
-      provide: VideoRepository,
-      useClass: VideoFirestoreRepository,
-    },
-  ],
+  providers: [VideoService, VideoRepository],
   controllers: [VideoController],
 })
 export class VideoModule {}
