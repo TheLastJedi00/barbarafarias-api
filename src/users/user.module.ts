@@ -3,10 +3,9 @@ import { UserController } from './user.controller';
 import { UserRepository } from './user.repository';
 import { UserService } from './user.service';
 import { AuthModule } from '../auth/auth.module';
-import { TeacherModule } from '../teacher/application/teacher.module';
 
 @Module({
-  imports: [forwardRef(() => AuthModule), TeacherModule],
+  imports: [forwardRef(() => AuthModule)],
   controllers: [UserController],
   providers: [UserService, UserRepository],
   exports: [UserService],
