@@ -1,4 +1,4 @@
-import { Module } from '@nestjs/common';
+import { Global, Module } from '@nestjs/common';
 import { JwtModule } from '@nestjs/jwt';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { FirebaseAuthGuard } from './guards/firebase.guard';
@@ -8,6 +8,7 @@ import { BcryptService } from './bcrypt.service';
 import { AuthController } from './auth.controller';
 import { AuthRepository } from './auth.repository';
 
+@Global()
 @Module({
   imports: [
     JwtModule.registerAsync({
@@ -21,6 +22,6 @@ import { AuthRepository } from './auth.repository';
   ],
   controllers: [AuthController],
   providers: [AuthService, BcryptService, AuthRepository, FirebaseAuthGuard, RolesGuard],
-  exports: [AuthService, BcryptService, AuthRepository, FirebaseAuthGuard, RolesGuard],
+  exports: [AuthService, FirebaseAuthGuard, RolesGuard],
 })
 export class AuthModule {}

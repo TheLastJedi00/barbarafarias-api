@@ -2,7 +2,7 @@ import { Body, Controller, Delete, Get, Param, Post } from '@nestjs/common';
 import { VideoService } from './video.service';
 import { Video } from '../domain/video.model';
 import { VideoModuleDto } from '../domain/video.dto';
-import { Roles } from 'src/decorators/roles.decorator';
+import { Roles } from '../../decorators/roles.decorator';
 
 @Controller('videos')
 export class VideoController {
