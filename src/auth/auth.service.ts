@@ -2,7 +2,6 @@ import {
   Injectable,
   UnauthorizedException,
 } from '@nestjs/common';
-import * as admin from 'firebase-admin';
 import { JwtService } from '@nestjs/jwt';
 import { AuthRepository } from './auth.repository';
 import { BcryptService } from './bcrypt.service';
@@ -16,9 +15,9 @@ export class AuthService {
     private bcryptService: BcryptService,
   ) {}
 
-  async verifyToken(token: string) {
+  verifyToken(token: string) {
     try {
-      return await admin.auth().verifyIdToken(token);
+      return this.jwtService.verify(token);
     } catch (e) {
       throw new UnauthorizedException('Token inválido');
     }

@@ -28,7 +28,7 @@ export class AuthGuard implements CanActivate {
     const token = this.extractTokenFromHeader(request);
     if (!token) throw new UnauthorizedException('Token não fornecido');
 
-    const userFromToken = await this.authService.verifyToken(token);
+    const userFromToken = this.authService.verifyToken(token);
 
     request['user'] = userFromToken;
     return true;
