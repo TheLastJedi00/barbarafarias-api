@@ -36,13 +36,13 @@ export class AuthService {
     const authUser = await this.authRepository.findByEmail(email);
 
     if (!authUser || !authUser.password) {
-      throw new UnauthorizedException('Credenciais inválidas');
+      throw new UnauthorizedException('Esse usuário não existe.');
     }
 
     const isMatch = await this.bcryptService.compare(pass, authUser.password);
 
     if (!isMatch) {
-      throw new UnauthorizedException('Credenciais inválidas');
+      throw new UnauthorizedException('Senha incorreta.');
     }
 
     const payload = { email: authUser.email, sub: authUser.id, role: authUser.role };
