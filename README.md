@@ -101,10 +101,6 @@ src/
 │   ├── video.entity.ts        # Entidade de vídeo (Video, VideoTopic, VideoInfo)
 │   └── dtos/
 │       └── video.dto.ts       # DTOs de vídeo
-├── teacher/               # Módulo de professores
-│   ├── teacher.entity.ts      # Entidade de professor
-│   ├── teacher.service.ts     # Busca de professores
-│   └── teacher.repository.ts  # Persistência no Firestore
 ├── prompts/               # Módulo de prompts para IA
 │   ├── prompt.service.ts      # Busca de prompts por nível
 │   ├── prompt.repository.ts   # Persistência no Firestore
@@ -639,15 +635,110 @@ Remove um vídeo específico de dentro de um tópico de um módulo.
 
 ---
 
-## 📊 Coleções do Firestore
+## 📊 Estrutura de Dados e Coleções do Firestore
 
-| Coleção | Descrição | Doc ID |
-|---|---|---|
-| `credentials` | Credenciais de autenticação (email, hash, role) | UUID do usuário |
-| `users` | Dados dos usuários (alunos e professores) | UUID do usuário |
-| `student_supplies` | Materiais didáticos gerados pela IA | `{studentId}_{level}` |
-| `videos` | Módulos de vídeo por nível | `{level}_{index}` |
-| `prompts` | Prompts para geração de conteúdo por nível | — |
+Abaixo está a estrutura de dados armazenada em cada coleção do banco de dados:
+
+### 1. `credentials`
+Armazena as informações de autenticação (email, senha com hash e função do usuário).
+- **Doc ID:** UUID do usuário (mesmo ID da coleção `users`)
+```json
+{
+  "id": "string (UUID)",
+  "email": "string",
+  "password": "string (hash bcrypt)",
+  "role": "string (ex: 'teacher' ou 'student')"
+}
+```
+
+### 2. `users`
+Armazena os dados pessoais e de perfil dos usuários (alunos e professores).
+- **Doc ID:** UUID do usuário
+```json
+{
+  "id": "string (UUID)",
+  "fullName": "string",
+  "phone": "string",
+  "email": "string",
+  "isPaying": "boolean",
+  "isTeacher": "boolean",
+  "level": "string (ex: 'A1')",
+  "objective": "string",
+  "prognosis": "string"
+}
+```
+
+### 3. `student_supplies`
+Armazena os materiais didáticos personalizados gerados pela IA (Google Gemini).
+- **Doc ID:** `{studentId}_{level}`
+```json
+{
+  "studentId": "string (UUID)",
+  "level": "string",
+  "modules": [
+    {
+      "title": "string",
+      "text": "string",
+      "topics": [
+        {
+          "topic": "string",
+          "description": "string",
+          "examples": ["string"],
+          "curiosity": "string",
+          "roleplayInstruction": "string",
+          "roleplayDialog": ["string"],
+          "words": [
+            {
+              "english": "string",
+              "portuguese": "string",
+              "pronounce": "string"
+            }
+          ],
+          "music": {
+            "title": "string",
+            "artist": "string",
+            "youtube": "string"
+          }
+        }
+      ]
+    }
+  ]
+}
+```
+
+### 4. `videos`
+Armazena os módulos de vídeos, agrupados por nível.
+- **Doc ID:** `{level}_{index}`
+```json
+{
+  "index": "number",
+  "level": "string (ex: 'A1')",
+  "topic": [
+    {
+      "title": "string",
+      "description": "string",
+      "videos": [
+        {
+          "youtubeId": "string",
+          "title": "string",
+          "internalHash": "string",
+          "order": "number"
+        }
+      ]
+    }
+  ]
+}
+```
+
+### 5. `prompts`
+Armazena os templates de prompt utilizados pela integração do Gemini, categorizados por nível.
+- **Doc ID:** UUID automático ou Identificador de Nível
+```json
+{
+  "level": "string (ex: 'A1')",
+  "prompt": "string (texto do prompt base)"
+}
+```
 
 ---
 
