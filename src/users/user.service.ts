@@ -41,12 +41,14 @@ export class UserService {
     return this.userRepository.findAll();
   }
 
-  async updateUser(id: string, dto: UpdateUserDto) {
+  async updateUser(id: string, dto: UpdateUserDto): Promise<User> {
     const foundUser = await this.userRepository.findById(id);
     if (!foundUser) {
-      throw new Error('User not found');
+      throw new NotFoundException('User not found');
     }
-    const user = new User(dto);
+    // merge over the existing user and pin the id from the route param,
+    // so partial updates don't wipe fields nor depend on the request body id
+    const user = new User({ ...foundUser, ...dto, id });
     await this.userRepository.update(user);
     return user;
   }

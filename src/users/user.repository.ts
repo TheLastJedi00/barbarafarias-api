@@ -58,7 +58,10 @@ export class UserRepository {
   async update(user: User): Promise<void> {
     const userId = user.id;
     const userObject = instanceToPlain(user);
-    await this.db.collection('users').doc(userId!).set(userObject);
+    await this.db
+      .collection('users')
+      .doc(userId!)
+      .set(userObject, { merge: true });
   }
 
   async delete(id: string): Promise<void> {
