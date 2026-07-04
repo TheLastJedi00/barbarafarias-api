@@ -1,16 +1,13 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
-import * as admin from 'firebase-admin';
+import { Inject, Injectable, NotFoundException } from '@nestjs/common';
 import { Firestore } from 'firebase-admin/firestore';
+import { FIRESTORE } from '../firestore/firestore.module';
 import { Video } from './video.entity';
 import { instanceToPlain, plainToInstance } from 'class-transformer';
 
 @Injectable()
 export class VideoRepository {
-  private readonly db: Firestore;
   collection = 'videos';
-  constructor() {
-    this.db = admin.firestore();
-  }
+  constructor(@Inject(FIRESTORE) private readonly db: Firestore) {}
 
   async deleteByLevelAndIndexAndTopicAndYoutubeId(
     level: string,
@@ -47,18 +44,10 @@ export class VideoRepository {
   }
 
   async save(video: Video, docId: string): Promise<void> {
-    try {
-      await this.db
-        .collection(this.collection)
-        .doc(docId)
-        .set(instanceToPlain(video));
-    } catch (error) {
-      console.error(
-        '[Repository] Erro no Repositório ao salvar módulo de vídeo:',
-        error,
-      );
-      throw error;
-    }
+    await this.db
+      .collection(this.collection)
+      .doc(docId)
+      .set(instanceToPlain(video));
   }
 
   async getByLevel(level: string): Promise<Video[]> {
@@ -66,9 +55,6 @@ export class VideoRepository {
       .collection(this.collection)
       .where('level', '==', level)
       .get();
-    if (!videosQuerySnapshot) {
-      return [];
-    }
     const videos: Video[] = videosQuerySnapshot.docs.map((doc) => {
       const data = doc.data();
       return new Video(data.index, data.level, data.topic);

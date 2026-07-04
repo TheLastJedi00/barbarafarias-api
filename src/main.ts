@@ -1,72 +1,18 @@
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
-import { ValidationPipe } from '@nestjs/common';
-import * as admin from 'firebase-admin';
-import { ServiceAccount } from 'firebase-admin';
+import { Logger, ValidationPipe } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { useContainer } from 'class-validator';
-import * as fs from 'fs';
-import * as path from 'path';
+import { AllExceptionsFilter } from './common/filters/all-exceptions.filter';
+import { buildCorsOptions } from './common/cors.config';
 
-//Variáveis de ambiente carregadas pelo NestJS a partir do painel da Vercel ou do arquivo .env local
+// O Firebase é inicializado pela factory do FirestoreModule.
+// Variáveis de ambiente carregadas via painel da Vercel ou .env local.
 async function bootstrap() {
-  console.log('AUTH EMULATOR:', process.env.FIREBASE_AUTH_EMULATOR_HOST);
-  console.log('FIRESTORE EMULATOR:', process.env.FIRESTORE_EMULATOR_HOST);
-  console.log('PROJECT ID:', process.env.FIREBASE_PROJECT_ID);
-  // --- INICIALIZAÇÃO DO FIREBASE ---
-  const localKeyPath = path.resolve(process.cwd(), 'serviceAccountKey.json');
-  let serviceAccount: ServiceAccount;
-
-  if (fs.existsSync(localKeyPath)) {
-    // LOCAL
-    serviceAccount = require(localKeyPath);
-    console.log('Firebase Local (Arquivo JSON detectado).');
-  } else {
-    // VERCEL
-    console.log('Firebase Nuvem (Lendo Base64...).');
-    const base64 = process.env.FIREBASE_SERVICE_ACCOUNT_BASE64;
-
-    if (!base64) {
-      throw new Error('FATAL: Credenciais do Firebase não encontradas.');
-    }
-
-    const buffer = Buffer.from(base64, 'base64');
-    serviceAccount = JSON.parse(buffer.toString('utf-8'));
-    console.log('Firebase: Credenciais decodificadas com sucesso.');
-  }
-
-  // Erro de re-inicialização em hot-reload
-  if (!admin.apps.length) {
-    admin.initializeApp({
-      credential: admin.credential.cert(serviceAccount),
-    });
-  }
-
+  const logger = new Logger('Bootstrap');
   const app = await NestFactory.create(AppModule);
 
-  // CORS
-  app.enableCors({
-    origin: (origin, callback) => {
-      console.log('Origem recebida:', origin);
-
-      const allowed = [
-        'https://dev.barbarafarias.com.br',
-        'https://barbarafarias.com.br',
-        'https://www.barbarafarias.com.br',
-        'http://localhost:3000',
-        'http://localhost:4200',
-      ];
-
-      if (!origin || allowed.includes(origin)) {
-        callback(null, true);
-      } else {
-        console.log('Bloqueado:', origin);
-        callback(new Error('Not allowed by CORS'));
-      }
-    },
-    methods: 'GET,HEAD,PUT,PATCH,POST,DELETE',
-    credentials: true,
-  });
+  app.enableCors(buildCorsOptions());
 
   app.useGlobalPipes(
     new ValidationPipe({
@@ -76,15 +22,16 @@ async function bootstrap() {
     }),
   );
 
+  app.useGlobalFilters(new AllExceptionsFilter());
+
   useContainer(app.select(AppModule), { fallbackOnErrors: true });
 
   const configService = app.get(ConfigService);
   const port = process.env.PORT || configService.get<number>('PORT') || 8080;
 
   const server = await app.listen(port, '0.0.0.0');
-  // Timeout de 5 minutos
-  server.setTimeout(300000);
+  server.setTimeout(300000); // Timeout de 5 minutos
 
-  console.log(`Application is running on: ${await app.getUrl()}`);
+  logger.log(`Application is running on: ${await app.getUrl()}`);
 }
 bootstrap();

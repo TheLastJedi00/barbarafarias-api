@@ -1,4 +1,4 @@
-import { IsEmail, IsNotEmpty, IsString } from 'class-validator';
+import { IsBoolean, IsEmail, IsNotEmpty, IsString } from 'class-validator';
 
 export class CreateUserDto {
   @IsNotEmpty({ message: 'Name is required' })
@@ -7,9 +7,9 @@ export class CreateUserDto {
   phone!: string;
   @IsEmail(undefined, { message: 'Invalid email format' })
   email!: string;
-  @IsNotEmpty({ message: 'this user is paying or not?' })
+  @IsBoolean({ message: 'isPaying must be a boolean' })
   isPaying!: boolean;
-  @IsNotEmpty({ message: 'this user is a teacher or not?' })
+  @IsBoolean({ message: 'isTeacher must be a boolean' })
   isTeacher!: boolean;
   @IsString({ message: 'Level is required' })
   level!: string;

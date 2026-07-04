@@ -3,6 +3,7 @@ import { VideoService } from './video.service';
 import { Video } from './video.entity';
 import { VideoModuleDto } from './dtos/video.dto';
 import { Roles } from '../decorators/roles.decorator';
+import { ROLES } from '../types/role';
 
 @Controller('videos')
 export class VideoController {
@@ -14,13 +15,13 @@ export class VideoController {
     }
 
     @Post()
-    @Roles('teacher')
+    @Roles(ROLES.TEACHER)
     async createOrUpdateVideoModule(@Body() data: VideoModuleDto): Promise<void>{
         return this.videoService.saveVideoModule(data);
     }
 
     @Delete(":level/:index/:topic/:youtubeId")
-    @Roles('teacher')
+    @Roles(ROLES.TEACHER)
     async deleteVideo(
         @Param('level') level: string,
         @Param('index', ParseIntPipe) index: number,

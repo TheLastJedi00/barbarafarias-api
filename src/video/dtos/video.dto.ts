@@ -1,11 +1,13 @@
 import { Type } from "class-transformer";
-import { IsArray, IsNotEmpty, IsNotEmptyObject, IsOptional, ValidateNested } from "class-validator";
+import { IsArray, IsEnum, IsNotEmpty, IsOptional, ValidateNested } from "class-validator";
+import { LEVELS, type Level } from "../../types/student.level";
 
 export class VideoModuleDto {
     @IsNotEmpty({message: "Index is required"})
     index: number;
     @IsNotEmpty({message: "Level is required"})
-    level: string;
+    @IsEnum(LEVELS)
+    level: Level;
     @ValidateNested({each: true})
     @IsArray()
     @Type(() => VideoTopicDto)

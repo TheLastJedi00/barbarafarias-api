@@ -8,10 +8,12 @@ import { VideoModule } from './video/video.module';
 import { PromptsModule } from './prompts/prompts.module';
 import { AuthGuard } from './guards/auth.guard';
 import { RolesGuard } from './guards/roles.guard';
+import { FirestoreModule } from './firestore/firestore.module';
 
 @Module({
   imports: [
     ConfigModule.forRoot({ isGlobal: true }),
+    FirestoreModule,
     UserModule,
     SupplyModule,
     AuthModule,
