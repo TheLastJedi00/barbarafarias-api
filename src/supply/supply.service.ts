@@ -1,8 +1,8 @@
 import {
   HttpException,
-  Inject,
   Injectable,
   InternalServerErrorException,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { SupplyInfoDto } from './dtos/SupplyInfo.dto';
@@ -17,6 +17,7 @@ import { SupplyModulesSchema } from '../types/student.supply';
 
 @Injectable()
 export class SupplyService {
+  private readonly logger = new Logger(SupplyService.name);
   constructor(
     private readonly supplyRepository: SupplyRepository,
     private readonly userService: UserService,
@@ -57,10 +58,7 @@ export class SupplyService {
         const jsonContent = JSON.parse(aiResponse);
         modules = SupplyModulesSchema.parse(jsonContent);
       } catch (e) {
-        console.error(
-          'Falha ao validar o JSON retornado pela IA com o Zod:',
-          e,
-        );
+        this.logger.error('JSON retornado pela IA falhou na validação Zod', e);
         throw new InternalServerErrorException(
           'A IA retornou um formato inválido.',
         );
@@ -74,7 +72,7 @@ export class SupplyService {
       if (error instanceof HttpException) {
         throw error;
       }
-      console.error('Error creating supply:', error);
+      this.logger.error('Erro ao criar supply', error?.stack);
       throw new InternalServerErrorException(
         `Failed to create supply: ${error}`,
       );

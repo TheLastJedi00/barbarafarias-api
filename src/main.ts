@@ -1,6 +1,6 @@
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
-import { ValidationPipe } from '@nestjs/common';
+import { Logger, ValidationPipe } from '@nestjs/common';
 import * as admin from 'firebase-admin';
 import { ServiceAccount } from 'firebase-admin';
 import { ConfigService } from '@nestjs/config';
@@ -11,9 +11,7 @@ import * as path from 'path';
 
 //Variáveis de ambiente carregadas pelo NestJS a partir do painel da Vercel ou do arquivo .env local
 async function bootstrap() {
-  console.log('AUTH EMULATOR:', process.env.FIREBASE_AUTH_EMULATOR_HOST);
-  console.log('FIRESTORE EMULATOR:', process.env.FIRESTORE_EMULATOR_HOST);
-  console.log('PROJECT ID:', process.env.FIREBASE_PROJECT_ID);
+  const logger = new Logger('Bootstrap');
   // --- INICIALIZAÇÃO DO FIREBASE ---
   const localKeyPath = path.resolve(process.cwd(), 'serviceAccountKey.json');
   let serviceAccount: ServiceAccount;
@@ -21,10 +19,9 @@ async function bootstrap() {
   if (fs.existsSync(localKeyPath)) {
     // LOCAL
     serviceAccount = require(localKeyPath);
-    console.log('Firebase Local (Arquivo JSON detectado).');
+    logger.log('Firebase: usando arquivo de credenciais local.');
   } else {
     // VERCEL
-    console.log('Firebase Nuvem (Lendo Base64...).');
     const base64 = process.env.FIREBASE_SERVICE_ACCOUNT_BASE64;
 
     if (!base64) {
@@ -33,7 +30,7 @@ async function bootstrap() {
 
     const buffer = Buffer.from(base64, 'base64');
     serviceAccount = JSON.parse(buffer.toString('utf-8'));
-    console.log('Firebase: Credenciais decodificadas com sucesso.');
+    logger.log('Firebase: credenciais carregadas do ambiente.');
   }
 
   // Erro de re-inicialização em hot-reload
@@ -48,8 +45,6 @@ async function bootstrap() {
   // CORS
   app.enableCors({
     origin: (origin, callback) => {
-      console.log('Origem recebida:', origin);
-
       const allowed = [
         'https://dev.barbarafarias.com.br',
         'https://barbarafarias.com.br',
@@ -61,7 +56,7 @@ async function bootstrap() {
       if (!origin || allowed.includes(origin)) {
         callback(null, true);
       } else {
-        console.log('Bloqueado:', origin);
+        logger.warn(`Origem bloqueada por CORS: ${origin}`);
         callback(new Error('Not allowed by CORS'));
       }
     },
@@ -88,6 +83,6 @@ async function bootstrap() {
   // Timeout de 5 minutos
   server.setTimeout(300000);
 
-  console.log(`Application is running on: ${await app.getUrl()}`);
+  logger.log(`Application is running on: ${await app.getUrl()}`);
 }
 bootstrap();

@@ -9,20 +9,15 @@ export class PromptRepository {
   private readonly collectionName = 'prompts';
   constructor(@Inject(FIRESTORE) private readonly db: Firestore) {}
   async getPromptByLevel(level: Level): Promise<Prompt | null> {
-    try {
-      const snapshot = await this.db
-        .collection(this.collectionName)
-        .where('level', '==', level)
-        .get();
-      if (snapshot.empty) {
-        return null;
-      }
-      const doc = snapshot.docs[0];
-      const data = doc.data();
-      return new Prompt(level, data.prompt);
-    } catch (error) {
-      console.error('Error fetching prompt by level:', error);
-      throw error;
+    const snapshot = await this.db
+      .collection(this.collectionName)
+      .where('level', '==', level)
+      .get();
+    if (snapshot.empty) {
+      return null;
     }
+    const doc = snapshot.docs[0];
+    const data = doc.data();
+    return new Prompt(level, data.prompt);
   }
 }

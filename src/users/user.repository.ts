@@ -10,13 +10,8 @@ export class UserRepository {
 
   async save(user: User, uid: string): Promise<string> {
     const userObject = instanceToPlain(user);
-    try {
-      await this.db.collection('users').doc(uid).set(userObject);
-      return uid;
-    } catch (error) {
-      console.error('Erro no Repositório ao salvar usuário:', error);
-      throw error;
-    }
+    await this.db.collection('users').doc(uid).set(userObject);
+    return uid;
   }
 
   async findAll(): Promise<User[]> {

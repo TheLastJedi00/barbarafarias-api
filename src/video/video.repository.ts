@@ -44,18 +44,10 @@ export class VideoRepository {
   }
 
   async save(video: Video, docId: string): Promise<void> {
-    try {
-      await this.db
-        .collection(this.collection)
-        .doc(docId)
-        .set(instanceToPlain(video));
-    } catch (error) {
-      console.error(
-        '[Repository] Erro no Repositório ao salvar módulo de vídeo:',
-        error,
-      );
-      throw error;
-    }
+    await this.db
+      .collection(this.collection)
+      .doc(docId)
+      .set(instanceToPlain(video));
   }
 
   async getByLevel(level: string): Promise<Video[]> {
