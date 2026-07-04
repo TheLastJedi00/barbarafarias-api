@@ -6,6 +6,7 @@ import { ConfigModule } from '@nestjs/config';
 import { AuthModule } from './auth/auth.module';
 import { VideoModule } from './video/video.module';
 import { PromptsModule } from './prompts/prompts.module';
+import { TurmaModule } from './turmas/turma.module';
 import { AuthGuard } from './guards/auth.guard';
 import { RolesGuard } from './guards/roles.guard';
 import { FirestoreModule } from './firestore/firestore.module';
@@ -19,6 +20,7 @@ import { FirestoreModule } from './firestore/firestore.module';
     AuthModule,
     VideoModule,
     PromptsModule,
+    TurmaModule,
   ],
   providers: [
     {
