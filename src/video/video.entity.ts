@@ -1,22 +1,17 @@
 import { Type } from "class-transformer";
 import { IsEnum } from "class-validator";
+import { LEVELS, type Level } from "../types/student.level";
 
-export enum VideoLevel {
-    A1 = 'A1',
-    A2 = 'A2',
-    B1 = 'B1',
-    B2 = 'B2',
-}
 export class Video {
     index: number;
-    @IsEnum(VideoLevel)
-    level: VideoLevel;
+    @IsEnum(LEVELS)
+    level: Level;
     @Type(() => VideoTopic) //Mapper Field by Field
     topic: VideoTopic[];
 
     constructor(index: number, level: string, topic: VideoTopic[]) {
         this.index = index;
-        this.level = level as VideoLevel;
+        this.level = level as Level;
         this.topic = topic;
     }
 }
