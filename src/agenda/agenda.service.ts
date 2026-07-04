@@ -11,8 +11,17 @@ export class AgendaService {
     private readonly turmaRepository: TurmaRepository,
   ) {}
 
-  getGrid(): Promise<AgendaSlot[]> {
-    return this.agendaRepository.findAll();
+  async getGrid(): Promise<AgendaSlot[]> {
+    const [slots, turmas] = await Promise.all([
+      this.agendaRepository.findAll(),
+      this.turmaRepository.findAll(),
+    ]);
+    const validTurmaIds = new Set(turmas.map((t) => t.id));
+    // RF8: slots que apontam para turmas excluídas são tratados como livres
+    // (ocultados da grade) — sem cascade nem acoplamento circular entre módulos.
+    return slots.filter(
+      (s) => s.occupantType !== 'turma' || validTurmaIds.has(s.turmaId),
+    );
   }
 
   async assign(dto: AssignSlotDto): Promise<void> {
