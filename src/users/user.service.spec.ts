@@ -9,7 +9,10 @@ describe('UserService', () => {
     update: jest.Mock;
     save: jest.Mock;
   };
-  let authService: { registerCredentials: jest.Mock };
+  let authService: {
+    registerCredentials: jest.Mock;
+    removeCredentials: jest.Mock;
+  };
 
   beforeEach(() => {
     userRepository = {
@@ -17,8 +20,33 @@ describe('UserService', () => {
       update: jest.fn().mockResolvedValue(undefined),
       save: jest.fn().mockResolvedValue('uid-1'),
     };
-    authService = { registerCredentials: jest.fn().mockResolvedValue(undefined) };
+    authService = {
+      registerCredentials: jest.fn().mockResolvedValue(undefined),
+      removeCredentials: jest.fn().mockResolvedValue(undefined),
+    };
     service = new UserService(userRepository as any, authService as any);
+  });
+
+  describe('createUser', () => {
+    const dto = {
+      fullName: 'Ana',
+      email: 'ana@x.com',
+      password: 'senha',
+      isTeacher: false,
+    } as any;
+
+    it('registra credencial e persiste o usuário', async () => {
+      const result = await service.createUser(dto);
+      expect(authService.registerCredentials).toHaveBeenCalledTimes(1);
+      expect(userRepository.save).toHaveBeenCalledTimes(1);
+      expect(result.fullName).toBe('Ana');
+    });
+
+    it('faz rollback da credencial se a gravação do usuário falhar', async () => {
+      userRepository.save.mockRejectedValue(new Error('firestore down'));
+      await expect(service.createUser(dto)).rejects.toThrow('firestore down');
+      expect(authService.removeCredentials).toHaveBeenCalledTimes(1);
+    });
   });
 
   describe('updateUser', () => {

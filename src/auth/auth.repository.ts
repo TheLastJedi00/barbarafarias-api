@@ -21,6 +21,10 @@ export class AuthRepository {
     }
   }
 
+  async delete(id: string): Promise<void> {
+    await this.db.collection('credentials').doc(id).delete();
+  }
+
   async findByEmail(email: string): Promise<AuthUser | null> {
     const snapshot = await this.db
       .collection('credentials')

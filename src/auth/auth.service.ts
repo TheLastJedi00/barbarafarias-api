@@ -32,6 +32,10 @@ export class AuthService {
     await this.authRepository.save(authUser);
   }
 
+  async removeCredentials(id: string) {
+    await this.authRepository.delete(id);
+  }
+
   async login(email: string, pass: string) {
     const authUser = await this.authRepository.findByEmail(email);
 

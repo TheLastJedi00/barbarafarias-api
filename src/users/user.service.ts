@@ -25,10 +25,16 @@ export class UserService {
       role: role,
     });
 
-    const user = new User(dto);
-    user.id = uid;
-    const id = await this.userRepository.save(user, uid);
-    return new ResponseUserDto(id, user.fullName);
+    try {
+      const user = new User(dto);
+      user.id = uid;
+      const id = await this.userRepository.save(user, uid);
+      return new ResponseUserDto(id, user.fullName);
+    } catch (error) {
+      // rollback: evita credencial órfã caso a gravação do usuário falhe
+      await this.authService.removeCredentials(uid);
+      throw error;
+    }
   }
 
   async getAllUsers(): Promise<User[]> {
