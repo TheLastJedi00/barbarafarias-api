@@ -3,6 +3,7 @@ import { SupplyService } from './supply.service';
 import { SupplyInfoDto } from './dtos/SupplyInfo.dto';
 import type { Level } from '../types/student.level';
 import { Roles } from '../decorators/roles.decorator';
+import { ROLES } from '../types/role';
 import { Supply } from './supply.model';
 
 @Controller('/supplies')
@@ -10,7 +11,7 @@ export class SupplyController {
   constructor(private readonly supplyService: SupplyService) {}
 
   @Post()
-  @Roles('teacher')
+  @Roles(ROLES.TEACHER)
   async createSupply(@Body() data: SupplyInfoDto): Promise<SupplyInfoDto> {
     return this.supplyService.createSupply(data);
   }

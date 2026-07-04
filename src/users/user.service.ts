@@ -5,6 +5,7 @@ import { UpdateUserDto } from './dto/UpdateUser.dto';
 import { ResponseUserDto } from './dto/ResponseUser.dto';
 import { UserRepository } from './user.repository';
 import { AuthService } from '../auth/auth.service';
+import { ROLES } from '../types/role';
 import { v4 as uuidv4 } from 'uuid';
 
 @Injectable()
@@ -16,7 +17,7 @@ export class UserService {
 
   async createUser(dto: CreateUserDto): Promise<ResponseUserDto> {
     const uid = uuidv4();
-    const role = dto.isTeacher ? 'teacher' : 'student';
+    const role = dto.isTeacher ? ROLES.TEACHER : ROLES.STUDENT;
 
     await this.authService.registerCredentials({
       id: uid,
