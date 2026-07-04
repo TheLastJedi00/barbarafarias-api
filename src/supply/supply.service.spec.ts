@@ -51,6 +51,13 @@ describe('SupplyService.createSupply', () => {
     expect(supplyRepository.save).not.toHaveBeenCalled();
   });
 
+  it('propaga o erro quando a gravação falha (save deve ser aguardado)', async () => {
+    supplyRepository.save.mockRejectedValue(new Error('firestore down'));
+    await expect(service.createSupply(dto)).rejects.toBeInstanceOf(
+      InternalServerErrorException,
+    );
+  });
+
   it('lança 500 quando a IA retorna um formato inválido', async () => {
     genAi.generateContent.mockResolvedValue('não é json');
     await expect(service.createSupply(dto)).rejects.toBeInstanceOf(

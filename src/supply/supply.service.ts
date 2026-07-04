@@ -68,7 +68,7 @@ export class SupplyService {
 
       //create supply entity and save it
       const supply = new Supply(dto.studentId, dto.level, modules);
-      this.supplyRepository.save(supply);
+      await this.supplyRepository.save(supply);
       return dto;
     } catch (error) {
       if (error instanceof HttpException) {
