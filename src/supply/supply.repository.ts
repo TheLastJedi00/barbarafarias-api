@@ -49,10 +49,6 @@ export class SupplyRepository {
     return new Supply(data!.studentId, data!.level, data!.modules);
   }
 
-  async update(supply: Supply): Promise<string> {
-    return this.save(supply);
-  }
-
   async delete(studentId: string, level: Level): Promise<void> {
     const docId = `${studentId}_${level}`;
     await this.db.collection(this.collectionName).doc(docId).delete();

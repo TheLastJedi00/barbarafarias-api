@@ -55,9 +55,6 @@ export class VideoRepository {
       .collection(this.collection)
       .where('level', '==', level)
       .get();
-    if (!videosQuerySnapshot) {
-      return [];
-    }
     const videos: Video[] = videosQuerySnapshot.docs.map((doc) => {
       const data = doc.data();
       return new Video(data.index, data.level, data.topic);
