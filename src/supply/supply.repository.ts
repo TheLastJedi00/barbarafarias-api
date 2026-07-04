@@ -1,17 +1,14 @@
 import { Firestore } from 'firebase-admin/firestore';
-import * as admin from 'firebase-admin';
+import { FIRESTORE } from '../firestore/firestore.module';
 import { Level } from '../types/student.level';
-import { Injectable } from '@nestjs/common';
+import { Inject, Injectable } from '@nestjs/common';
 import { Supply } from './supply.model';
 
 @Injectable()
 export class SupplyRepository {
-  private readonly db: Firestore;
   private readonly collectionName = 'student_supplies';
 
-  constructor() {
-    this.db = admin.firestore();
-  }
+  constructor(@Inject(FIRESTORE) private readonly db: Firestore) {}
 
   async save(supply: Supply): Promise<string> {
     const docId = supply.getDocumentId();

@@ -1,15 +1,12 @@
-import { Injectable } from '@nestjs/common';
+import { Inject, Injectable } from '@nestjs/common';
 import { User } from './user.entity';
 import { Firestore } from 'firebase-admin/firestore';
-import * as admin from 'firebase-admin';
+import { FIRESTORE } from '../firestore/firestore.module';
 import { instanceToPlain, plainToInstance } from 'class-transformer';
 
 @Injectable()
 export class UserRepository {
-  private readonly db: Firestore;
-  constructor() {
-    this.db = admin.firestore();
-  }
+  constructor(@Inject(FIRESTORE) private readonly db: Firestore) {}
 
   async save(user: User, uid: string): Promise<string> {
     const userObject = instanceToPlain(user);

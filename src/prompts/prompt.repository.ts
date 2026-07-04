@@ -1,16 +1,13 @@
 import { Firestore } from 'firebase-admin/firestore';
-import * as admin from 'firebase-admin';
+import { FIRESTORE } from '../firestore/firestore.module';
 import { Level } from '../types/student.level';
-import { Injectable } from '@nestjs/common';
+import { Inject, Injectable } from '@nestjs/common';
 import { Prompt } from './prompt.model';
 
 @Injectable()
 export class PromptRepository {
-  private readonly db: Firestore;
   private readonly collectionName = 'prompts';
-  constructor() {
-    this.db = admin.firestore();
-  }
+  constructor(@Inject(FIRESTORE) private readonly db: Firestore) {}
   async getPromptByLevel(level: Level): Promise<Prompt | null> {
     try {
       const snapshot = await this.db

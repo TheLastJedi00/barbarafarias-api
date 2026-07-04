@@ -1,16 +1,13 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
-import * as admin from 'firebase-admin';
+import { Inject, Injectable, NotFoundException } from '@nestjs/common';
 import { Firestore } from 'firebase-admin/firestore';
+import { FIRESTORE } from '../firestore/firestore.module';
 import { Video } from './video.entity';
 import { instanceToPlain, plainToInstance } from 'class-transformer';
 
 @Injectable()
 export class VideoRepository {
-  private readonly db: Firestore;
   collection = 'videos';
-  constructor() {
-    this.db = admin.firestore();
-  }
+  constructor(@Inject(FIRESTORE) private readonly db: Firestore) {}
 
   async deleteByLevelAndIndexAndTopicAndYoutubeId(
     level: string,

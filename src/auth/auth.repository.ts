@@ -1,15 +1,11 @@
-import { Injectable } from '@nestjs/common';
+import { Inject, Injectable } from '@nestjs/common';
 import { Firestore } from 'firebase-admin/firestore';
-import * as admin from 'firebase-admin';
+import { FIRESTORE } from '../firestore/firestore.module';
 import { AuthUser } from './entities/auth-user.entity';
 
 @Injectable()
 export class AuthRepository {
-  private readonly db: Firestore;
-
-  constructor() {
-    this.db = admin.firestore();
-  }
+  constructor(@Inject(FIRESTORE) private readonly db: Firestore) {}
 
   async save(authUser: AuthUser): Promise<void> {
     try {
