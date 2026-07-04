@@ -5,6 +5,7 @@ import * as admin from 'firebase-admin';
 import { ServiceAccount } from 'firebase-admin';
 import { ConfigService } from '@nestjs/config';
 import { useContainer } from 'class-validator';
+import { AllExceptionsFilter } from './common/filters/all-exceptions.filter';
 import * as fs from 'fs';
 import * as path from 'path';
 
@@ -75,6 +76,8 @@ async function bootstrap() {
       transform: true,
     }),
   );
+
+  app.useGlobalFilters(new AllExceptionsFilter());
 
   useContainer(app.select(AppModule), { fallbackOnErrors: true });
 

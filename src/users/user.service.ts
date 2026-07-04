@@ -16,25 +16,19 @@ export class UserService {
 
   async createUser(dto: CreateUserDto): Promise<ResponseUserDto> {
     const uid = uuidv4();
+    const role = dto.isTeacher ? 'teacher' : 'student';
 
-    try {
-      const role = dto.isTeacher ? 'teacher' : 'student';
+    await this.authService.registerCredentials({
+      id: uid,
+      email: dto.email,
+      password: dto.password,
+      role: role,
+    });
 
-      await this.authService.registerCredentials({
-        id: uid,
-        email: dto.email,
-        password: dto.password,
-        role: role,
-      });
-
-      const user = new User(dto);
-      user.id = uid;
-      const id = await this.userRepository.save(user, uid);
-      const response = new ResponseUserDto(id, user.fullName);
-      return response;
-    } catch (error) {
-      throw new Error('Error creating User:' + error);
-    }
+    const user = new User(dto);
+    user.id = uid;
+    const id = await this.userRepository.save(user, uid);
+    return new ResponseUserDto(id, user.fullName);
   }
 
   async getAllUsers(): Promise<User[]> {
