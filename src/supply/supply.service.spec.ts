@@ -16,7 +16,7 @@ describe('SupplyService.createSupply', () => {
   let supplyRepository: { save: jest.Mock };
   let userService: { findById: jest.Mock };
   let promptService: { getPromptByLevel: jest.Mock };
-  let genAi: { generateContent: jest.Mock };
+  let genAi: { generateJson: jest.Mock };
 
   const dto = { studentId: 's1', level: 'A1' } as any;
 
@@ -27,7 +27,7 @@ describe('SupplyService.createSupply', () => {
       getPromptByLevel: jest.fn().mockResolvedValue({ prompt: 'Gere módulos' }),
     };
     genAi = {
-      generateContent: jest.fn().mockResolvedValue(JSON.stringify(VALID_MODULES)),
+      generateJson: jest.fn().mockResolvedValue(VALID_MODULES),
     };
     service = new SupplyService(
       supplyRepository as any,
@@ -59,7 +59,9 @@ describe('SupplyService.createSupply', () => {
   });
 
   it('lança 500 quando a IA retorna um formato inválido', async () => {
-    genAi.generateContent.mockResolvedValue('não é json');
+    genAi.generateJson.mockRejectedValue(
+      new InternalServerErrorException('A IA retornou um formato inválido.'),
+    );
     await expect(service.createSupply(dto)).rejects.toBeInstanceOf(
       InternalServerErrorException,
     );

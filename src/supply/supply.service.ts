@@ -50,19 +50,11 @@ export class SupplyService {
         Objetivos pessoais do aluno: ${studentInfo.objectives}\n
         Prognóstico da Teacher: ${studentInfo.prognosis}`;
 
-      //receive modules from genAI service
-      const aiResponse = await this.genAi.generateContent(fullPrompt);
-
-      let modules;
-      try {
-        const jsonContent = JSON.parse(aiResponse);
-        modules = SupplyModulesSchema.parse(jsonContent);
-      } catch (e) {
-        this.logger.error('JSON retornado pela IA falhou na validação Zod', e);
-        throw new InternalServerErrorException(
-          'A IA retornou um formato inválido.',
-        );
-      }
+      //receive validated modules from genAI service
+      const modules = await this.genAi.generateJson(
+        fullPrompt,
+        SupplyModulesSchema,
+      );
 
       //create supply entity and save it
       const supply = new Supply(dto.studentId, dto.level, modules);
