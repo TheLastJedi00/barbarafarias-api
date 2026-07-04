@@ -635,6 +635,33 @@ Remove um vídeo específico de dentro de um tópico de um módulo.
 
 ---
 
+### 👥 Turmas — `/turmas`
+
+Grupos nomeados de alunos, alocáveis num slot da agenda. Todas as rotas exigem role `teacher`.
+
+| Método | Rota | Descrição |
+|---|---|---|
+| `GET` | `/turmas` | Lista todas as turmas |
+| `POST` | `/turmas` | Cria turma — body `{ name, studentIds[], studentNames[] }` |
+| `PUT` | `/turmas/:id` | Substitui a turma (mesmo body do POST) |
+| `DELETE` | `/turmas/:id` | Exclui a turma |
+
+---
+
+### 🗓️ Agenda — `/agenda`
+
+Grade **semanal recorrente**. Cada slot `(dayOfWeek, hour)` tem no máximo **um** ocupante:
+um aluno avulso **ou** uma turma. Unicidade garantida pelo docId `${dayOfWeek}_${hour}`.
+
+| Método | Rota | Auth | Descrição |
+|---|---|---|---|
+| `GET` | `/agenda` | `teacher` | Grade completa (slots ocupados; slots de turmas excluídas são omitidos) |
+| `GET` | `/agenda/student/:studentId` | autenticado | Horário resolvido do aluno (individual + turmas) → `StudentSchedule[]` |
+| `POST` | `/agenda` | `teacher` | Atribui/atualiza slot (upsert). Body `{ dayOfWeek:0-6, hour:8-20, occupantType:'student'\|'turma', studentId?, studentName?, turmaId?, turmaName? }` |
+| `DELETE` | `/agenda/:dayOfWeek/:hour` | `teacher` | Libera o slot |
+
+---
+
 ## 📊 Estrutura de Dados e Coleções do Firestore
 
 Abaixo está a estrutura de dados armazenada em cada coleção do banco de dados:
@@ -737,6 +764,32 @@ Armazena os templates de prompt utilizados pela integração do Gemini, categori
 {
   "level": "string (ex: 'A1')",
   "prompt": "string (texto do prompt base)"
+}
+```
+
+### 6. `turmas`
+Grupos nomeados de alunos.
+- **Doc ID:** UUID automático
+```json
+{
+  "name": "string",
+  "studentIds": ["string"],
+  "studentNames": ["string"]
+}
+```
+
+### 7. `agenda`
+Slots da grade semanal recorrente (1 ocupante por slot).
+- **Doc ID:** `${dayOfWeek}_${hour}` (ex.: `2_15` = terça às 15h)
+```json
+{
+  "dayOfWeek": "number (0=domingo … 6=sábado)",
+  "hour": "number (8..20)",
+  "occupantType": "'student' | 'turma'",
+  "studentId": "string (se occupantType='student')",
+  "studentName": "string (se occupantType='student')",
+  "turmaId": "string (se occupantType='turma')",
+  "turmaName": "string (se occupantType='turma')"
 }
 ```
 
