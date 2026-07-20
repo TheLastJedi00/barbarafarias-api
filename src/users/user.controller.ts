@@ -13,18 +13,19 @@ import { UpdateUserDto } from './dto/UpdateUser.dto';
 import { Roles } from '../decorators/roles.decorator';
 import { ResponseUserDto } from './dto/ResponseUser.dto';
 import { UserService } from './user.service';
+import { ROLES } from '../types/role';
 
 @Controller('/users')
 export class UserController {
   constructor(private service: UserService) {}
 
   @Post()
-  @Roles('teacher')
+  @Roles(ROLES.TEACHER)
   async createUser(@Body() user: CreateUserDto): Promise<ResponseUserDto> {
     return this.service.createUser(user);
   }
   @Get()
-  @Roles('teacher')
+  @Roles(ROLES.TEACHER)
   async getAll(): Promise<User[]> {
     return this.service.getAllUsers();
   }
@@ -33,7 +34,7 @@ export class UserController {
     return this.service.findById(id);
   }
   @Put(':id')
-  @Roles('teacher')
+  @Roles(ROLES.TEACHER)
   async update(
     @Param('id') id: string,
     @Body() user: UpdateUserDto,
@@ -41,7 +42,7 @@ export class UserController {
     return this.service.updateUser(id, user);
   }
   @Delete(':id')
-  @Roles('teacher')
+  @Roles(ROLES.TEACHER)
   async delete(@Param('id') id: string): Promise<void> {
     return this.service.delete(id);
   }
