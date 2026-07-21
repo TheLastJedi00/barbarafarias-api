@@ -86,12 +86,15 @@ src/
 │       ├── UpdateUser.dto.ts   # DTO de atualização
 │       └── ResponseUser.dto.ts # DTO de resposta
 ├── supply/                # Módulo de materiais didáticos (IA)
-│   ├── supply.controller.ts   # Endpoints de supply
-│   ├── supply.service.ts      # Geração de conteúdo via Gemini
+│   ├── supply.controller.ts   # Endpoints granulares (skeleton/topic/consolidate)
+│   ├── supply.service.ts      # Orquestra esqueleto, tópico e consolidação
 │   ├── supply.repository.ts   # Persistência no Firestore
 │   ├── supply.model.ts        # Model de supply
+│   ├── prompts.ts             # Composição dos prompts (esqueleto/tópico)
 │   ├── dtos/
-│   │   └── SupplyInfo.dto.ts  # DTO de criação de supply
+│   │   ├── SupplyInfo.dto.ts  # DTO { studentId, level } (skeleton)
+│   │   ├── TopicRequest.dto.ts # DTO de geração de um tópico
+│   │   └── Consolidate.dto.ts # DTO de consolidação (material completo)
 │   └── gemini/
 │       └── gemini.service.ts  # Provider de integração com Google Gemini
 ├── video/                 # Módulo de vídeos
@@ -114,7 +117,7 @@ src/
 ├── types/                 # Tipos compartilhados
 │   ├── student.level.ts       # Type Level (A1, A2, B1, B2)
 │   ├── student.info.ts        # Interface StudentInfo
-│   └── student.supply.ts      # Schemas Zod (Module, Topic, Word, Music)
+│   └── student.supply.ts      # Schemas Zod (Module, Topic, Word, Music, Skeleton)
 ├── app.module.ts          # Módulo raiz
 └── main.ts                # Bootstrap da aplicação
 ```
@@ -375,44 +378,98 @@ Remove um usuário.
 
 Materiais didáticos personalizados gerados por **IA (Google Gemini)** para cada aluno, baseados no nível, objetivos e prognóstico.
 
-#### `POST /supplies`
+> **Geração granular (spec 006):** a geração monolítica em uma única requisição foi
+> substituída por três etapas — **esqueleto → tópico (paralelo) → consolidação**.
+> Isso elimina timeouts, isola falhas por tópico (uma falha não afeta as demais) e
+> permite retry granular + feedback em tempo real na tela de monitoramento do FE.
+> O cliente busca a "planta baixa", dispara um `POST /supplies/topic` por tópico em
+> paralelo e, ao concluir todos, chama `POST /supplies/consolidate` para persistir.
 
-Gera um novo material didático para um aluno em um nível específico.
+#### `POST /supplies/skeleton`
+
+Etapa 1 — gera a **planta baixa** do material: módulos com título/introdução e a
+lista de títulos de tópicos, sem o conteúdo pesado. Cada tópico recebe um `id`
+estável (`m{i}_t{j}`) usado pelo cliente para chavear a UI e o retry.
 
 | Propriedade | Valor |
 |---|---|
 | **Autenticação** | 🔒 Requerida |
 | **Roles** | `teacher` |
 
-**Request Body (`SupplyInfoDto`):**
-
-```json
-{
-  "studentId": "550e8400-e29b-41d4-a716-446655440000",
-  "level": "A1"
-}
-```
-
+**Request Body (`SupplyInfoDto`):** `{ "studentId": "...", "level": "A1" }`
 > O campo `level` aceita os valores: `A1`, `A2`, `B1`, `B2`
 
-**Response (201) — `SupplyInfoDto`:**
+**Response (201):**
 
 ```json
 {
-  "studentId": "550e8400-e29b-41d4-a716-446655440000",
-  "level": "A1"
+  "modules": [
+    {
+      "title": "Título do Módulo",
+      "text": "Introdução do módulo",
+      "topics": [{ "id": "m0_t0", "topic": "Greetings" }]
+    }
+  ]
 }
 ```
 
-**Fluxo interno:**
-1. Busca os dados do aluno (nome, objetivos, prognóstico)
-2. Busca o prompt da IA correspondente ao nível
-3. Monta o prompt completo com os dados do aluno
-4. Envia para o **Google Gemini** e aguarda a resposta em JSON
-5. Valida a resposta com **Zod** (`SupplyModulesSchema`)
-6. Salva o supply no Firestore (coleção `student_supplies`, doc ID: `{studentId}_{level}`)
+**Erros:** `404` aluno não encontrado · `500` prompt ausente ou IA em formato inválido
 
-**Estrutura do conteúdo gerado (Modules):**
+---
+
+#### `POST /supplies/topic`
+
+Etapa 2 — gera o conteúdo **completo de um único tópico** (stateless; idempotente,
+retry = refazer a chamada). O FE dispara N destas requisições em paralelo.
+
+| Propriedade | Valor |
+|---|---|
+| **Autenticação** | 🔒 Requerida |
+| **Roles** | `teacher` |
+
+**Request Body (`TopicRequestDto`):**
+
+```json
+{
+  "studentId": "550e8400-...",
+  "level": "A1",
+  "moduleTitle": "Título do Módulo",
+  "topicTitle": "Greetings"
+}
+```
+
+**Response (201) — `Topic`:** o objeto completo do tópico (ver estrutura abaixo).
+
+**Erros:** `404` aluno não encontrado · `500` prompt ausente ou IA em formato inválido
+
+---
+
+#### `POST /supplies/consolidate`
+
+Etapa 3 — recebe o material inteiro já montado pelo cliente, **valida em
+profundidade com Zod** (`SupplyModulesSchema`) e persiste uma única vez no
+Firestore (coleção `student_supplies`, doc ID: `{studentId}_{level}`).
+
+| Propriedade | Valor |
+|---|---|
+| **Autenticação** | 🔒 Requerida |
+| **Roles** | `teacher` |
+
+**Request Body (`ConsolidateDto`):**
+
+```json
+{
+  "studentId": "550e8400-...",
+  "level": "A1",
+  "modules": [ { "title": "...", "text": "...", "topics": [ /* Topic[] */ ] } ]
+}
+```
+
+**Response (201) — `Supply`:** `{ "studentId", "level", "modules" }`
+
+**Erros:** `500` material inválido/incompleto na validação
+
+**Estrutura do material persistido (Modules → Topics):**
 
 ```json
 [
