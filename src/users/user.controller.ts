@@ -6,6 +6,7 @@ import {
   Param,
   Post,
   Put,
+  Query,
 } from '@nestjs/common';
 import { CreateUserDto } from './dto/CreateUser.dto';
 import { User } from './user.entity';
@@ -14,6 +15,7 @@ import { Roles } from '../decorators/roles.decorator';
 import { ResponseUserDto } from './dto/ResponseUser.dto';
 import { UserService } from './user.service';
 import { ROLES } from '../types/role';
+import type { Role } from '../types/role';
 
 @Controller('/users')
 export class UserController {
@@ -26,8 +28,8 @@ export class UserController {
   }
   @Get()
   @Roles(ROLES.TEACHER)
-  async getAll(): Promise<User[]> {
-    return this.service.getAllUsers();
+  async getAll(@Query('role') role?: Role): Promise<User[]> {
+    return this.service.getAllUsers(role);
   }
   @Get(':id')
   async findById(@Param('id') id: string): Promise<User | null> {

@@ -5,7 +5,7 @@ import { UpdateUserDto } from './dto/UpdateUser.dto';
 import { ResponseUserDto } from './dto/ResponseUser.dto';
 import { UserRepository } from './user.repository';
 import { AuthService } from '../auth/auth.service';
-import { ROLES } from '../types/role';
+import { ROLES, Role } from '../types/role';
 import { v4 as uuidv4 } from 'uuid';
 
 @Injectable()
@@ -38,8 +38,8 @@ export class UserService {
     }
   }
 
-  async getAllUsers(): Promise<User[]> {
-    return this.userRepository.findAll();
+  async getAllUsers(role?: Role): Promise<User[]> {
+    return this.userRepository.findAll(role);
   }
 
   async updateUser(id: string, dto: UpdateUserDto): Promise<User> {
