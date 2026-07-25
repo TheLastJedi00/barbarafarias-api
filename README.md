@@ -239,12 +239,20 @@ Cria um novo usuário (aluno ou professor).
 
 #### `GET /users`
 
-Retorna todos os usuários cadastrados.
+Retorna os usuários cadastrados. Aceita o query param opcional `role` para
+filtrar por papel **no servidor** — usado pela tela de gestão de alunos para
+garantir que professores nunca apareçam na listagem.
 
 | Propriedade | Valor |
 |---|---|
 | **Autenticação** | 🔒 Requerida |
 | **Roles** | `teacher` |
+
+**Query params:**
+
+| Parâmetro | Valores | Descrição |
+|---|---|---|
+| `role` | `student` \| `teacher` | Filtra por papel (via `isTeacher`). Ex.: `GET /users?role=student` retorna **apenas alunos**. Omitido, retorna todos. |
 
 **Response (200) — `User[]`:**
 
