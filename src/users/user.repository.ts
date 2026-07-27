@@ -3,6 +3,7 @@ import { User } from './user.entity';
 import { Firestore } from 'firebase-admin/firestore';
 import { FIRESTORE } from '../firestore/firestore.module';
 import { instanceToPlain, plainToInstance } from 'class-transformer';
+import { ROLES, Role } from '../types/role';
 
 @Injectable()
 export class UserRepository {
@@ -14,8 +15,19 @@ export class UserRepository {
     return uid;
   }
 
-  async findAll(): Promise<User[]> {
-    const querySnapshot = await this.db.collection('users').get();
+  /**
+   * Lista usuários. Quando `role` é informado, filtra por papel no próprio
+   * Firestore (garantia de que a listagem de alunos nunca vaza teachers).
+   */
+  async findAll(role?: Role): Promise<User[]> {
+    const collection = this.db.collection('users');
+    const query =
+      role === ROLES.STUDENT
+        ? collection.where('isTeacher', '==', false)
+        : role === ROLES.TEACHER
+          ? collection.where('isTeacher', '==', true)
+          : collection;
+    const querySnapshot = await query.get();
     const users = querySnapshot.docs.map((doc) => {
       const data = doc.data();
       return plainToInstance(User, data);

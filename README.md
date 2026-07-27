@@ -104,10 +104,16 @@ src/
 │   ├── video.entity.ts        # Entidade de vídeo (Video, VideoTopic, VideoInfo)
 │   └── dtos/
 │       └── video.dto.ts       # DTOs de vídeo
-├── prompts/               # Módulo de prompts para IA
+├── prompts/               # Módulo de prompts para IA (legado, lido pela geração)
 │   ├── prompt.service.ts      # Busca de prompts por nível
 │   ├── prompt.repository.ts   # Persistência no Firestore
 │   └── prompt.model.ts        # Model de prompt
+├── curriculum/            # Painel de prompts + estrutura curricular (Spec 008)
+│   ├── curriculum.controller.ts # /curriculum (principal, nível, blueprint)
+│   ├── curriculum.service.ts    # Normalização de ordem + projeção de blueprint
+│   ├── curriculum.repository.ts # Persistência (coleção `curriculum`)
+│   ├── curriculum.model.ts      # Interfaces (Module, Topic, LevelCurriculum)
+│   └── dto/                     # UpsertPrincipalDto, UpsertLevelDto (nested)
 ├── guards/                # Guards globais
 │   ├── auth.guard.ts          # Guard de autenticação (Firebase Token)
 │   └── roles.guard.ts         # Guard de autorização por role
@@ -242,12 +248,20 @@ Cria um novo usuário (aluno ou professor).
 
 #### `GET /users`
 
-Retorna todos os usuários cadastrados.
+Retorna os usuários cadastrados. Aceita o query param opcional `role` para
+filtrar por papel **no servidor** — usado pela tela de gestão de alunos para
+garantir que professores nunca apareçam na listagem.
 
 | Propriedade | Valor |
 |---|---|
 | **Autenticação** | 🔒 Requerida |
 | **Roles** | `teacher` |
+
+**Query params:**
+
+| Parâmetro | Valores | Descrição |
+|---|---|---|
+| `role` | `student` \| `teacher` | Filtra por papel (via `isTeacher`). Ex.: `GET /users?role=student` retorna **apenas alunos**. Omitido, retorna todos. |
 
 **Response (200) — `User[]`:**
 
@@ -719,6 +733,50 @@ um aluno avulso **ou** uma turma. Unicidade garantida pelo docId `${dayOfWeek}_$
 
 ---
 
+### 🧩 Curriculum — `/curriculum`
+
+Painel de **prompts e estrutura curricular** (Spec 008). É a "planta baixa" editável
+que alimenta a geração de material: prompt principal (global), prompt por nível e a
+árvore ordenada de **módulos → tópicos**. Todas as rotas exigem role `teacher`.
+
+| Método | Rota | Descrição |
+|---|---|---|
+| `GET` | `/curriculum/principal` | Prompt Principal (global) — `{ prompt }` |
+| `PUT` | `/curriculum/principal` | Salva o Prompt Principal — body `{ prompt }` |
+| `GET` | `/curriculum/levels/:level` | Estrutura completa do nível — `{ level, prompt, modules[] }` |
+| `PUT` | `/curriculum/levels/:level` | Salva o nível inteiro (prompt + árvore) — body `{ prompt, modules[] }` |
+| `GET` | `/curriculum/levels/:level/blueprint` | Planta baixa ordenada e enxuta para a geração paralela |
+
+- `:level` ∈ `A1|A2|B1|B2` (400 se inválido).
+- **Ordem = posição no array.** O cliente envia `modules`/`topics` na ordem desejada; o
+  backend deriva e persiste `order` pelo índice (fonte única de verdade). IDs ausentes são
+  gerados no servidor.
+- **Body do `PUT /levels/:level`:**
+  ```json
+  {
+    "prompt": "Contexto do nível A1...",
+    "modules": [
+      {
+        "id": "opcional",
+        "title": "Rotina Diária",
+        "context": "Diretriz temática do módulo",
+        "topics": [
+          { "id": "opcional", "prompt": "Gere um diálogo pedindo o menu" }
+        ]
+      }
+    ]
+  }
+  ```
+- **Blueprint (`GET /levels/:level/blueprint`)** retorna `{ level, modules: [{ id, title, context, topics: [{ id, prompt }] }] }`, já ordenado.
+- **Composição do prompt final** (na geração paralela, uma requisição por tópico):
+  `[Prompt Principal] + [Prompt do Nível] + [Contexto do Módulo] + [Prompt do Tópico] + [Dados do Aluno]`.
+  Variáveis de interpolação previstas: `{{nome_aluno}}`, `{{objetivos}}`, `{{prognostico}}`.
+  > A **integração do fluxo de geração** com este blueprint é da geração granular (Spec 006) e
+  > será conectada quando aquela spec for mesclada; a coleção `curriculum` é intencionalmente
+  > **desacoplada** da coleção legada `prompts` (consumida hoje por `SupplyService`).
+
+---
+
 ## 📊 Estrutura de Dados e Coleções do Firestore
 
 Abaixo está a estrutura de dados armazenada em cada coleção do banco de dados:
@@ -849,6 +907,33 @@ Slots da grade semanal recorrente (1 ocupante por slot).
   "turmaName": "string (se occupantType='turma')"
 }
 ```
+
+### 8. `curriculum`
+Planta baixa editável de prompts/estrutura curricular (Spec 008).
+- **Doc ID:** `principal` (prompt global) **ou** o nível (`A1`..`B2`).
+```json
+// doc "principal"
+{ "prompt": "string (persona/formato/diretrizes globais)" }
+
+// doc "A1" (por nível)
+{
+  "level": "string ('A1'..'B2')",
+  "prompt": "string (prompt do nível)",
+  "modules": [
+    {
+      "id": "string",
+      "title": "string",
+      "context": "string (diretriz temática do módulo)",
+      "order": "number (índice)",
+      "topics": [
+        { "id": "string", "prompt": "string (instrução granular)", "order": "number" }
+      ]
+    }
+  ]
+}
+```
+> Coleção **desacoplada** da legada `prompts`: a `curriculum` é a fonte do painel e do
+> blueprint; a `prompts` continua sendo lida pela geração atual até a integração da Spec 006.
 
 ---
 
