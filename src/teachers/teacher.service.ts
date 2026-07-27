@@ -3,7 +3,7 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { v4 as uuidv4 } from 'uuid';
+import { randomUUID } from 'node:crypto';
 import { TeacherRepository } from './teacher.repository';
 import { UserRepository } from '../users/user.repository';
 import { AuthService } from '../auth/auth.service';
@@ -28,7 +28,7 @@ export class TeacherService {
   ) {}
 
   async create(dto: CreateTeacherDto): Promise<User> {
-    const uid = uuidv4();
+    const uid = randomUUID();
 
     await this.authService.registerCredentials({
       id: uid,
