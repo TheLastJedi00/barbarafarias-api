@@ -8,5 +8,6 @@ import { TurmaModule } from '../turmas/turma.module';
   imports: [TurmaModule], // usa o TurmaRepository para resolver o horário do aluno
   providers: [AgendaService, AgendaRepository],
   controllers: [AgendaController],
+  exports: [AgendaService, AgendaRepository],
 })
 export class AgendaModule {}
