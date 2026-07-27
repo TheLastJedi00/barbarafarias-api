@@ -59,13 +59,17 @@ npm run start:prod
 | `FIREBASE_AUTH_EMULATOR_HOST` | Host do emulador de auth (desenvolvimento) |
 | `FIRESTORE_EMULATOR_HOST` | Host do emulador do Firestore (desenvolvimento) |
 | `RESEND_API_KEY` | Chave da [Resend](https://resend.com) para e-mail transacional |
-| `RESEND_FROM` | Remetente, ex.: `Bárbara Farias <no-reply@barbarafarias.com.br>` |
+| `RESEND_FROM` | *(opcional)* Remetente próprio, ex.: `Bárbara Farias <no-reply@barbarafarias.com.br>` |
 
 > **`.env.example`** na raiz lista todas as variáveis obrigatórias — copie para `.env` e preencha.
 >
-> ⚠️ **O remetente exige domínio verificado na Resend** (SPF/DKIM no DNS). Sem isso a Resend
-> não entrega para terceiros e as notificações simplesmente não saem. Sem `RESEND_API_KEY` o
-> envio é desativado silenciosamente: a operação continua funcionando, só não manda e-mail.
+> Para as notificações, **basta a `RESEND_API_KEY`**: sem `RESEND_FROM` o SDK usa o remetente
+> compartilhado da Resend (`onboarding@resend.dev`), que já funciona. Ele entrega para o
+> e-mail dono da conta; para enviar a qualquer destinatário, verifique o domínio na Resend
+> (SPF/DKIM no DNS) e defina `RESEND_FROM` — é só a variável, sem mexer em código.
+>
+> Sem `RESEND_API_KEY` o envio é desativado silenciosamente: a operação continua
+> funcionando, só não manda e-mail.
 
 > Para ambiente local, o arquivo `serviceAccountKey.json` na raiz do projeto será utilizado automaticamente.
 

@@ -22,9 +22,12 @@ export class ResendService {
 
   constructor(private readonly configService: ConfigService) {
     const apiKey = this.configService.get<string>('RESEND_API_KEY');
+    // Só a API key é obrigatória: sem RESEND_FROM usamos o remetente
+    // compartilhado da Resend, que funciona de imediato. Quando o domínio
+    // próprio estiver verificado (SPF/DKIM), basta definir a variável.
     this.from =
       this.configService.get<string>('RESEND_FROM') ??
-      'Bárbara Farias <no-reply@barbarafarias.com.br>';
+      'Bárbara Farias <onboarding@resend.dev>';
 
     if (apiKey) {
       this.client = new Resend(apiKey);
