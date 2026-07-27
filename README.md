@@ -58,6 +58,14 @@ npm run start:prod
 | `FIREBASE_PROJECT_ID` | ID do projeto Firebase |
 | `FIREBASE_AUTH_EMULATOR_HOST` | Host do emulador de auth (desenvolvimento) |
 | `FIRESTORE_EMULATOR_HOST` | Host do emulador do Firestore (desenvolvimento) |
+| `RESEND_API_KEY` | Chave da [Resend](https://resend.com) para e-mail transacional |
+| `RESEND_FROM` | Remetente, ex.: `Bárbara Farias <no-reply@barbarafarias.com.br>` |
+
+> **`.env.example`** na raiz lista todas as variáveis obrigatórias — copie para `.env` e preencha.
+>
+> ⚠️ **O remetente exige domínio verificado na Resend** (SPF/DKIM no DNS). Sem isso a Resend
+> não entrega para terceiros e as notificações simplesmente não saem. Sem `RESEND_API_KEY` o
+> envio é desativado silenciosamente: a operação continua funcionando, só não manda e-mail.
 
 > Para ambiente local, o arquivo `serviceAccountKey.json` na raiz do projeto será utilizado automaticamente.
 
@@ -114,12 +122,47 @@ src/
 │   ├── curriculum.repository.ts # Persistência (coleção `curriculum`)
 │   ├── curriculum.model.ts      # Interfaces (Module, Topic, LevelCurriculum)
 │   └── dto/                     # UpsertPrincipalDto, UpsertLevelDto (nested)
+├── teachers/              # Corpo docente (Spec 010)
+│   ├── teacher.controller.ts  # /teachers (CRUD, roster, /me, /mine)
+│   ├── teacher.service.ts     # Cadastro com rollback, desativação, designação
+│   ├── teacher.repository.ts  # Recorte de professoras na coleção `users`
+│   └── dto/                   # Create/Update, ResponseTeacher (por papel), AssignStudents
+├── lessons/               # Aulas datadas (Spec 010)
+│   ├── lesson.controller.ts   # /lessons (período, dia, acesso, presença, avaliação)
+│   ├── lesson.service.ts      # Materialização, escopo, presença, cancelamento
+│   ├── lesson-access.service.ts # Janela 10/15/20 min e prazos (4h, 72h)
+│   ├── makeup.service.ts      # Reposição no slot combinado, com empurrão por conflito
+│   ├── lesson.repository.ts   # Coleção `lessons` (docId determinístico)
+│   └── lesson.entity.ts       # Lesson, status, origem, presença, avaliação
+├── reschedules/           # Reagendamento com aprovação (Spec 010)
+│   ├── reschedule.controller.ts # /lessons/:id/reschedule-* e /reschedule-requests
+│   ├── reschedule.service.ts    # Regras de 4h, sugestão pós-ausência, decisão
+│   └── reschedule.entity.ts     # kind, status, motivo classificado
+├── billing/               # Financeiro (Spec 010)
+│   ├── billing.controller.ts    # /billing (settings, summary, detalhe, pagar)
+│   ├── billing.service.ts       # Valor-hora vigente, `payable`, congelamento
+│   ├── billing-summary.service.ts # Fechamento mensal por professora
+│   └── payout.provider.ts       # Porta de pagamento (ManualPix hoje, AbacatePay depois)
+├── feedbacks/             # Acompanhamento pedagógico (Spec 010)
+│   ├── feedback.controller.ts # /students/:id/feedbacks
+│   └── feedback.service.ts    # Escopo: professora responsável ou gerente
+├── notifications/         # E-mail transacional via Resend (Spec 010)
+│   ├── notification.service.ts # Eventos → destinatários (nunca lança)
+│   ├── resend.service.ts       # Cliente isolado de falhas
+│   └── templates.ts            # Templates por evento
+├── admin/                 # Rotinas de manutenção (Spec 010)
+│   └── admin.service.ts       # Migração de papéis + docIds da agenda
+├── common/
+│   ├── time.ts            # Fuso America/Sao_Paulo, datas e slots recorrentes
+│   ├── cors.config.ts
+│   └── filters/
 ├── guards/                # Guards globais
 │   ├── auth.guard.ts          # Guard de autenticação (Firebase Token)
-│   └── roles.guard.ts         # Guard de autorização por role
+│   └── roles.guard.ts         # Guard de autorização por role (manager herda teacher)
 ├── decorators/            # Decorators customizados
 │   ├── public.decorator.ts    # @Public() - marca rotas públicas
-│   └── roles.decorator.ts     # @Roles() - define roles necessárias
+│   ├── roles.decorator.ts     # @Roles() - define roles necessárias
+│   └── current-user.decorator.ts # @CurrentUser() - payload do JWT
 ├── types/                 # Tipos compartilhados
 │   ├── student.level.ts       # Type Level (A1, A2, B1, B2)
 │   ├── student.info.ts        # Interface StudentInfo
@@ -144,7 +187,21 @@ A API utiliza um sistema duplo de proteção:
 | Decorator | Descrição |
 |---|---|
 | `@Public()` | Marca a rota como pública (sem autenticação) |
-| `@Roles('teacher')` | Restringe o acesso à role `teacher` |
+| `@Roles(ROLES.MANAGER)` | Restringe à gerente |
+| `@Roles(ROLES.MANAGER, ROLES.TEACHER)` | Operação de aula (a professora fica restrita às próprias) |
+| `@CurrentUser()` | Injeta o payload do JWT (`{ sub, email, role }`) no handler |
+
+### Papéis
+
+`manager` · `teacher` · `student` (`src/types/role.ts`).
+
+- **A gerente herda as permissões da professora** no `RolesGuard`: rotas anotadas com
+  `@Roles(TEACHER)` também liberam `manager`. Sem isso, migrar a gerente para `manager`
+  a barraria em todo o painel legado.
+- **O papel do JWT vem da coleção `credentials`**, não de `users` — `AuthRepository` grava
+  `{ id, email, password, role }` e o login lê dali. `users.role` é a cópia usada pela
+  aplicação; a rotina de migração mantém as duas em sincronia.
+- `resolveRole(user)` lê `role` e cai para o legado `isTeacher` enquanto a base migra.
 
 ### Header de Autenticação
 
@@ -721,15 +778,147 @@ Grupos nomeados de alunos, alocáveis num slot da agenda. Todas as rotas exigem 
 
 ### 🗓️ Agenda — `/agenda`
 
-Grade **semanal recorrente**. Cada slot `(dayOfWeek, hour)` tem no máximo **um** ocupante:
-um aluno avulso **ou** uma turma. Unicidade garantida pelo docId `${dayOfWeek}_${hour}`.
+Grade **semanal recorrente de cada professora** — é o **contrato** (quando a aula acontece
+toda semana); as aulas datadas (`/lessons`) são os **fatos**. Cada slot
+`(teacherId, dayOfWeek, hour)` tem no máximo **um** ocupante: um aluno avulso **ou** uma
+turma. Unicidade pelo docId `${teacherId}_${dayOfWeek}_${hour}` — duas professoras podem
+usar o mesmo dia/hora.
 
 | Método | Rota | Auth | Descrição |
 |---|---|---|---|
-| `GET` | `/agenda` | `teacher` | Grade completa (slots ocupados; slots de turmas excluídas são omitidos) |
-| `GET` | `/agenda/student/:studentId` | autenticado | Horário resolvido do aluno (individual + turmas) → `StudentSchedule[]` |
-| `POST` | `/agenda` | `teacher` | Atribui/atualiza slot (upsert). Body `{ dayOfWeek:0-6, hour:8-20, occupantType:'student'\|'turma', studentId?, studentName?, turmaId?, turmaName? }` |
-| `DELETE` | `/agenda/:dayOfWeek/:hour` | `teacher` | Libera o slot |
+| `GET` | `/agenda?teacherId=` | `manager`, `teacher` | Grade. A gerente vê todas (ou filtra); a professora fica presa à própria |
+| `GET` | `/agenda/student/:studentId` | autenticado (dono) | Horário resolvido do aluno (individual + turmas) → `StudentSchedule[]` |
+| `POST` | `/agenda` | `manager`, `teacher` | Atribui/atualiza slot (upsert). Body `{ teacherId, teacherName?, dayOfWeek:0-6, hour:8-20, occupantType:'student'\|'turma', studentId?, studentName?, turmaId?, turmaName? }` |
+| `DELETE` | `/agenda/:teacherId/:dayOfWeek/:hour` | `manager`, `teacher` | Libera o slot |
+
+---
+
+### 👩‍🏫 Teachers — `/teachers`
+
+Corpo docente. Dados sensíveis (CPF, CNPJ, PIX, valor-hora) só trafegam para `manager` —
+o DTO público entrega apenas nome e, se a professora permitir, telefone.
+
+| Método | Rota | Auth | Descrição |
+|---|---|---|---|
+| `GET` | `/teachers` | `manager` | Lista com resumo (nº de alunos) |
+| `POST` | `/teachers` | `manager` | Cadastra + cria credenciais. Body `{ fullName, email, password, phone, pixKey, cpf, cnpj?, hourlyRate?, phoneVisibleToStudent? }` |
+| `GET` | `/teachers/:id` | `manager` | Detalhe completo |
+| `PUT` | `/teachers/:id` | `manager` | Atualiza (inclui `hourlyRate`) |
+| `PATCH` | `/teachers/:id/active` | `manager` | Desativa/reativa. Ao desativar, marca os alunos como `pendingTeacher` |
+| `GET` | `/teachers/:id/students` | `manager` | Alunos da professora |
+| `PUT` | `/teachers/:id/students` | `manager` | Substitui o roster. Body `{ studentIds[] }` |
+| `PATCH` | `/teachers/students/:studentId` | `manager` | Config do aluno: `{ teacherId?, lessonsPerWeek?, makeupSlot?, meetUrl? }` |
+| `GET` | `/teachers/me` | `manager`, `teacher` | Perfil próprio |
+| `PATCH` | `/teachers/me/phone-visibility` | `manager`, `teacher` | Body `{ visible }` |
+| `GET` | `/teachers/mine` | `student` | Professora responsável (DTO público) |
+
+---
+
+### 🕐 Lessons — `/lessons`
+
+**Aula datada** (`lessons`), 60 min, docId determinístico
+`${teacherId}_${occupantId}_${date}_${hour}` — materializar de novo nunca duplica.
+As aulas nascem sob demanda da grade recorrente (`ensureLessons`), **nunca no passado**.
+
+| Método | Rota | Auth | Descrição |
+|---|---|---|---|
+| `GET` | `/lessons?from=&to=&teacherId=` | `manager`, `teacher` | Aulas do período (semana/mês) |
+| `GET` | `/lessons/day?date=` | `manager` | Aulas do dia (painel da gerente) |
+| `GET` | `/lessons/student/:id?from=&to=` | autenticado (dono) | Aulas do aluno (individuais + turmas) |
+| `GET` | `/lessons/:id/access` | autenticado (dono) | `{ state:'closed'\|'open'\|'missed', startAt, status, meetUrl? }` — registra a entrada |
+| `POST` | `/lessons/:id/attendance` | `manager`, `teacher` (dona) | Presença manual, até 72 h. Body `{ present }` |
+| `POST` | `/lessons/:id/student-cancel` | `student` (dono) | Aviso de ausência, mínimo 4 h antes |
+| `POST` | `/lessons/:id/rating` | `student` (dono) | Avaliação. Body `{ stars:1-5, comment? }` |
+
+**Janela de entrada** (relógio do servidor, fuso `America/Sao_Paulo`), com `T` = início:
+
+| Momento | Aluno | Professora |
+|---|---|---|
+| antes de `T-10min` | fechada | fechada |
+| `T-10min` … `T+15min` | **aberta** (link do Meet) | **aberta** |
+| `T+15min` … `T+20min` | **aula perdida** → reposição automática | aberta (sem limite superior) |
+| depois de `T+20min` | fechada → `student_no_show` | aberta até a aula fechar |
+
+**Presença:** o clique em "entrar" é o gatilho primário; a marcação manual da professora
+(≤72 h) prevalece; sem marcação, o sistema fecha pelos gatilhos primários.
+
+**Reposição:** falta ou aviso do aluno cria a aula no `makeupSlot` combinado; slot ocupado
+empurra para a semana seguinte e avisa. Aula de **turma não gera reposição**.
+
+**Status:** `scheduled` · `completed` · `student_no_show` · `student_cancelled` ·
+`teacher_absence` · `cancelled`.
+
+---
+
+### 🔁 Reschedule — `/lessons/:id/reschedule-*` e `/reschedule-requests`
+
+Reagendamento pedido pela professora e decidido pela gerente. Dois tipos, **uma fila só**:
+`planned` (≥4 h de antecedência) e `no_show` (confirmação após ausência não avisada).
+Motivo classificado: `saude` · `imprevisto` · `pessoal` · `outro` (exige descrição).
+
+| Método | Rota | Auth | Descrição |
+|---|---|---|---|
+| `GET` | `/lessons/:id/reschedule-suggestion` | `manager`, `teacher` | Data sugerida após ausência |
+| `POST` | `/lessons/:id/reschedule-requests` | `manager`, `teacher` (dona) | Cria a solicitação |
+| `GET` | `/reschedule-requests` | `manager` | Fila pendente |
+| `GET` | `/reschedule-requests/mine` | `manager`, `teacher` | Acompanhamento próprio |
+| `POST` | `/reschedule-requests/:id/approve` | `manager` | Original vira `teacher_absence` (não paga) + cria a remarcada |
+| `POST` | `/reschedule-requests/:id/reject` | `manager` | Mantém a aula original |
+
+---
+
+### 💰 Billing — `/billing`
+
+**A professora é paga por hora contratada sob a responsabilidade dela.** Só não recebe
+quando **ela** não entrega a aula:
+
+| Situação | Paga? |
+|---|---|
+| `completed` | ✅ |
+| `student_no_show` (faltou sem avisar) | ✅ |
+| `student_cancelled` (avisou ≥4 h) | ✅ |
+| reposição, quando acontecer | ✅ |
+| `teacher_absence` | ❌ |
+| `cancelled` | ❌ |
+
+`rateApplied` é congelado no fechamento da aula: mudar o valor-hora não mexe no passado.
+Valor vigente = `teacher.hourlyRate ?? settings.defaultHourlyRate` (padrão **R$ 60/h**).
+A gerente aparece marcada (`isManager`) e **não entra na folha como despesa**.
+
+| Método | Rota | Auth | Descrição |
+|---|---|---|---|
+| `GET`/`PUT` | `/billing/settings` | `manager` | Valor-hora global |
+| `GET` | `/billing/summary?month=YYYY-MM` | `manager` | Fechamento por professora |
+| `GET` | `/billing/summary/:teacherId?month=` | `manager` | Detalhe aula a aula |
+| `POST` | `/billing/summary/:teacherId/pay?month=` | `manager` | Instrução de pagamento (`PayoutProvider`) |
+
+> O pagamento é **PIX manual** (`ManualPixProvider`). A porta `PayoutProvider` existe para
+> trocar por AbacatePay sem tocar em controller nem em regra de negócio.
+
+---
+
+### 📈 Feedbacks — `/students/:studentId/feedbacks`
+
+Acompanhamento pedagógico da professora sobre o aluno, em coleção própria
+(`student_feedbacks`). **Separado do `prognosis`** de propósito: aquele campo alimenta o
+prompt de geração de material; este é registro humano. Visível para a professora
+responsável e para a gerente — **não** para o aluno.
+
+| Método | Rota | Auth | Descrição |
+|---|---|---|---|
+| `GET` | `/students/:id/feedbacks` | `manager`, `teacher` (responsável) | Histórico cronológico |
+| `POST` | `/students/:id/feedbacks` | `manager`, `teacher` (responsável) | Body `{ text, perceivedLevel?, lessonId?, date? }` |
+
+---
+
+### 🛠️ Admin — `/admin`
+
+| Método | Rota | Auth | Descrição |
+|---|---|---|---|
+| `POST` | `/admin/migrate-roles` | `manager` | Grava `role` em `users` + sincroniza `credentials`, e migra os docIds antigos da agenda para a gerente. Idempotente |
+
+Precedência do papel: `users.role` → `credentials.role` → `isTeacher` (legado). A ordem
+respeita o ajuste manual da gerente em `credentials` e nunca rebaixa `manager` → `teacher`.
 
 ---
 
