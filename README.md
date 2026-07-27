@@ -833,6 +833,11 @@ o DTO público entrega apenas nome e, se a professora permitir, telefone.
 `${teacherId}_${occupantId}_${date}_${hour}` — materializar de novo nunca duplica.
 As aulas nascem sob demanda da grade recorrente (`ensureLessons`), **nunca no passado**.
 
+> ⚠️ **Exige índices compostos no Firestore.** As duas consultas de período filtram por dono
+> (igualdade) **e** por janela de datas (intervalo) — combinação que o Firestore não resolve
+> com os índices automáticos de campo único. Sem eles, a rota devolve **500
+> `FAILED_PRECONDITION`**. Ver [Índices do Firestore](#-índices-do-firestore).
+
 | Método | Rota | Auth | Descrição |
 |---|---|---|---|
 | `GET` | `/lessons?from=&to=&teacherId=` | `manager`, `teacher` | Aulas do período (semana/mês) |
@@ -1187,6 +1192,34 @@ npm run test:e2e
 ## 🐳 Docker
 
 O projeto inclui um `Dockerfile` para containerização e um `.dockerignore` configurado.
+
+---
+
+## 🔎 Índices do Firestore
+
+O Firestore cria índices de campo único sozinho e resolve consultas **só de igualdade**
+combinando-os. Composto é obrigatório quando a mesma consulta tem **igualdade + intervalo** —
+o caso das aulas, que filtram por dono e por janela de datas. Sem o índice, a consulta falha
+com `9 FAILED_PRECONDITION: The query requires an index`.
+
+| Coleção | Campos | Serve |
+|---|---|---|
+| `lessons` | `studentId` ASC, `date` ASC | `GET /lessons/student/:id?from=&to=` — painel do aluno |
+| `lessons` | `teacherId` ASC, `date` ASC | `GET /lessons?from=&to=&teacherId=` — agenda semanal/mensal e financeiro |
+
+Os dois estão versionados em **`firestore.indexes.json`**. Para publicar:
+
+```bash
+# uma vez por projeto (dev e produção têm índices separados)
+firebase deploy --only firestore:indexes --project <id-do-projeto>
+```
+
+Alternativa: a mensagem de erro do Firestore traz um **link direto** que cria o índice faltante
+pelo console — resolve o caso pontual, mas prefira o arquivo, que documenta a necessidade e
+mantém os ambientes iguais.
+
+> A criação leva de segundos a alguns minutos; enquanto o índice está *Building*, a consulta
+> continua falhando.
 
 ---
 
