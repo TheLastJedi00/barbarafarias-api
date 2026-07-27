@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import { v4 as uuidv4 } from 'uuid';
+import { randomUUID } from 'node:crypto';
 import { Level } from '../types/student.level';
 import { CurriculumRepository } from './curriculum.repository';
 import {
@@ -49,12 +49,12 @@ export class CurriculumService {
     dto: UpsertLevelDto,
   ): Promise<LevelCurriculum> {
     const modules: CurriculumModule[] = dto.modules.map((m, mi) => ({
-      id: m.id ?? uuidv4(),
+      id: m.id ?? randomUUID(),
       title: m.title,
       context: m.context,
       order: mi,
       topics: m.topics.map((t, ti) => ({
-        id: t.id ?? uuidv4(),
+        id: t.id ?? randomUUID(),
         prompt: t.prompt,
         order: ti,
       })),
