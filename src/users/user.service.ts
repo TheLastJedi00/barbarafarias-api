@@ -27,7 +27,8 @@ export class UserService {
     });
 
     try {
-      const user = new User(dto);
+      // nasce já migrado: grava `role` junto do `isTeacher` legado
+      const user = new User({ ...dto, role });
       user.id = uid;
       const id = await this.userRepository.save(user, uid);
       return new ResponseUserDto(id, user.fullName);

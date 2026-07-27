@@ -34,3 +34,34 @@ export const ModuleSchema = z.object({
 export type Module = z.infer<typeof ModuleSchema>;
 
 export const SupplyModulesSchema = z.array(ModuleSchema);
+
+/**
+ * Esqueleto ("planta baixa") do material — usado na geração granular.
+ * A IA devolve apenas os títulos: módulos e os títulos dos tópicos, sem o
+ * conteúdo pesado (words/music/roleplay). O `id` de cada tópico é atribuído
+ * pelo backend depois da validação (a IA não o gera) e serve para o cliente
+ * chavear a UI e o retry granular.
+ */
+export const SkeletonTopicSchema = z.object({
+  topic: z.string(),
+});
+export type SkeletonTopic = z.infer<typeof SkeletonTopicSchema>;
+
+export const SkeletonModuleSchema = z.object({
+  title: z.string(),
+  text: z.string(),
+  topics: z.array(SkeletonTopicSchema),
+});
+export type SkeletonModule = z.infer<typeof SkeletonModuleSchema>;
+
+export const SkeletonSchema = z.array(SkeletonModuleSchema);
+
+/** Esqueleto já com o `id` estável de cada tópico (`m{i}_t{j}`). */
+export interface SkeletonTopicWithId extends SkeletonTopic {
+  id: string;
+}
+export interface SkeletonModuleWithId {
+  title: string;
+  text: string;
+  topics: SkeletonTopicWithId[];
+}

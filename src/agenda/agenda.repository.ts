@@ -9,13 +9,30 @@ export class AgendaRepository {
 
   constructor(@Inject(FIRESTORE) private readonly db: Firestore) {}
 
-  private docId(dayOfWeek: number, hour: number): string {
-    return `${dayOfWeek}_${hour}`;
+  /** docId da spec 010: um ocupante por (professora, dia, hora). */
+  docId(teacherId: string, dayOfWeek: number, hour: number): string {
+    return `${teacherId}_${dayOfWeek}_${hour}`;
   }
 
-  async findAll(): Promise<AgendaSlot[]> {
-    const snapshot = await this.db.collection(this.collection).get();
+  /** Grade completa (gerente) ou apenas a de uma professora. */
+  async findAll(teacherId?: string): Promise<AgendaSlot[]> {
+    const collection = this.db.collection(this.collection);
+    const snapshot = await (teacherId
+      ? collection.where('teacherId', '==', teacherId).get()
+      : collection.get());
     return snapshot.docs.map((doc) => this.toEntity(doc.data()));
+  }
+
+  async findBySlot(
+    teacherId: string,
+    dayOfWeek: number,
+    hour: number,
+  ): Promise<AgendaSlot | null> {
+    const doc = await this.db
+      .collection(this.collection)
+      .doc(this.docId(teacherId, dayOfWeek, hour))
+      .get();
+    return doc.exists ? this.toEntity(doc.data()!) : null;
   }
 
   async findByStudentId(studentId: string): Promise<AgendaSlot[]> {
@@ -46,19 +63,25 @@ export class AgendaRepository {
   async upsert(slot: AgendaSlot): Promise<void> {
     await this.db
       .collection(this.collection)
-      .doc(this.docId(slot.dayOfWeek, slot.hour))
+      .doc(this.docId(slot.teacherId, slot.dayOfWeek, slot.hour))
       .set(this.toPlain(slot));
   }
 
-  async remove(dayOfWeek: number, hour: number): Promise<void> {
+  async remove(
+    teacherId: string,
+    dayOfWeek: number,
+    hour: number,
+  ): Promise<void> {
     await this.db
       .collection(this.collection)
-      .doc(this.docId(dayOfWeek, hour))
+      .doc(this.docId(teacherId, dayOfWeek, hour))
       .delete();
   }
 
   private toPlain(slot: AgendaSlot): Record<string, any> {
     const base: Record<string, any> = {
+      teacherId: slot.teacherId,
+      teacherName: slot.teacherName ?? null,
       dayOfWeek: slot.dayOfWeek,
       hour: slot.hour,
       occupantType: slot.occupantType,
@@ -74,11 +97,18 @@ export class AgendaRepository {
   }
 
   private toEntity(data: Record<string, any>): AgendaSlot {
-    return new AgendaSlot(data.dayOfWeek, data.hour, data.occupantType, {
-      studentId: data.studentId ?? undefined,
-      studentName: data.studentName ?? undefined,
-      turmaId: data.turmaId ?? undefined,
-      turmaName: data.turmaName ?? undefined,
-    });
+    return new AgendaSlot(
+      data.teacherId ?? '',
+      data.dayOfWeek,
+      data.hour,
+      data.occupantType,
+      {
+        teacherName: data.teacherName ?? undefined,
+        studentId: data.studentId ?? undefined,
+        studentName: data.studentName ?? undefined,
+        turmaId: data.turmaId ?? undefined,
+        turmaName: data.turmaName ?? undefined,
+      },
+    );
   }
 }

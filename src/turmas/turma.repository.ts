@@ -43,6 +43,9 @@ export class TurmaRepository {
       name: data.name,
       studentIds: data.studentIds,
       studentNames: data.studentNames,
+      teacherId: data.teacherId ?? null,
+      teacherName: data.teacherName ?? null,
+      meetUrl: data.meetUrl ?? null,
     };
   }
 
@@ -52,6 +55,11 @@ export class TurmaRepository {
       data.studentIds ?? [],
       data.studentNames ?? [],
       id,
+      {
+        teacherId: data.teacherId ?? undefined,
+        teacherName: data.teacherName ?? undefined,
+        meetUrl: data.meetUrl ?? undefined,
+      },
     );
   }
 }
