@@ -13,6 +13,10 @@ import { UpdateTeacherDto } from './dto/UpdateTeacher.dto';
 import { SetActiveDto } from './dto/SetActive.dto';
 import { PhoneVisibilityDto } from './dto/PhoneVisibility.dto';
 import { PublicTeacherDto, ResponseTeacherDto } from './dto/ResponseTeacher.dto';
+import {
+  AssignStudentsDto,
+  UpdateStudentAssignmentDto,
+} from './dto/AssignStudents.dto';
 import { Roles } from '../decorators/roles.decorator';
 import { CurrentUser } from '../decorators/current-user.decorator';
 import type { AuthenticatedUser } from '../decorators/current-user.decorator';
@@ -66,6 +70,15 @@ export class TeacherController {
     return teacher ? new PublicTeacherDto(teacher) : null;
   }
 
+  /** Configuração individual do aluno (professora, carga, reposição, sala). */
+  @Patch('students/:studentId')
+  async updateStudentAssignment(
+    @Param('studentId') studentId: string,
+    @Body() dto: UpdateStudentAssignmentDto,
+  ) {
+    return this.service.updateStudentAssignment(studentId, dto);
+  }
+
   @Get(':id')
   async findById(@Param('id') id: string): Promise<ResponseTeacherDto> {
     return new ResponseTeacherDto(await this.service.findById(id));
@@ -82,6 +95,14 @@ export class TeacherController {
     @Body() dto: UpdateTeacherDto,
   ): Promise<ResponseTeacherDto> {
     return new ResponseTeacherDto(await this.service.update(id, dto));
+  }
+
+  @Put(':id/students')
+  async assignStudents(
+    @Param('id') id: string,
+    @Body() dto: AssignStudentsDto,
+  ) {
+    return this.service.assignStudents(id, dto.studentIds);
   }
 
   @Patch(':id/active')

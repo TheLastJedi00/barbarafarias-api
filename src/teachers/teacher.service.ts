@@ -131,6 +131,86 @@ export class TeacherService {
     return this.teacherRepository.findStudentsByTeacher(teacherId);
   }
 
+  /**
+   * Substitui o roster de alunos da professora. Quem entra fica vinculado (e
+   * deixa de estar pendente); quem sai volta para a fila de realocação.
+   */
+  async assignStudents(
+    teacherId: string,
+    studentIds: string[],
+  ): Promise<{ assigned: number; released: number }> {
+    const teacher = await this.findById(teacherId);
+    const current = await this.teacherRepository.findStudentsByTeacher(
+      teacherId,
+    );
+
+    const released = current.filter((s) => !studentIds.includes(s.id!));
+    for (const student of released) {
+      await this.userRepository.update(
+        new User({
+          ...student,
+          teacherId: undefined,
+          teacherName: undefined,
+          pendingTeacher: true,
+        }),
+      );
+    }
+
+    for (const studentId of studentIds) {
+      const student = await this.userRepository.findById(studentId);
+      if (!student) {
+        throw new NotFoundException(`Aluno ${studentId} não encontrado`);
+      }
+      await this.userRepository.update(
+        new User({
+          ...student,
+          teacherId,
+          teacherName: teacher.fullName,
+          pendingTeacher: false,
+        }),
+      );
+    }
+
+    return { assigned: studentIds.length, released: released.length };
+  }
+
+  /** Configuração individual do aluno: professora, carga, reposição e sala. */
+  async updateStudentAssignment(
+    studentId: string,
+    dto: {
+      teacherId?: string | null;
+      lessonsPerWeek?: number;
+      makeupSlot?: { dayOfWeek: number; hour: number };
+      meetUrl?: string;
+    },
+  ): Promise<User> {
+    const student = await this.userRepository.findById(studentId);
+    if (!student) {
+      throw new NotFoundException('Aluno não encontrado');
+    }
+
+    const patch: Partial<User> = {};
+    if (dto.teacherId !== undefined) {
+      if (dto.teacherId === null) {
+        patch.teacherId = undefined;
+        patch.teacherName = undefined;
+        patch.pendingTeacher = true;
+      } else {
+        const teacher = await this.findById(dto.teacherId);
+        patch.teacherId = teacher.id;
+        patch.teacherName = teacher.fullName;
+        patch.pendingTeacher = false;
+      }
+    }
+    if (dto.lessonsPerWeek !== undefined) patch.lessonsPerWeek = dto.lessonsPerWeek;
+    if (dto.makeupSlot !== undefined) patch.makeupSlot = dto.makeupSlot;
+    if (dto.meetUrl !== undefined) patch.meetUrl = dto.meetUrl;
+
+    const updated = new User({ ...student, ...patch, id: studentId });
+    await this.userRepository.update(updated);
+    return updated;
+  }
+
   /** Professora responsável por um aluno; null quando ainda não há vínculo. */
   async findResponsibleFor(studentId: string): Promise<User | null> {
     const student = await this.userRepository.findById(studentId);
