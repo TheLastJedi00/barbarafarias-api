@@ -1,7 +1,16 @@
 import { CanActivate, ExecutionContext, Injectable } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import { ROLES_KEY } from '../decorators/roles.decorator';
-import { Role } from '../types/role';
+import { ROLES, Role } from '../types/role';
+
+/**
+ * Herança de papéis: a gerente faz tudo que a professora faz (spec 010 §2).
+ * Sem isso, migrar a gerente para `manager` a barraria em todas as rotas
+ * legadas anotadas com `@Roles(TEACHER)`.
+ */
+const INHERITED_ROLES: Partial<Record<Role, Role[]>> = {
+  [ROLES.MANAGER]: [ROLES.TEACHER],
+};
 
 @Injectable()
 export class RolesGuard implements CanActivate {
@@ -26,6 +35,11 @@ export class RolesGuard implements CanActivate {
       return false;
     }
 
-    return requiredRoles.some((role) => userFromToken.role === role);
+    const effectiveRoles: string[] = [
+      userFromToken.role,
+      ...(INHERITED_ROLES[userFromToken.role as Role] ?? []),
+    ];
+
+    return requiredRoles.some((role) => effectiveRoles.includes(role));
   }
 }

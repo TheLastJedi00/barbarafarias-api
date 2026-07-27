@@ -46,4 +46,14 @@ describe('RolesGuard', () => {
     const guard = makeGuard([ROLES.MANAGER, ROLES.TEACHER]);
     expect(guard.canActivate(makeContext({ role: ROLES.STUDENT }))).toBe(false);
   });
+
+  it('libera a gerente em rota legada que exige apenas teacher', () => {
+    const guard = makeGuard([ROLES.TEACHER]);
+    expect(guard.canActivate(makeContext({ role: ROLES.MANAGER }))).toBe(true);
+  });
+
+  it('nao libera a professora em rota exclusiva da gerente', () => {
+    const guard = makeGuard([ROLES.MANAGER]);
+    expect(guard.canActivate(makeContext({ role: ROLES.TEACHER }))).toBe(false);
+  });
 });
