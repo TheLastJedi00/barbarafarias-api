@@ -12,8 +12,12 @@ import {
   LESSON_ORIGIN,
   LESSON_STATUS,
   Lesson,
+  LessonStatus,
   lessonDocId,
 } from './lesson.entity';
+import { AccessState, LessonAccessService } from './lesson-access.service';
+import { UserRepository } from '../users/user.repository';
+import { TurmaRepository } from '../turmas/turma.repository';
 import {
   datesBetween,
   dayOfWeekOf,
@@ -28,6 +32,9 @@ export class LessonService {
   constructor(
     private readonly lessonRepository: LessonRepository,
     private readonly agendaService: AgendaService,
+    private readonly access: LessonAccessService,
+    private readonly userRepository: UserRepository,
+    private readonly turmaRepository: TurmaRepository,
   ) {}
 
   /**
@@ -145,6 +152,89 @@ export class LessonService {
     if (user.role === ROLES.MANAGER) return;
     if (user.role === ROLES.TEACHER && lesson.teacherId === user.sub) return;
     throw new ForbiddenException('Sem acesso a esta aula');
+  }
+
+  /**
+   * Estado da janela + link da sala. O link só sai daqui quando a janela está
+   * aberta: o aluno nunca recebe a URL no HTML (spec 010 RNF3).
+   */
+  async getAccess(
+    user: AuthenticatedUser,
+    lessonId: string,
+    now: Date = new Date(),
+  ): Promise<{
+    state: AccessState;
+    startAt: string;
+    meetUrl?: string;
+    status: LessonStatus;
+  }> {
+    const lesson = await this.findById(lessonId);
+    const isStudent = await this.isStudentOf(user, lesson);
+
+    if (!isStudent) {
+      this.assertOwnership(user, lesson);
+      const state = this.access.teacherState(lesson, now);
+      if (state === 'open' && !lesson.teacherJoinedAt) {
+        lesson.teacherJoinedAt = now.toISOString();
+        await this.lessonRepository.save(lesson);
+      }
+      return {
+        state,
+        startAt: lesson.startAt,
+        status: lesson.status,
+        meetUrl: state === 'open' ? await this.resolveMeetUrl(lesson) : undefined,
+      };
+    }
+
+    const state = this.access.studentState(lesson, now);
+    if (state === 'open' && !lesson.studentJoinedAt) {
+      lesson.studentJoinedAt = now.toISOString();
+      await this.lessonRepository.save(lesson);
+    }
+    if (state === 'missed' && lesson.status === LESSON_STATUS.SCHEDULED) {
+      await this.markStudentNoShow(lesson, now);
+    }
+
+    return {
+      state,
+      startAt: lesson.startAt,
+      status: lesson.status,
+      meetUrl: state === 'open' ? await this.resolveMeetUrl(lesson) : undefined,
+    };
+  }
+
+  /** Fecha a aula como falta do aluno (sem aviso) e dispara a reposição. */
+  private async markStudentNoShow(lesson: Lesson, now: Date): Promise<void> {
+    lesson.status = LESSON_STATUS.STUDENT_NO_SHOW;
+    lesson.attendance = {
+      present: false,
+      markedBy: 'system',
+      markedAt: now.toISOString(),
+      source: 'auto',
+    };
+    await this.lessonRepository.save(lesson);
+  }
+
+  /** Sala fixa do aluno ou da turma, cadastrada pela gerente. */
+  private async resolveMeetUrl(lesson: Lesson): Promise<string | undefined> {
+    if (lesson.turmaId) {
+      const turma = await this.turmaRepository.findById(lesson.turmaId);
+      return turma?.meetUrl;
+    }
+    if (!lesson.studentId) return undefined;
+    const student = await this.userRepository.findById(lesson.studentId);
+    return student?.meetUrl;
+  }
+
+  private async isStudentOf(
+    user: AuthenticatedUser,
+    lesson: Lesson,
+  ): Promise<boolean> {
+    if (user.role !== ROLES.STUDENT) return false;
+    if (lesson.studentId === user.sub) return true;
+    if (!lesson.turmaId) return false;
+    const turmaIds = await this.agendaService.getStudentTurmaIds(user.sub);
+    return turmaIds.includes(lesson.turmaId);
   }
 
   private sorted(lessons: Lesson[]): Lesson[] {

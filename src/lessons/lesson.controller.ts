@@ -33,6 +33,15 @@ export class LessonController {
     return this.service.findByDate(date || todayInAppTimezone());
   }
 
+  /** Estado da janela + link do Meet (só quando aberta). */
+  @Get(':id/access')
+  getAccess(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') id: string,
+  ) {
+    return this.service.getAccess(user, id);
+  }
+
   @Get('student/:studentId')
   findByStudent(
     @CurrentUser() user: AuthenticatedUser,

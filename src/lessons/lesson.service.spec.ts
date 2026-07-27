@@ -2,6 +2,7 @@ import { LessonService } from './lesson.service';
 import { AgendaSlot } from '../agenda/agenda.entity';
 import { LESSON_STATUS } from './lesson.entity';
 import { addDays, todayInAppTimezone } from '../common/time';
+import { LessonAccessService } from './lesson-access.service';
 
 describe('LessonService.ensureLessons', () => {
   let service: LessonService;
@@ -38,6 +39,9 @@ describe('LessonService.ensureLessons', () => {
     service = new LessonService(
       lessonRepository as any,
       agendaService as any,
+      new LessonAccessService(),
+      { findById: jest.fn() } as any,
+      { findById: jest.fn() } as any,
     );
   });
 
