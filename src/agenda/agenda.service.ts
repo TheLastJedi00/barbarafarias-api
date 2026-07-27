@@ -1,8 +1,10 @@
-import { Injectable } from '@nestjs/common';
+import { ForbiddenException, Injectable } from '@nestjs/common';
 import { AgendaRepository } from './agenda.repository';
 import { TurmaRepository } from '../turmas/turma.repository';
 import { AgendaSlot, StudentSchedule } from './agenda.entity';
 import { AssignSlotDto } from './dto/assign-slot.dto';
+import { ROLES } from '../types/role';
+import type { AuthenticatedUser } from '../decorators/current-user.decorator';
 
 @Injectable()
 export class AgendaService {
@@ -10,6 +12,20 @@ export class AgendaService {
     private readonly agendaRepository: AgendaRepository,
     private readonly turmaRepository: TurmaRepository,
   ) {}
+
+  /**
+   * Resolve de qual professora é a grade que a requisição pode tocar.
+   * A gerente escolhe (ou vê todas); a professora fica presa à própria.
+   */
+  resolveScope(user: AuthenticatedUser, requestedTeacherId?: string): string | undefined {
+    if (user.role === ROLES.MANAGER) {
+      return requestedTeacherId;
+    }
+    if (requestedTeacherId && requestedTeacherId !== user.sub) {
+      throw new ForbiddenException('Sem acesso à agenda de outra professora');
+    }
+    return user.sub;
+  }
 
   async getGrid(teacherId?: string): Promise<AgendaSlot[]> {
     const [slots, turmas] = await Promise.all([

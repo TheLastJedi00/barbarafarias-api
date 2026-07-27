@@ -2,6 +2,7 @@ import {
   Body,
   Controller,
   Delete,
+  ForbiddenException,
   Get,
   Param,
   ParseIntPipe,
@@ -11,6 +12,8 @@ import {
 import { AgendaService } from './agenda.service';
 import { AssignSlotDto } from './dto/assign-slot.dto';
 import { Roles } from '../decorators/roles.decorator';
+import { CurrentUser } from '../decorators/current-user.decorator';
+import type { AuthenticatedUser } from '../decorators/current-user.decorator';
 import { ROLES } from '../types/role';
 
 @Controller('agenda')
@@ -19,29 +22,43 @@ export class AgendaController {
 
   @Get()
   @Roles(ROLES.MANAGER, ROLES.TEACHER)
-  getGrid(@Query('teacherId') teacherId?: string) {
-    return this.agendaService.getGrid(teacherId);
+  getGrid(
+    @CurrentUser() user: AuthenticatedUser,
+    @Query('teacherId') teacherId?: string,
+  ) {
+    return this.agendaService.getGrid(
+      this.agendaService.resolveScope(user, teacherId),
+    );
   }
 
   // Sem @Roles: acessível a qualquer usuário autenticado (o aluno vê o próprio horário).
   @Get('student/:studentId')
-  getStudentSchedule(@Param('studentId') studentId: string) {
+  getStudentSchedule(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('studentId') studentId: string,
+  ) {
+    if (user.role === ROLES.STUDENT && user.sub !== studentId) {
+      throw new ForbiddenException('Sem acesso ao horário de outro aluno');
+    }
     return this.agendaService.getStudentSchedule(studentId);
   }
 
   @Post()
   @Roles(ROLES.MANAGER, ROLES.TEACHER)
-  assign(@Body() dto: AssignSlotDto) {
-    return this.agendaService.assign(dto);
+  assign(@CurrentUser() user: AuthenticatedUser, @Body() dto: AssignSlotDto) {
+    const teacherId = this.agendaService.resolveScope(user, dto.teacherId);
+    return this.agendaService.assign({ ...dto, teacherId: teacherId! });
   }
 
   @Delete(':teacherId/:dayOfWeek/:hour')
   @Roles(ROLES.MANAGER, ROLES.TEACHER)
   free(
+    @CurrentUser() user: AuthenticatedUser,
     @Param('teacherId') teacherId: string,
     @Param('dayOfWeek', ParseIntPipe) dayOfWeek: number,
     @Param('hour', ParseIntPipe) hour: number,
   ) {
-    return this.agendaService.free(teacherId, dayOfWeek, hour);
+    const scoped = this.agendaService.resolveScope(user, teacherId);
+    return this.agendaService.free(scoped!, dayOfWeek, hour);
   }
 }

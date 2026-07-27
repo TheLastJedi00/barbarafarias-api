@@ -1,6 +1,7 @@
 import {
   IsIn,
   IsInt,
+  IsNotEmpty,
   IsOptional,
   IsString,
   Max,
@@ -11,6 +12,7 @@ import {
 export class AssignSlotDto {
   /** Professora dona do slot; a gerente pode informar qualquer uma. */
   @IsString()
+  @IsNotEmpty({ message: 'teacherId é obrigatório' })
   teacherId!: string;
 
   @IsString()
