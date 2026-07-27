@@ -6,7 +6,7 @@ import { ResponseUserDto } from './dto/ResponseUser.dto';
 import { UserRepository } from './user.repository';
 import { AuthService } from '../auth/auth.service';
 import { ROLES, Role } from '../types/role';
-import { v4 as uuidv4 } from 'uuid';
+import { randomUUID } from 'node:crypto';
 
 @Injectable()
 export class UserService {
@@ -16,7 +16,7 @@ export class UserService {
   ) {}
 
   async createUser(dto: CreateUserDto): Promise<ResponseUserDto> {
-    const uid = uuidv4();
+    const uid = randomUUID();
     const role = dto.isTeacher ? ROLES.TEACHER : ROLES.STUDENT;
 
     await this.authService.registerCredentials({
