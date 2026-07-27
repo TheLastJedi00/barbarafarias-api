@@ -9,6 +9,7 @@ import {
 } from '@nestjs/common';
 import { LessonService } from './lesson.service';
 import { AttendanceDto } from './dto/attendance.dto';
+import { RateLessonDto } from './dto/rate-lesson.dto';
 import { Roles } from '../decorators/roles.decorator';
 import { CurrentUser } from '../decorators/current-user.decorator';
 import type { AuthenticatedUser } from '../decorators/current-user.decorator';
@@ -54,6 +55,26 @@ export class LessonController {
     @Body() dto: AttendanceDto,
   ) {
     return this.service.markAttendance(user, id, dto.present);
+  }
+
+  /** Aviso prévio de ausência do aluno (mínimo de 4 h). */
+  @Post(':id/student-cancel')
+  @Roles(ROLES.STUDENT)
+  studentCancel(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') id: string,
+  ) {
+    return this.service.studentCancel(user, id);
+  }
+
+  @Post(':id/rating')
+  @Roles(ROLES.STUDENT)
+  rate(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') id: string,
+    @Body() dto: RateLessonDto,
+  ) {
+    return this.service.rateLesson(user, id, dto.stars, dto.comment);
   }
 
   @Get('student/:studentId')

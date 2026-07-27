@@ -18,6 +18,7 @@ import {
 } from './lesson.entity';
 import {
   AccessState,
+  ADVANCE_NOTICE_HOURS,
   LessonAccessService,
   MANUAL_ATTENDANCE_WINDOW_HOURS,
 } from './lesson-access.service';
@@ -305,6 +306,72 @@ export class LessonService {
     };
     await this.lessonRepository.save(lesson);
     await this.onStudentMissed(lesson);
+  }
+
+  /**
+   * Aviso prévio de ausência do aluno (≥ 4 h). A aula é liberada e vai para o
+   * slot de reposição; professora e gerente são avisadas (Q4/§6.3).
+   */
+  async studentCancel(
+    user: AuthenticatedUser,
+    lessonId: string,
+    now: Date = new Date(),
+  ): Promise<{ lesson: Lesson; makeup?: Lesson; pushed: boolean }> {
+    const lesson = await this.findById(lessonId);
+
+    if (!(await this.isStudentOf(user, lesson))) {
+      throw new ForbiddenException('Só o próprio aluno pode avisar a ausência');
+    }
+    if (lesson.turmaId) {
+      throw new BadRequestException(
+        'Aula de turma não pode ser cancelada individualmente',
+      );
+    }
+    if (lesson.status !== LESSON_STATUS.SCHEDULED) {
+      throw new BadRequestException('Esta aula não está mais agendada');
+    }
+    if (!this.access.hasAdvanceNotice(lesson, now)) {
+      throw new BadRequestException(
+        `O aviso precisa ser feito com ao menos ${ADVANCE_NOTICE_HOURS}h de antecedência`,
+      );
+    }
+
+    lesson.status = LESSON_STATUS.STUDENT_CANCELLED;
+    lesson.attendance = {
+      present: false,
+      markedBy: user.sub,
+      markedAt: now.toISOString(),
+      source: 'manual',
+    };
+    await this.lessonRepository.save(lesson);
+
+    const makeup = await this.makeupService.createMakeup(lesson);
+    return { lesson, makeup: makeup.lesson, pushed: makeup.pushed };
+  }
+
+  /** Avaliação da aula concluída: 1..5 estrelas + comentário, uma por aula. */
+  async rateLesson(
+    user: AuthenticatedUser,
+    lessonId: string,
+    stars: number,
+    comment?: string,
+    now: Date = new Date(),
+  ): Promise<Lesson> {
+    const lesson = await this.findById(lessonId);
+
+    if (!(await this.isStudentOf(user, lesson))) {
+      throw new ForbiddenException('Só o aluno da aula pode avaliá-la');
+    }
+    if (lesson.status !== LESSON_STATUS.COMPLETED) {
+      throw new BadRequestException('Só é possível avaliar uma aula concluída');
+    }
+    if (lesson.rating) {
+      throw new BadRequestException('Esta aula já foi avaliada');
+    }
+
+    lesson.rating = { stars, comment, ratedAt: now.toISOString() };
+    await this.lessonRepository.save(lesson);
+    return lesson;
   }
 
   /** Sala fixa do aluno ou da turma, cadastrada pela gerente. */
