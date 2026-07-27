@@ -9,6 +9,7 @@ import { PromptsModule } from './prompts/prompts.module';
 import { TurmaModule } from './turmas/turma.module';
 import { AgendaModule } from './agenda/agenda.module';
 import { CurriculumModule } from './curriculum/curriculum.module';
+import { TeacherModule } from './teachers/teacher.module';
 import { AuthGuard } from './guards/auth.guard';
 import { RolesGuard } from './guards/roles.guard';
 import { FirestoreModule } from './firestore/firestore.module';
@@ -25,6 +26,7 @@ import { FirestoreModule } from './firestore/firestore.module';
     TurmaModule,
     AgendaModule,
     CurriculumModule,
+    TeacherModule,
   ],
   providers: [
     {

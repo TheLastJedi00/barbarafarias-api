@@ -130,4 +130,13 @@ export class TeacherService {
     await this.findById(teacherId);
     return this.teacherRepository.findStudentsByTeacher(teacherId);
   }
+
+  /** Professora responsável por um aluno; null quando ainda não há vínculo. */
+  async findResponsibleFor(studentId: string): Promise<User | null> {
+    const student = await this.userRepository.findById(studentId);
+    if (!student?.teacherId) {
+      return null;
+    }
+    return this.userRepository.findById(student.teacherId);
+  }
 }
