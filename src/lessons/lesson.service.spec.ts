@@ -59,6 +59,7 @@ describe('LessonService.ensureLessons', () => {
       { findById: jest.fn() } as any,
       makeupService as any,
       notifications as any,
+      { priceLesson: jest.fn(async (lesson: any) => lesson) } as any,
     );
   });
 

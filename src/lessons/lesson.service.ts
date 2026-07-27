@@ -26,6 +26,7 @@ import { UserRepository } from '../users/user.repository';
 import { TurmaRepository } from '../turmas/turma.repository';
 import { MakeupService } from './makeup.service';
 import { NotificationService } from '../notifications/notification.service';
+import { BillingService } from '../billing/billing.service';
 import {
   datesBetween,
   dayOfWeekOf,
@@ -45,6 +46,7 @@ export class LessonService {
     private readonly turmaRepository: TurmaRepository,
     private readonly makeupService: MakeupService,
     private readonly notifications: NotificationService,
+    private readonly billing: BillingService,
   ) {}
 
   /**
@@ -245,6 +247,7 @@ export class LessonService {
       markedAt: now.toISOString(),
       source: 'manual',
     };
+    await this.billing.priceLesson(lesson);
     await this.lessonRepository.save(lesson);
 
     if (!present) {
@@ -278,6 +281,7 @@ export class LessonService {
         markedAt: now.toISOString(),
         source: 'auto',
       };
+      await this.billing.priceLesson(lesson);
       await this.lessonRepository.save(lesson);
       if (!present) {
         await this.onStudentMissed(lesson);
@@ -310,6 +314,7 @@ export class LessonService {
       markedAt: now.toISOString(),
       source: 'auto',
     };
+    await this.billing.priceLesson(lesson);
     await this.lessonRepository.save(lesson);
     await this.onStudentMissed(lesson);
   }
@@ -349,6 +354,7 @@ export class LessonService {
       markedAt: now.toISOString(),
       source: 'manual',
     };
+    await this.billing.priceLesson(lesson);
     await this.lessonRepository.save(lesson);
 
     const makeup = await this.makeupService.createMakeup(lesson);

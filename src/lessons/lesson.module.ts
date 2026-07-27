@@ -8,9 +8,16 @@ import { TurmaModule } from '../turmas/turma.module';
 import { LessonAccessService } from './lesson-access.service';
 import { MakeupService } from './makeup.service';
 import { NotificationModule } from '../notifications/notification.module';
+import { BillingModule } from '../billing/billing.module';
 
 @Module({
-  imports: [AgendaModule, UserModule, TurmaModule, NotificationModule],
+  imports: [
+    AgendaModule,
+    UserModule,
+    TurmaModule,
+    NotificationModule,
+    BillingModule,
+  ],
   controllers: [LessonController],
   providers: [
     LessonService,
