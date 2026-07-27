@@ -6,11 +6,22 @@ import { AgendaModule } from '../agenda/agenda.module';
 import { UserModule } from '../users/user.module';
 import { TurmaModule } from '../turmas/turma.module';
 import { LessonAccessService } from './lesson-access.service';
+import { MakeupService } from './makeup.service';
 
 @Module({
   imports: [AgendaModule, UserModule, TurmaModule],
   controllers: [LessonController],
-  providers: [LessonService, LessonRepository, LessonAccessService],
-  exports: [LessonService, LessonRepository, LessonAccessService],
+  providers: [
+    LessonService,
+    LessonRepository,
+    LessonAccessService,
+    MakeupService,
+  ],
+  exports: [
+    LessonService,
+    LessonRepository,
+    LessonAccessService,
+    MakeupService,
+  ],
 })
 export class LessonModule {}

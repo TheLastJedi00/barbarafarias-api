@@ -42,6 +42,7 @@ describe('LessonService.ensureLessons', () => {
       new LessonAccessService(),
       { findById: jest.fn() } as any,
       { findById: jest.fn() } as any,
+      { createMakeup: jest.fn().mockResolvedValue({ pushed: false }) } as any,
     );
   });
 

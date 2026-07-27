@@ -23,6 +23,7 @@ import {
 } from './lesson-access.service';
 import { UserRepository } from '../users/user.repository';
 import { TurmaRepository } from '../turmas/turma.repository';
+import { MakeupService } from './makeup.service';
 import {
   datesBetween,
   dayOfWeekOf,
@@ -40,6 +41,7 @@ export class LessonService {
     private readonly access: LessonAccessService,
     private readonly userRepository: UserRepository,
     private readonly turmaRepository: TurmaRepository,
+    private readonly makeupService: MakeupService,
   ) {}
 
   /**
@@ -283,8 +285,13 @@ export class LessonService {
   }
 
   /** Falta do aluno: gera a reposição no slot pré-combinado (§6.5). */
-  private async onStudentMissed(_lesson: Lesson): Promise<void> {
-    // implementado na Task 4 (serviço de reposição)
+  private async onStudentMissed(lesson: Lesson): Promise<void> {
+    const result = await this.makeupService.createMakeup(lesson);
+    if (result.pushed) {
+      this.logger.warn(
+        `Reposição da aula ${lesson.id} empurrada por conflito de slot`,
+      );
+    }
   }
 
   /** Fecha a aula como falta do aluno (sem aviso) e dispara a reposição. */
