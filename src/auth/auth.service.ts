@@ -6,6 +6,7 @@ import { JwtService } from '@nestjs/jwt';
 import { AuthRepository } from './auth.repository';
 import { BcryptService } from './bcrypt.service';
 import { AuthUser } from './entities/auth-user.entity';
+import { resolveRole } from '../types/role';
 
 @Injectable()
 export class AuthService {
@@ -49,8 +50,14 @@ export class AuthService {
       throw new UnauthorizedException('Senha incorreta.');
     }
 
-    const payload = { email: authUser.email, sub: authUser.id, role: authUser.role };
-    
+    // Credencial sem papel reconhecido cai para o menor privilégio (aluno).
+    const payload = {
+      email: authUser.email,
+      sub: authUser.id,
+      role: resolveRole({ role: authUser.role }),
+    };
+
+
     return {
       access_token: this.jwtService.sign(payload),
     };
