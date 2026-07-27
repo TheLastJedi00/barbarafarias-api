@@ -11,6 +11,7 @@ import { AgendaModule } from './agenda/agenda.module';
 import { CurriculumModule } from './curriculum/curriculum.module';
 import { TeacherModule } from './teachers/teacher.module';
 import { AdminModule } from './admin/admin.module';
+import { LessonModule } from './lessons/lesson.module';
 import { AuthGuard } from './guards/auth.guard';
 import { RolesGuard } from './guards/roles.guard';
 import { FirestoreModule } from './firestore/firestore.module';
@@ -29,6 +30,7 @@ import { FirestoreModule } from './firestore/firestore.module';
     CurriculumModule,
     TeacherModule,
     AdminModule,
+    LessonModule,
   ],
   providers: [
     {

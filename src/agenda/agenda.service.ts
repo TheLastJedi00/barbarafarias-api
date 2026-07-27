@@ -61,6 +61,15 @@ export class AgendaService {
     return this.agendaRepository.remove(teacherId, dayOfWeek, hour);
   }
 
+  /** Turmas às quais o aluno pertence. */
+  async getStudentTurmaIds(studentId: string): Promise<string[]> {
+    const turmas = await this.turmaRepository.findAll();
+    return turmas
+      .filter((turma) => turma.studentIds.includes(studentId))
+      .map((turma) => turma.id)
+      .filter((id): id is string => !!id);
+  }
+
   /**
    * Horário resolvido do aluno: alocações diretas (individual) +
    * slots das turmas às quais ele pertence.
@@ -68,11 +77,7 @@ export class AgendaService {
   async getStudentSchedule(studentId: string): Promise<StudentSchedule[]> {
     const direct = await this.agendaRepository.findByStudentId(studentId);
 
-    const turmas = await this.turmaRepository.findAll();
-    const turmaIds = turmas
-      .filter((t) => t.studentIds.includes(studentId))
-      .map((t) => t.id)
-      .filter((id): id is string => !!id);
+    const turmaIds = await this.getStudentTurmaIds(studentId);
     const turmaSlots = await this.agendaRepository.findByTurmaIds(turmaIds);
 
     const individual: StudentSchedule[] = direct.map((s) => ({
