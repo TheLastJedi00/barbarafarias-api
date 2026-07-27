@@ -25,6 +25,7 @@ import {
 import { UserRepository } from '../users/user.repository';
 import { TurmaRepository } from '../turmas/turma.repository';
 import { MakeupService } from './makeup.service';
+import { NotificationService } from '../notifications/notification.service';
 import {
   datesBetween,
   dayOfWeekOf,
@@ -43,6 +44,7 @@ export class LessonService {
     private readonly userRepository: UserRepository,
     private readonly turmaRepository: TurmaRepository,
     private readonly makeupService: MakeupService,
+    private readonly notifications: NotificationService,
   ) {}
 
   /**
@@ -288,10 +290,14 @@ export class LessonService {
   /** Falta do aluno: gera a reposição no slot pré-combinado (§6.5). */
   private async onStudentMissed(lesson: Lesson): Promise<void> {
     const result = await this.makeupService.createMakeup(lesson);
+    await this.notifications.lessonMissed(lesson, result.lesson);
     if (result.pushed) {
       this.logger.warn(
         `Reposição da aula ${lesson.id} empurrada por conflito de slot`,
       );
+      if (result.lesson) {
+        await this.notifications.makeupPushed(result.lesson);
+      }
     }
   }
 
@@ -346,6 +352,10 @@ export class LessonService {
     await this.lessonRepository.save(lesson);
 
     const makeup = await this.makeupService.createMakeup(lesson);
+    await this.notifications.studentCancelled(lesson, makeup.lesson);
+    if (makeup.pushed && makeup.lesson) {
+      await this.notifications.makeupPushed(makeup.lesson);
+    }
     return { lesson, makeup: makeup.lesson, pushed: makeup.pushed };
   }
 

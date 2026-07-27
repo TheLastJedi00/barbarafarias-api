@@ -21,6 +21,11 @@ describe('LessonService.ensureLessons', () => {
     getStudentTurmaIds: jest.Mock;
   };
   let makeupService: { createMakeup: jest.Mock };
+  let notifications: {
+    lessonMissed: jest.Mock;
+    studentCancelled: jest.Mock;
+    makeupPushed: jest.Mock;
+  };
 
   const today = todayInAppTimezone();
 
@@ -41,6 +46,11 @@ describe('LessonService.ensureLessons', () => {
     makeupService = {
       createMakeup: jest.fn().mockResolvedValue({ pushed: false }),
     };
+    notifications = {
+      lessonMissed: jest.fn().mockResolvedValue(undefined),
+      studentCancelled: jest.fn().mockResolvedValue(undefined),
+      makeupPushed: jest.fn().mockResolvedValue(undefined),
+    };
     service = new LessonService(
       lessonRepository as any,
       agendaService as any,
@@ -48,6 +58,7 @@ describe('LessonService.ensureLessons', () => {
       { findById: jest.fn() } as any,
       { findById: jest.fn() } as any,
       makeupService as any,
+      notifications as any,
     );
   });
 

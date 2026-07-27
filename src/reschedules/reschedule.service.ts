@@ -25,6 +25,7 @@ import { CreateRescheduleDto } from './dto/create-reschedule.dto';
 import { ROLES } from '../types/role';
 import type { AuthenticatedUser } from '../decorators/current-user.decorator';
 import { nextDateForDayOfWeek, zonedDateTimeToUtc } from '../common/time';
+import { NotificationService } from '../notifications/notification.service';
 
 @Injectable()
 export class RescheduleService {
@@ -34,6 +35,7 @@ export class RescheduleService {
     private readonly rescheduleRepository: RescheduleRepository,
     private readonly lessonRepository: LessonRepository,
     private readonly access: LessonAccessService,
+    private readonly notifications: NotificationService,
   ) {}
 
   /**
@@ -71,7 +73,7 @@ export class RescheduleService {
       dto.proposedHour,
     );
 
-    return this.rescheduleRepository.create(
+    const created = await this.rescheduleRepository.create(
       new RescheduleRequest({
         lessonId: lesson.id,
         teacherId: lesson.teacherId,
@@ -88,6 +90,9 @@ export class RescheduleService {
         requestedAt: now.toISOString(),
       }),
     );
+
+    await this.notifications.rescheduleRequested(created);
+    return created;
   }
 
   /**
@@ -179,6 +184,7 @@ export class RescheduleService {
     this.logger.log(
       `Reagendamento ${request.id} aprovado: aula ${lesson.id} → ${rescheduled.id}`,
     );
+    await this.notifications.rescheduleDecided(request, true);
     return { request, lesson: rescheduled };
   }
 
@@ -197,6 +203,7 @@ export class RescheduleService {
     request.decisionNote = note;
     await this.rescheduleRepository.save(request);
 
+    await this.notifications.rescheduleDecided(request, false);
     return request;
   }
 

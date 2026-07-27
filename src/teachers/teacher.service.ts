@@ -11,6 +11,7 @@ import { User } from '../users/user.entity';
 import { CreateTeacherDto } from './dto/CreateTeacher.dto';
 import { UpdateTeacherDto } from './dto/UpdateTeacher.dto';
 import { ROLES, resolveRole, isStaff } from '../types/role';
+import { NotificationService } from '../notifications/notification.service';
 
 export interface TeacherSummary {
   teacher: User;
@@ -23,6 +24,7 @@ export class TeacherService {
     private readonly teacherRepository: TeacherRepository,
     private readonly userRepository: UserRepository,
     private readonly authService: AuthService,
+    private readonly notifications: NotificationService,
   ) {}
 
   async create(dto: CreateTeacherDto): Promise<User> {
@@ -108,9 +110,17 @@ export class TeacherService {
     const updated = new User({ ...teacher, active, id });
     await this.userRepository.update(updated);
 
-    const pendingStudents = active
-      ? 0
-      : await this.teacherRepository.markStudentsPendingTeacher(id);
+    if (active) {
+      return { teacher: updated, pendingStudents: 0 };
+    }
+
+    const students = await this.teacherRepository.findStudentsByTeacher(id);
+    const pendingStudents =
+      await this.teacherRepository.markStudentsPendingTeacher(id);
+    await this.notifications.studentsPendingTeacher(
+      teacher.fullName,
+      students.map((student) => student.fullName),
+    );
 
     return { teacher: updated, pendingStudents };
   }

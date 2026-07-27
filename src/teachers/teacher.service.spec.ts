@@ -45,6 +45,9 @@ describe('TeacherService', () => {
       teacherRepository as any,
       userRepository as any,
       authService as any,
+      {
+        studentsPendingTeacher: jest.fn().mockResolvedValue(undefined),
+      } as any,
     );
   });
 

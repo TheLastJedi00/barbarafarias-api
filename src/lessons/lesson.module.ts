@@ -7,9 +7,10 @@ import { UserModule } from '../users/user.module';
 import { TurmaModule } from '../turmas/turma.module';
 import { LessonAccessService } from './lesson-access.service';
 import { MakeupService } from './makeup.service';
+import { NotificationModule } from '../notifications/notification.module';
 
 @Module({
-  imports: [AgendaModule, UserModule, TurmaModule],
+  imports: [AgendaModule, UserModule, TurmaModule, NotificationModule],
   controllers: [LessonController],
   providers: [
     LessonService,

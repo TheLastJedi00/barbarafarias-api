@@ -67,6 +67,10 @@ describe('RescheduleService', () => {
       rescheduleRepository as any,
       lessonRepository as any,
       new LessonAccessService(),
+      {
+        rescheduleRequested: jest.fn().mockResolvedValue(undefined),
+        rescheduleDecided: jest.fn().mockResolvedValue(undefined),
+      } as any,
     );
   });
 

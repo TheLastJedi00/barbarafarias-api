@@ -6,9 +6,10 @@ import {
 import { RescheduleService } from './reschedule.service';
 import { RescheduleRepository } from './reschedule.repository';
 import { LessonModule } from '../lessons/lesson.module';
+import { NotificationModule } from '../notifications/notification.module';
 
 @Module({
-  imports: [LessonModule],
+  imports: [LessonModule, NotificationModule],
   controllers: [LessonRescheduleController, RescheduleController],
   providers: [RescheduleService, RescheduleRepository],
   exports: [RescheduleService, RescheduleRepository],
