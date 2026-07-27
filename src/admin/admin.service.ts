@@ -1,5 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { AdminRepository } from './admin.repository';
+import { AdminRepository, RawDoc } from './admin.repository';
 import { ROLES, Role, resolveRole } from '../types/role';
 
 export interface MigrateRolesReport {
@@ -7,6 +7,8 @@ export interface MigrateRolesReport {
   updatedUsers: number;
   updatedCredentials: number;
   missingCredentials: string[];
+  agendaSlotsMigrated: number;
+  agendaSlotsSkipped: number;
 }
 
 const KNOWN_ROLES: string[] = Object.values(ROLES);
@@ -57,14 +59,61 @@ export class AdminService {
     await this.adminRepository.mergeAll('users', userUpdates);
     await this.adminRepository.mergeAll('credentials', credentialUpdates);
 
+    const agenda = await this.migrateAgendaSlots(users, credentialById);
+
     const report: MigrateRolesReport = {
       totalUsers: users.length,
       updatedUsers: userUpdates.length,
       updatedCredentials: credentialUpdates.length,
       missingCredentials,
+      agendaSlotsMigrated: agenda.migrated,
+      agendaSlotsSkipped: agenda.skipped,
     };
     this.logger.log(`Migração de papéis: ${JSON.stringify(report)}`);
     return report;
+  }
+
+  /**
+   * Slots da agenda antigos (docId `${dia}_${hora}`, sem professora) passam a
+   * pertencer à gerente — a única professora que existia antes da spec 010.
+   * Se não houver exatamente uma gerente, os slots são deixados como estão e
+   * reportados, para a gerente decidir manualmente.
+   */
+  private async migrateAgendaSlots(
+    users: RawDoc[],
+    credentialById: Map<string, Record<string, any>>,
+  ): Promise<{ migrated: number; skipped: number }> {
+    const slots = await this.adminRepository.findAll('agenda');
+    const pending = slots.filter((slot) => !slot.data.teacherId);
+    if (pending.length === 0) {
+      return { migrated: 0, skipped: 0 };
+    }
+
+    const managers = users.filter(
+      (user) =>
+        this.desiredRole(user.data, credentialById.get(user.id)) ===
+        ROLES.MANAGER,
+    );
+    if (managers.length !== 1) {
+      this.logger.warn(
+        `Agenda não migrada: ${managers.length} gerentes encontradas (esperado 1).`,
+      );
+      return { migrated: 0, skipped: pending.length };
+    }
+
+    const manager = managers[0];
+    const moves = pending.map((slot) => ({
+      fromId: slot.id,
+      toId: `${manager.id}_${slot.data.dayOfWeek}_${slot.data.hour}`,
+      data: {
+        ...slot.data,
+        teacherId: manager.id,
+        teacherName: manager.data.fullName ?? null,
+      },
+    }));
+
+    await this.adminRepository.moveAll('agenda', moves);
+    return { migrated: moves.length, skipped: 0 };
   }
 
   private desiredRole(

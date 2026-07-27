@@ -3,14 +3,21 @@ import { ROLES } from '../types/role';
 
 describe('AdminService.migrateRoles', () => {
   let service: AdminService;
-  let repository: { findAll: jest.Mock; mergeAll: jest.Mock };
+  let repository: {
+    findAll: jest.Mock;
+    mergeAll: jest.Mock;
+    moveAll: jest.Mock;
+  };
 
-  function setup(users: any[], credentials: any[]) {
+  function setup(users: any[], credentials: any[], agenda: any[] = []) {
     repository = {
-      findAll: jest.fn((collection: string) =>
-        Promise.resolve(collection === 'users' ? users : credentials),
-      ),
+      findAll: jest.fn((collection: string) => {
+        if (collection === 'users') return Promise.resolve(users);
+        if (collection === 'credentials') return Promise.resolve(credentials);
+        return Promise.resolve(agenda);
+      }),
       mergeAll: jest.fn().mockResolvedValue(undefined),
+      moveAll: jest.fn().mockResolvedValue(undefined),
     };
     service = new AdminService(repository as any);
   }
@@ -86,6 +93,64 @@ describe('AdminService.migrateRoles', () => {
     expect(updatesFor('credentials')).toEqual([
       { id: 'm1', data: { role: ROLES.MANAGER } },
     ]);
+  });
+
+  describe('migração dos slots de agenda', () => {
+    const legacySlot = {
+      id: '2_15',
+      data: { dayOfWeek: 2, hour: 15, occupantType: 'student', studentId: 's1' },
+    };
+
+    it('reescreve o docId dos slots antigos com a gerente como dona', async () => {
+      setup(
+        [{ id: 'm1', data: { fullName: 'Bárbara', role: ROLES.MANAGER } }],
+        [{ id: 'm1', data: { role: ROLES.MANAGER } }],
+        [legacySlot],
+      );
+
+      const report = await service.migrateRoles();
+
+      expect(report.agendaSlotsMigrated).toBe(1);
+      expect(repository.moveAll).toHaveBeenCalledWith('agenda', [
+        {
+          fromId: '2_15',
+          toId: 'm1_2_15',
+          data: expect.objectContaining({
+            teacherId: 'm1',
+            teacherName: 'Bárbara',
+            dayOfWeek: 2,
+            hour: 15,
+          }),
+        },
+      ]);
+    });
+
+    it('não toca em slots que já têm professora', async () => {
+      setup(
+        [{ id: 'm1', data: { fullName: 'Bárbara', role: ROLES.MANAGER } }],
+        [{ id: 'm1', data: { role: ROLES.MANAGER } }],
+        [{ id: 'm1_2_15', data: { ...legacySlot.data, teacherId: 'm1' } }],
+      );
+
+      const report = await service.migrateRoles();
+
+      expect(report.agendaSlotsMigrated).toBe(0);
+      expect(repository.moveAll).not.toHaveBeenCalled();
+    });
+
+    it('não adivinha a dona quando não há exatamente uma gerente', async () => {
+      setup(
+        [{ id: 't1', data: { isTeacher: true } }],
+        [{ id: 't1', data: { role: ROLES.TEACHER } }],
+        [legacySlot],
+      );
+
+      const report = await service.migrateRoles();
+
+      expect(report.agendaSlotsMigrated).toBe(0);
+      expect(report.agendaSlotsSkipped).toBe(1);
+      expect(repository.moveAll).not.toHaveBeenCalled();
+    });
   });
 
   it('reporta usuários sem credencial em vez de falhar', async () => {
