@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   ForbiddenException,
   Injectable,
   Logger,
@@ -15,7 +16,11 @@ import {
   LessonStatus,
   lessonDocId,
 } from './lesson.entity';
-import { AccessState, LessonAccessService } from './lesson-access.service';
+import {
+  AccessState,
+  LessonAccessService,
+  MANUAL_ATTENDANCE_WINDOW_HOURS,
+} from './lesson-access.service';
 import { UserRepository } from '../users/user.repository';
 import { TurmaRepository } from '../turmas/turma.repository';
 import {
@@ -104,13 +109,14 @@ export class LessonService {
     const teacherId = this.agendaService.resolveScope(user, requestedTeacherId);
     await this.ensureLessons(from, to, teacherId);
     const lessons = await this.lessonRepository.findByRange(from, to, teacherId);
-    return this.sorted(lessons);
+    return this.sorted(await this.autoCloseOverdue(lessons));
   }
 
   /** Aulas do dia — alimenta o painel "Aulas de hoje" da gerente. */
   async findByDate(date: string): Promise<Lesson[]> {
     await this.ensureLessons(date, date);
-    return this.sorted(await this.lessonRepository.findByDate(date));
+    const lessons = await this.lessonRepository.findByDate(date);
+    return this.sorted(await this.autoCloseOverdue(lessons));
   }
 
   /** Aulas do aluno: as dele e as das turmas a que pertence. */
@@ -203,6 +209,84 @@ export class LessonService {
     };
   }
 
+  /**
+   * Presença manual da professora — gatilho secundário, disponível por 72 h e
+   * soberano sobre o automático (é correção humana).
+   */
+  async markAttendance(
+    user: AuthenticatedUser,
+    lessonId: string,
+    present: boolean,
+    now: Date = new Date(),
+  ): Promise<Lesson> {
+    const lesson = await this.findById(lessonId);
+    this.assertOwnership(user, lesson);
+
+    if (now < new Date(lesson.startAt)) {
+      throw new BadRequestException('A aula ainda não começou');
+    }
+    if (this.access.isPastManualWindow(lesson, now)) {
+      throw new BadRequestException(
+        `Prazo de ${MANUAL_ATTENDANCE_WINDOW_HOURS}h para marcar presença expirou`,
+      );
+    }
+
+    lesson.status = present
+      ? LESSON_STATUS.COMPLETED
+      : LESSON_STATUS.STUDENT_NO_SHOW;
+    lesson.attendance = {
+      present,
+      markedBy: user.sub,
+      markedAt: now.toISOString(),
+      source: 'manual',
+    };
+    await this.lessonRepository.save(lesson);
+
+    if (!present) {
+      await this.onStudentMissed(lesson);
+    }
+    return lesson;
+  }
+
+  /**
+   * Fechamento automático: passadas as 72 h sem marcação manual, valem os
+   * gatilhos primários (entrou na sala = presente).
+   */
+  private async autoCloseOverdue(
+    lessons: Lesson[],
+    now: Date = new Date(),
+  ): Promise<Lesson[]> {
+    const overdue = lessons.filter(
+      (lesson) =>
+        lesson.status === LESSON_STATUS.SCHEDULED &&
+        this.access.isPastManualWindow(lesson, now),
+    );
+
+    for (const lesson of overdue) {
+      const present = !!lesson.studentJoinedAt;
+      lesson.status = present
+        ? LESSON_STATUS.COMPLETED
+        : LESSON_STATUS.STUDENT_NO_SHOW;
+      lesson.attendance = {
+        present,
+        markedBy: 'system',
+        markedAt: now.toISOString(),
+        source: 'auto',
+      };
+      await this.lessonRepository.save(lesson);
+      if (!present) {
+        await this.onStudentMissed(lesson);
+      }
+    }
+
+    return lessons;
+  }
+
+  /** Falta do aluno: gera a reposição no slot pré-combinado (§6.5). */
+  private async onStudentMissed(_lesson: Lesson): Promise<void> {
+    // implementado na Task 4 (serviço de reposição)
+  }
+
   /** Fecha a aula como falta do aluno (sem aviso) e dispara a reposição. */
   private async markStudentNoShow(lesson: Lesson, now: Date): Promise<void> {
     lesson.status = LESSON_STATUS.STUDENT_NO_SHOW;
@@ -213,6 +297,7 @@ export class LessonService {
       source: 'auto',
     };
     await this.lessonRepository.save(lesson);
+    await this.onStudentMissed(lesson);
   }
 
   /** Sala fixa do aluno ou da turma, cadastrada pela gerente. */

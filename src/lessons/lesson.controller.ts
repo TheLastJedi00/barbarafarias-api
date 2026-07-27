@@ -1,11 +1,14 @@
 import {
+  Body,
   Controller,
   ForbiddenException,
   Get,
   Param,
+  Post,
   Query,
 } from '@nestjs/common';
 import { LessonService } from './lesson.service';
+import { AttendanceDto } from './dto/attendance.dto';
 import { Roles } from '../decorators/roles.decorator';
 import { CurrentUser } from '../decorators/current-user.decorator';
 import type { AuthenticatedUser } from '../decorators/current-user.decorator';
@@ -40,6 +43,17 @@ export class LessonController {
     @Param('id') id: string,
   ) {
     return this.service.getAccess(user, id);
+  }
+
+  /** Presença manual (gatilho secundário), até 72 h após a aula. */
+  @Post(':id/attendance')
+  @Roles(ROLES.MANAGER, ROLES.TEACHER)
+  markAttendance(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') id: string,
+    @Body() dto: AttendanceDto,
+  ) {
+    return this.service.markAttendance(user, id, dto.present);
   }
 
   @Get('student/:studentId')
