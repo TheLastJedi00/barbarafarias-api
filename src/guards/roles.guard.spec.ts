@@ -1,4 +1,5 @@
 import { RolesGuard } from './roles.guard';
+import { ROLES } from '../types/role';
 
 function makeContext(user: unknown) {
   return {
@@ -10,7 +11,9 @@ function makeContext(user: unknown) {
 
 describe('RolesGuard', () => {
   function makeGuard(requiredRoles: string[] | undefined) {
-    const reflector = { get: jest.fn().mockReturnValue(requiredRoles) };
+    const reflector = {
+      getAllAndOverride: jest.fn().mockReturnValue(requiredRoles),
+    };
     return new RolesGuard(reflector as any);
   }
 
@@ -20,17 +23,37 @@ describe('RolesGuard', () => {
   });
 
   it('bloqueia quando não há usuário autenticado', () => {
-    const guard = makeGuard(['teacher']);
+    const guard = makeGuard([ROLES.TEACHER]);
     expect(guard.canActivate(makeContext(undefined))).toBe(false);
   });
 
   it('libera quando o usuário tem a role exigida', () => {
-    const guard = makeGuard(['teacher']);
-    expect(guard.canActivate(makeContext({ role: 'teacher' }))).toBe(true);
+    const guard = makeGuard([ROLES.TEACHER]);
+    expect(guard.canActivate(makeContext({ role: ROLES.TEACHER }))).toBe(true);
   });
 
   it('bloqueia quando o usuário tem role diferente', () => {
-    const guard = makeGuard(['teacher']);
-    expect(guard.canActivate(makeContext({ role: 'student' }))).toBe(false);
+    const guard = makeGuard([ROLES.TEACHER]);
+    expect(guard.canActivate(makeContext({ role: ROLES.STUDENT }))).toBe(false);
+  });
+
+  it('libera a gerente em rota que aceita manager e teacher', () => {
+    const guard = makeGuard([ROLES.MANAGER, ROLES.TEACHER]);
+    expect(guard.canActivate(makeContext({ role: ROLES.MANAGER }))).toBe(true);
+  });
+
+  it('bloqueia o aluno em rota de manager e teacher', () => {
+    const guard = makeGuard([ROLES.MANAGER, ROLES.TEACHER]);
+    expect(guard.canActivate(makeContext({ role: ROLES.STUDENT }))).toBe(false);
+  });
+
+  it('libera a gerente em rota legada que exige apenas teacher', () => {
+    const guard = makeGuard([ROLES.TEACHER]);
+    expect(guard.canActivate(makeContext({ role: ROLES.MANAGER }))).toBe(true);
+  });
+
+  it('nao libera a professora em rota exclusiva da gerente', () => {
+    const guard = makeGuard([ROLES.MANAGER]);
+    expect(guard.canActivate(makeContext({ role: ROLES.TEACHER }))).toBe(false);
   });
 });

@@ -8,6 +8,13 @@ import { VideoModule } from './video/video.module';
 import { PromptsModule } from './prompts/prompts.module';
 import { TurmaModule } from './turmas/turma.module';
 import { AgendaModule } from './agenda/agenda.module';
+import { CurriculumModule } from './curriculum/curriculum.module';
+import { TeacherModule } from './teachers/teacher.module';
+import { AdminModule } from './admin/admin.module';
+import { LessonModule } from './lessons/lesson.module';
+import { RescheduleModule } from './reschedules/reschedule.module';
+import { BillingModule } from './billing/billing.module';
+import { FeedbackModule } from './feedbacks/feedback.module';
 import { AuthGuard } from './guards/auth.guard';
 import { RolesGuard } from './guards/roles.guard';
 import { FirestoreModule } from './firestore/firestore.module';
@@ -23,6 +30,13 @@ import { FirestoreModule } from './firestore/firestore.module';
     PromptsModule,
     TurmaModule,
     AgendaModule,
+    CurriculumModule,
+    TeacherModule,
+    AdminModule,
+    LessonModule,
+    RescheduleModule,
+    BillingModule,
+    FeedbackModule,
   ],
   providers: [
     {

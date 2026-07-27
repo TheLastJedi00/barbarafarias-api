@@ -1,11 +1,15 @@
 export type OccupantType = 'student' | 'turma';
 
 /**
- * Slot da agenda semanal recorrente. Identificado por (dayOfWeek, hour).
- * Comporta UM ocupante: um aluno avulso OU uma turma (nunca ambos).
- * Persistido com docId = `${dayOfWeek}_${hour}` (garante 1 ocupante por slot).
+ * Slot da agenda semanal recorrente de UMA professora, identificado por
+ * (teacherId, dayOfWeek, hour). Comporta um ocupante: um aluno avulso OU uma
+ * turma (nunca ambos). Persistido com docId `${teacherId}_${dayOfWeek}_${hour}`
+ * — garante 1 ocupante por slot da professora e permite que duas professoras
+ * usem o mesmo dia/hora (spec 010 §5.4).
  */
 export class AgendaSlot {
+  teacherId: string;
+  teacherName?: string;
   dayOfWeek: number; // 0=domingo … 6=sábado
   hour: number; // 8..20
   occupantType: OccupantType;
@@ -15,13 +19,18 @@ export class AgendaSlot {
   turmaName?: string;
 
   constructor(
+    teacherId: string,
     dayOfWeek: number,
     hour: number,
     occupantType: OccupantType,
     fields: Partial<
-      Pick<AgendaSlot, 'studentId' | 'studentName' | 'turmaId' | 'turmaName'>
+      Pick<
+        AgendaSlot,
+        'teacherName' | 'studentId' | 'studentName' | 'turmaId' | 'turmaName'
+      >
     > = {},
   ) {
+    this.teacherId = teacherId;
     this.dayOfWeek = dayOfWeek;
     this.hour = hour;
     this.occupantType = occupantType;
@@ -35,4 +44,6 @@ export interface StudentSchedule {
   hour: number;
   kind: 'individual' | 'turma';
   turmaName?: string;
+  teacherId?: string;
+  teacherName?: string;
 }

@@ -8,6 +8,7 @@ describe('UserService', () => {
     findById: jest.Mock;
     update: jest.Mock;
     save: jest.Mock;
+    findAll: jest.Mock;
   };
   let authService: {
     registerCredentials: jest.Mock;
@@ -19,6 +20,7 @@ describe('UserService', () => {
       findById: jest.fn(),
       update: jest.fn().mockResolvedValue(undefined),
       save: jest.fn().mockResolvedValue('uid-1'),
+      findAll: jest.fn().mockResolvedValue([]),
     };
     authService = {
       registerCredentials: jest.fn().mockResolvedValue(undefined),
@@ -46,6 +48,23 @@ describe('UserService', () => {
       userRepository.save.mockRejectedValue(new Error('firestore down'));
       await expect(service.createUser(dto)).rejects.toThrow('firestore down');
       expect(authService.removeCredentials).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe('getAllUsers', () => {
+    it('repassa o papel "student" ao repositório (garante que teachers não vazam)', async () => {
+      const alunos = [new User({ id: 'a1', fullName: 'Ana', isTeacher: false })];
+      userRepository.findAll.mockResolvedValue(alunos);
+
+      const result = await service.getAllUsers('student');
+
+      expect(userRepository.findAll).toHaveBeenCalledWith('student');
+      expect(result).toBe(alunos);
+    });
+
+    it('sem papel, delega a busca sem filtro', async () => {
+      await service.getAllUsers();
+      expect(userRepository.findAll).toHaveBeenCalledWith(undefined);
     });
   });
 

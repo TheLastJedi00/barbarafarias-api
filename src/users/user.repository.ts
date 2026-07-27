@@ -3,6 +3,7 @@ import { User } from './user.entity';
 import { Firestore } from 'firebase-admin/firestore';
 import { FIRESTORE } from '../firestore/firestore.module';
 import { instanceToPlain, plainToInstance } from 'class-transformer';
+import { ROLES, Role, resolveRole } from '../types/role';
 
 @Injectable()
 export class UserRepository {
@@ -14,13 +15,36 @@ export class UserRepository {
     return uid;
   }
 
-  async findAll(): Promise<User[]> {
-    const querySnapshot = await this.db.collection('users').get();
-    const users = querySnapshot.docs.map((doc) => {
-      const data = doc.data();
-      return plainToInstance(User, data);
-    });
-    return users;
+  /**
+   * Lista usuários. Quando `role` é informado, consulta o Firestore pelo papel
+   * novo e pelo booleano legado (documentos ainda não migrados) e reconcilia o
+   * resultado com `resolveRole` — assim a listagem de alunos nunca vaza
+   * professoras, mesmo com a base em migração (spec 010 §2.1).
+   */
+  async findAll(role?: Role): Promise<User[]> {
+    const collection = this.db.collection('users');
+
+    if (!role) {
+      const snapshot = await collection.get();
+      return snapshot.docs.map((doc) => plainToInstance(User, doc.data()));
+    }
+
+    const queries = [collection.where('role', '==', role)];
+    if (role === ROLES.STUDENT) {
+      queries.push(collection.where('isTeacher', '==', false));
+    } else if (role === ROLES.TEACHER) {
+      queries.push(collection.where('isTeacher', '==', true));
+    }
+
+    const snapshots = await Promise.all(queries.map((query) => query.get()));
+    const byId = new Map<string, User>();
+    for (const snapshot of snapshots) {
+      for (const doc of snapshot.docs) {
+        byId.set(doc.id, plainToInstance(User, doc.data()));
+      }
+    }
+
+    return [...byId.values()].filter((user) => resolveRole(user) === role);
   }
 
   async findById(id: string): Promise<User | null> {
