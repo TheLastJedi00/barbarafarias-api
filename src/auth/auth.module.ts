@@ -5,6 +5,7 @@ import { AuthService } from './auth.service';
 import { BcryptService } from './bcrypt.service';
 import { AuthController } from './auth.controller';
 import { AuthRepository } from './auth.repository';
+import { UserRepository } from '../users/user.repository';
 
 @Module({
   imports: [
@@ -22,6 +23,11 @@ import { AuthRepository } from './auth.repository';
     AuthService,
     BcryptService,
     AuthRepository,
+    // Provido aqui, e não via UserModule, porque UserModule já importa
+    // AuthModule — importar de volta criaria ciclo. O repositório é stateless
+    // sobre o token global do Firestore, então a segunda instância é
+    // inofensiva (mesmo padrão do BillingModule).
+    UserRepository,
   ],
   exports: [AuthService],
 })

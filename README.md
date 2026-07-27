@@ -202,10 +202,19 @@ A API utiliza um sistema duplo de proteção:
 - **A gerente herda as permissões da professora** no `RolesGuard`: rotas anotadas com
   `@Roles(TEACHER)` também liberam `manager`. Sem isso, migrar a gerente para `manager`
   a barraria em todo o painel legado.
-- **O papel do JWT vem da coleção `credentials`**, não de `users` — `AuthRepository` grava
-  `{ id, email, password, role }` e o login lê dali. `users.role` é a cópia usada pela
-  aplicação; a rotina de migração mantém as duas em sincronia.
-- `resolveRole(user)` lê `role` e cai para o legado `isTeacher` enquanto a base migra.
+- **`users.role` é a fonte única do papel.** É o campo que todas as consultas do servidor
+  usam — listar professoras, achar as gerentes para notificar, filtrar alunos. O Firestore
+  não faz join, então o papel precisa morar no documento consultado.
+- **O login lê o papel de `users`** (uma leitura a mais por login, não por requisição — o JWT
+  carrega a role depois disso). `credentials` guarda o que a autenticação precisa: e-mail e
+  hash da senha.
+- **`credentials.role` é ponte de transição**, não fonte: quem ainda não tem `users.role`
+  continua entrando com o papel certo, e um rollback do deploy não tranca ninguém. Sai de
+  cena quando a base estiver migrada.
+- Precedência no login: `users.role` → `credentials.role` → `isTeacher` (legado) → `student`
+  (menor privilégio). Mesma ordem usada por `POST /admin/migrate-roles`.
+- **Promover alguém à mão:** edite `users/{id}.role`. Depois é só relogar — ou rodar
+  "Corrigir papéis dos usuários" no painel, que propaga para o resto da base.
 
 ### Header de Autenticação
 
