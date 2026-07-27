@@ -1,0 +1,24 @@
+{
+  "$comment": "Índices compostos exigidos pelas consultas de aulas (spec 010). O Firestore cria índices de campo único sozinho, e resolve consultas só de igualdade combinando-os; composto é obrigatório quando há igualdade + INTERVALO no mesmo query — que é o caso das duas abaixo (filtro por dono + janela de datas). Publique com: firebase deploy --only firestore:indexes",
+  "indexes": [
+    {
+      "$comment": "GET /lessons/student/:id?from=&to= — aulas do aluno no período.",
+      "collectionGroup": "lessons",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "studentId", "order": "ASCENDING" },
+        { "fieldPath": "date", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "$comment": "GET /lessons?from=&to=&teacherId= — agenda semanal/mensal da professora e fechamento do financeiro.",
+      "collectionGroup": "lessons",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "teacherId", "order": "ASCENDING" },
+        { "fieldPath": "date", "order": "ASCENDING" }
+      ]
+    }
+  ],
+  "fieldOverrides": []
+}
