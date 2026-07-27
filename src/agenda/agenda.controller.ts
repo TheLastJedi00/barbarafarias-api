@@ -6,6 +6,7 @@ import {
   Param,
   ParseIntPipe,
   Post,
+  Query,
 } from '@nestjs/common';
 import { AgendaService } from './agenda.service';
 import { AssignSlotDto } from './dto/assign-slot.dto';
@@ -17,9 +18,9 @@ export class AgendaController {
   constructor(private readonly agendaService: AgendaService) {}
 
   @Get()
-  @Roles(ROLES.TEACHER)
-  getGrid() {
-    return this.agendaService.getGrid();
+  @Roles(ROLES.MANAGER, ROLES.TEACHER)
+  getGrid(@Query('teacherId') teacherId?: string) {
+    return this.agendaService.getGrid(teacherId);
   }
 
   // Sem @Roles: acessível a qualquer usuário autenticado (o aluno vê o próprio horário).
@@ -29,17 +30,18 @@ export class AgendaController {
   }
 
   @Post()
-  @Roles(ROLES.TEACHER)
+  @Roles(ROLES.MANAGER, ROLES.TEACHER)
   assign(@Body() dto: AssignSlotDto) {
     return this.agendaService.assign(dto);
   }
 
-  @Delete(':dayOfWeek/:hour')
-  @Roles(ROLES.TEACHER)
+  @Delete(':teacherId/:dayOfWeek/:hour')
+  @Roles(ROLES.MANAGER, ROLES.TEACHER)
   free(
+    @Param('teacherId') teacherId: string,
     @Param('dayOfWeek', ParseIntPipe) dayOfWeek: number,
     @Param('hour', ParseIntPipe) hour: number,
   ) {
-    return this.agendaService.free(dayOfWeek, hour);
+    return this.agendaService.free(teacherId, dayOfWeek, hour);
   }
 }

@@ -11,9 +11,9 @@ export class AgendaService {
     private readonly turmaRepository: TurmaRepository,
   ) {}
 
-  async getGrid(): Promise<AgendaSlot[]> {
+  async getGrid(teacherId?: string): Promise<AgendaSlot[]> {
     const [slots, turmas] = await Promise.all([
-      this.agendaRepository.findAll(),
+      this.agendaRepository.findAll(teacherId),
       this.turmaRepository.findAll(),
     ]);
     const validTurmaIds = new Set(turmas.map((t) => t.id));
@@ -25,17 +25,24 @@ export class AgendaService {
   }
 
   async assign(dto: AssignSlotDto): Promise<void> {
-    const slot = new AgendaSlot(dto.dayOfWeek, dto.hour, dto.occupantType, {
-      studentId: dto.studentId,
-      studentName: dto.studentName,
-      turmaId: dto.turmaId,
-      turmaName: dto.turmaName,
-    });
+    const slot = new AgendaSlot(
+      dto.teacherId,
+      dto.dayOfWeek,
+      dto.hour,
+      dto.occupantType,
+      {
+        teacherName: dto.teacherName,
+        studentId: dto.studentId,
+        studentName: dto.studentName,
+        turmaId: dto.turmaId,
+        turmaName: dto.turmaName,
+      },
+    );
     await this.agendaRepository.upsert(slot);
   }
 
-  free(dayOfWeek: number, hour: number): Promise<void> {
-    return this.agendaRepository.remove(dayOfWeek, hour);
+  free(teacherId: string, dayOfWeek: number, hour: number): Promise<void> {
+    return this.agendaRepository.remove(teacherId, dayOfWeek, hour);
   }
 
   /**
@@ -56,12 +63,16 @@ export class AgendaService {
       dayOfWeek: s.dayOfWeek,
       hour: s.hour,
       kind: 'individual',
+      teacherId: s.teacherId,
+      teacherName: s.teacherName,
     }));
     const group: StudentSchedule[] = turmaSlots.map((s) => ({
       dayOfWeek: s.dayOfWeek,
       hour: s.hour,
       kind: 'turma',
       turmaName: s.turmaName,
+      teacherId: s.teacherId,
+      teacherName: s.teacherName,
     }));
 
     return [...individual, ...group].sort(

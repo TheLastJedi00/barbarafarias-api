@@ -1,6 +1,7 @@
 import {
   IsIn,
   IsInt,
+  IsOptional,
   IsString,
   Max,
   Min,
@@ -8,6 +9,14 @@ import {
 } from 'class-validator';
 
 export class AssignSlotDto {
+  /** Professora dona do slot; a gerente pode informar qualquer uma. */
+  @IsString()
+  teacherId!: string;
+
+  @IsString()
+  @IsOptional()
+  teacherName?: string;
+
   @IsInt()
   @Min(0)
   @Max(6)
