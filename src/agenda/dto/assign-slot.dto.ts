@@ -10,10 +10,10 @@ import {
 } from 'class-validator';
 
 export class AssignSlotDto {
-  /** Professora dona do slot; a gerente pode informar qualquer uma. */
+  /** Professora dona do slot; a gerente pode informar qualquer uma. Se omitido, assume o usuário logado no controller. */
   @IsString()
-  @IsNotEmpty({ message: 'teacherId é obrigatório' })
-  teacherId!: string;
+  @IsOptional()
+  teacherId?: string;
 
   @IsString()
   @IsOptional()
