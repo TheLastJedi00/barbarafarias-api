@@ -1,4 +1,4 @@
-import { ForbiddenException, Injectable } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Injectable } from '@nestjs/common';
 import { AgendaRepository } from './agenda.repository';
 import { TurmaRepository } from '../turmas/turma.repository';
 import { AgendaSlot, StudentSchedule } from './agenda.entity';
@@ -41,6 +41,9 @@ export class AgendaService {
   }
 
   async assign(dto: AssignSlotDto): Promise<void> {
+    if (!dto.teacherId) {
+      throw new BadRequestException('teacherId é obrigatório');
+    }
     const slot = new AgendaSlot(
       dto.teacherId,
       dto.dayOfWeek,

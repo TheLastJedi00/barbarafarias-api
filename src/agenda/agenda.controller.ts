@@ -46,8 +46,8 @@ export class AgendaController {
   @Post()
   @Roles(ROLES.MANAGER, ROLES.TEACHER)
   assign(@CurrentUser() user: AuthenticatedUser, @Body() dto: AssignSlotDto) {
-    const teacherId = this.agendaService.resolveScope(user, dto.teacherId);
-    return this.agendaService.assign({ ...dto, teacherId: teacherId! });
+    const teacherId = this.agendaService.resolveScope(user, dto.teacherId) ?? user.sub;
+    return this.agendaService.assign({ ...dto, teacherId });
   }
 
   @Delete(':teacherId/:dayOfWeek/:hour')

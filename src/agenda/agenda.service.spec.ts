@@ -95,6 +95,29 @@ describe('AgendaService', () => {
         }),
       );
     });
+
+    it('permite alocacao quando o resolveScope fornece o teacherId de fallback', async () => {
+      const resolvedTeacherId = service.resolveScope(teacher, undefined) ?? teacher.sub;
+      expect(resolvedTeacherId).toBe('t1');
+
+      await service.assign({
+        teacherId: resolvedTeacherId,
+        dayOfWeek: 1,
+        hour: 9,
+        occupantType: 'student',
+        studentId: 's2',
+        studentName: 'Maria',
+      } as any);
+
+      expect(agendaRepository.upsert).toHaveBeenCalledWith(
+        expect.objectContaining({
+          teacherId: 't1',
+          dayOfWeek: 1,
+          hour: 9,
+          studentId: 's2',
+        }),
+      );
+    });
   });
 
   describe('getStudentSchedule', () => {
