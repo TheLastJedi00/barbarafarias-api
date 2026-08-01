@@ -73,6 +73,10 @@ export class AgendaService {
     }
 
     await this.assertFree(dto.teacherId, dto.dayOfWeek, hours);
+    // Reescrever um bloco de 1 hora como meia hora deixaria a segunda
+    // metade para trás, apontando para um bloco que não existe mais — uma
+    // meia-hora fantasma ocupada na grade. Limpa antes de gravar.
+    await this.dropStaleHalves(dto.teacherId, dto.dayOfWeek, dto.hour, hours);
 
     const slots = hours.map(
       (hour) =>
@@ -87,6 +91,31 @@ export class AgendaService {
         }),
     );
     await this.agendaRepository.upsertMany(slots);
+  }
+
+  /**
+   * Meias-horas que pertenciam ao bloco que começa em `startHour` e que a
+   * nova alocação não vai mais cobrir.
+   */
+  private async dropStaleHalves(
+    teacherId: string,
+    dayOfWeek: number,
+    startHour: number,
+    nextHours: number[],
+  ): Promise<void> {
+    const previous = await this.agendaRepository.findBySlot(
+      teacherId,
+      dayOfWeek,
+      startHour,
+    );
+    if (!previous) return;
+
+    const stale = previous
+      .coveredHours()
+      .filter((hour) => !nextHours.includes(hour));
+    if (stale.length > 0) {
+      await this.agendaRepository.removeMany(teacherId, dayOfWeek, stale);
+    }
   }
 
   /**
