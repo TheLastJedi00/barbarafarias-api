@@ -22,3 +22,4 @@
 
 ## Bug Fixes
 - **Fix [Nest] 23164 (Firestore undefined field `profileImageUrl`)** — Configuramos o Firestore em `FirestoreModule` com a opção `ignoreUndefinedProperties: true` para ignorar propriedades indefinidas, prevenindo crashes ao tentar salvar objetos com valores `undefined` via repositório.
+- **Fix 404 Cannot POST /uploads/avatars** — Adicionado o `UploadModule` no array de `imports` do `AppModule`. O módulo existia, mas não estava registrado na raiz da aplicação.

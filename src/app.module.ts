@@ -34,6 +34,7 @@ import { FirestoreModule } from './firestore/firestore.module';
     AgendaModule,
     CurriculumModule,
     ArticleModule,
+    UploadModule,
     TeacherModule,
     AdminModule,
     LessonModule,
