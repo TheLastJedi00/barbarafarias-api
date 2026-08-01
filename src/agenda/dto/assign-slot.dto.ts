@@ -8,22 +8,9 @@ import {
   Min,
   Validate,
   ValidateIf,
-  ValidatorConstraint,
 } from 'class-validator';
-import type { ValidatorConstraintInterface } from 'class-validator';
-import { FIRST_HOUR, LAST_HOUR, isValidSlotHour } from '../../common/slot-time';
-
-/** Barra horas como 8.25: a agenda só existe em passos de 30 minutos. */
-@ValidatorConstraint({ name: 'isHalfHourStep', async: false })
-export class IsHalfHourStep implements ValidatorConstraintInterface {
-  validate(value: unknown): boolean {
-    return typeof value === 'number' && isValidSlotHour(value);
-  }
-
-  defaultMessage(): string {
-    return 'hour deve estar em passos de 30 minutos (ex.: 8, 8.5, 9)';
-  }
-}
+import { FIRST_HOUR, LAST_HOUR } from '../../common/slot-time';
+import { IsHalfHourStep } from '../../common/half-hour-step.validator';
 
 export class AssignSlotDto {
   /** Professora dona do slot; a gerente pode informar qualquer uma. Se omitido, assume o usuário logado no controller. */
