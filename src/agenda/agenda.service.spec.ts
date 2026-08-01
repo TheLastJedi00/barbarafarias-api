@@ -9,8 +9,11 @@ describe('AgendaService', () => {
     findAll: jest.Mock;
     findByStudentId: jest.Mock;
     findByTurmaIds: jest.Mock;
+    findCovering: jest.Mock;
     upsert: jest.Mock;
+    upsertMany: jest.Mock;
     remove: jest.Mock;
+    removeMany: jest.Mock;
   };
   let turmaRepository: { findAll: jest.Mock };
 
@@ -19,8 +22,11 @@ describe('AgendaService', () => {
       findAll: jest.fn().mockResolvedValue([]),
       findByStudentId: jest.fn().mockResolvedValue([]),
       findByTurmaIds: jest.fn().mockResolvedValue([]),
+      findCovering: jest.fn().mockResolvedValue([]),
       upsert: jest.fn().mockResolvedValue(undefined),
+      upsertMany: jest.fn().mockResolvedValue(undefined),
       remove: jest.fn().mockResolvedValue(undefined),
+      removeMany: jest.fn().mockResolvedValue(undefined),
     };
     turmaRepository = { findAll: jest.fn().mockResolvedValue([]) };
     service = new AgendaService(
@@ -85,15 +91,26 @@ describe('AgendaService', () => {
         studentName: 'Léo',
       } as any);
 
-      expect(agendaRepository.upsert).toHaveBeenCalledWith(
+      // aula padrão de 1 hora → dois documentos de 30 min (spec 011 RF5)
+      expect(agendaRepository.upsertMany).toHaveBeenCalledWith([
         expect.objectContaining({
           teacherId: 't1',
           teacherName: 'Ana',
           dayOfWeek: 3,
           hour: 10,
+          startHour: 10,
+          slotCount: 2,
           studentId: 's1',
         }),
-      );
+        expect.objectContaining({
+          teacherId: 't1',
+          dayOfWeek: 3,
+          hour: 10.5,
+          startHour: 10,
+          slotCount: 2,
+          studentId: 's1',
+        }),
+      ]);
     });
 
     it('permite alocacao quando o resolveScope fornece o teacherId de fallback', async () => {
@@ -109,14 +126,15 @@ describe('AgendaService', () => {
         studentName: 'Maria',
       } as any);
 
-      expect(agendaRepository.upsert).toHaveBeenCalledWith(
+      expect(agendaRepository.upsertMany).toHaveBeenCalledWith([
         expect.objectContaining({
           teacherId: 't1',
           dayOfWeek: 1,
           hour: 9,
           studentId: 's2',
         }),
-      );
+        expect.objectContaining({ hour: 9.5, startHour: 9 }),
+      ]);
     });
   });
 
