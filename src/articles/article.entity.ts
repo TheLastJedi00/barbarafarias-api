@@ -13,6 +13,8 @@ export class Article {
   coverImageUrl?: string;
   authorId!: string;
   authorName?: string;
+  authorRole?: string;
+  status?: 'draft' | 'pending' | 'published';
   createdAt!: string; // ISO
   updatedAt!: string; // ISO
 

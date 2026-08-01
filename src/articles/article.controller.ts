@@ -13,6 +13,7 @@ import {
   ArticleSummaryDto,
   CreateArticleDto,
   UpdateArticleDto,
+  ArticleDto,
 } from './dto/article.dto';
 import { Article } from './article.entity';
 import { Roles } from '../decorators/roles.decorator';
@@ -33,30 +34,37 @@ export class ArticleController {
   @Get()
   @Roles(ROLES.MANAGER, ROLES.TEACHER, ROLES.STUDENT)
   async findAll(): Promise<ArticleSummaryDto[]> {
-    const articles = await this.service.findAll();
-    return articles.map((article) => new ArticleSummaryDto(article));
+    return this.service.findAll();
   }
 
   @Get(':id')
   @Roles(ROLES.MANAGER, ROLES.TEACHER, ROLES.STUDENT)
-  findById(@Param('id') id: string): Promise<Article> {
+  findById(@Param('id') id: string): Promise<ArticleDto> {
     return this.service.findById(id);
   }
 
   @Post()
+  @Roles(ROLES.MANAGER, ROLES.TEACHER)
   create(
     @CurrentUser() user: AuthenticatedUser,
     @Body() dto: CreateArticleDto,
-  ): Promise<Article> {
-    return this.service.create(dto, user.sub);
+  ): Promise<ArticleDto> {
+    return this.service.create(dto, user);
   }
 
   @Put(':id')
+  @Roles(ROLES.MANAGER, ROLES.TEACHER)
   update(
     @Param('id') id: string,
     @Body() dto: UpdateArticleDto,
-  ): Promise<Article> {
+  ): Promise<ArticleDto> {
     return this.service.update(id, dto);
+  }
+
+  @Post(':id/approve')
+  @Roles(ROLES.MANAGER)
+  approve(@Param('id') id: string): Promise<ArticleDto> {
+    return this.service.approve(id);
   }
 
   @Delete(':id')

@@ -55,6 +55,8 @@ export class ArticleRepository {
       coverImageUrl: article.coverImageUrl ?? null,
       authorId: article.authorId,
       authorName: article.authorName ?? null,
+      authorRole: article.authorRole ?? null,
+      status: article.status ?? 'draft',
       createdAt: article.createdAt,
       updatedAt: article.updatedAt,
     };
@@ -68,6 +70,8 @@ export class ArticleRepository {
       coverImageUrl: data.coverImageUrl ?? undefined,
       authorId: data.authorId ?? '',
       authorName: data.authorName ?? undefined,
+      authorRole: data.authorRole ?? undefined,
+      status: data.status ?? 'draft',
       createdAt: data.createdAt ?? '',
       updatedAt: data.updatedAt ?? data.createdAt ?? '',
     });

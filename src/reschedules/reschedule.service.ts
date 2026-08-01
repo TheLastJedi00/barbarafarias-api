@@ -87,6 +87,8 @@ export class RescheduleService {
         reasonType: dto.reasonType,
         reasonText: dto.reasonText,
         status: RESCHEDULE_STATUS.PENDING,
+        requesterId: user.sub,
+        requesterRole: user.role,
         requestedAt: now.toISOString(),
       }),
     );
@@ -118,8 +120,20 @@ export class RescheduleService {
     };
   }
 
-  listPending(): Promise<RescheduleRequest[]> {
-    return this.rescheduleRepository.findByStatus(RESCHEDULE_STATUS.PENDING);
+  async listPending(user: AuthenticatedUser): Promise<RescheduleRequest[]> {
+    const pending = await this.rescheduleRepository.findByStatus(RESCHEDULE_STATUS.PENDING);
+    if (user.role === ROLES.MANAGER) {
+      return pending;
+    }
+    return pending.filter((r) => r.teacherId === user.sub);
+  }
+
+  async listStudentRequests(user: AuthenticatedUser): Promise<RescheduleRequest[]> {
+    const pending = await this.rescheduleRepository.findByStatus(RESCHEDULE_STATUS.PENDING);
+    // Professor só vê pedidos dos seus alunos
+    return pending.filter(
+      (r) => r.teacherId === user.sub && r.requesterRole === ROLES.STUDENT,
+    );
   }
 
   listMine(teacherId: string): Promise<RescheduleRequest[]> {

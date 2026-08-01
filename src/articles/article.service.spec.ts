@@ -39,14 +39,14 @@ describe('ArticleService', () => {
 
   describe('create', () => {
     it('carimba autor, nome e datas', async () => {
-      const article = await service.create(
+      const result = await service.create(
         { title: 'Novo', content: 'texto' },
-        'm1',
+        { sub: 'm1', role: 'manager' },
       );
 
-      expect(article.authorId).toBe('m1');
-      expect(article.authorName).toBe('Bárbara');
-      expect(article.createdAt).toBe(article.updatedAt);
+      expect(result.author.id).toBe('m1');
+      expect(result.author.name).toBe('Bárbara');
+      expect(result.createdAt).toBe(result.updatedAt);
       expect(repository.create).toHaveBeenCalled();
     });
   });
