@@ -23,3 +23,4 @@
 ## Bug Fixes
 - **Fix [Nest] 23164 (Firestore undefined field `profileImageUrl`)** — Configuramos o Firestore em `FirestoreModule` com a opção `ignoreUndefinedProperties: true` para ignorar propriedades indefinidas, prevenindo crashes ao tentar salvar objetos com valores `undefined` via repositório.
 - **Fix 404 Cannot POST /uploads/avatars** — Adicionado o `UploadModule` no array de `imports` do `AppModule`. O módulo existia, mas não estava registrado na raiz da aplicação.
+- **Fix 400 Bad Request em /teachers/me** — Adicionada a propriedade `phoneVisibleToStudent` ao `UpdateTeacherProfileDto` com os decorators de validação corretos. Isso permite que a requisição principal de atualização do perfil da professora processe essa chave, resolvendo o erro de restrição de whitelist do class-validator.

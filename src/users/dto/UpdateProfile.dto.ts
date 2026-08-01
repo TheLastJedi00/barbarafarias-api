@@ -1,4 +1,4 @@
-import { IsOptional, IsString, MaxLength } from 'class-validator';
+import { IsBoolean, IsOptional, IsString, MaxLength } from 'class-validator';
 
 /**
  * Edição que o próprio usuário faz do seu perfil (spec 011 RF13/RF14).
@@ -23,10 +23,13 @@ export class UpdateProfileDto {
   profileImageUrl?: string;
 }
 
-/** Perfil da professora: tudo do aluno mais a bio de apresentação. */
 export class UpdateTeacherProfileDto extends UpdateProfileDto {
   @IsString()
   @IsOptional()
   @MaxLength(600, { message: 'Bio deve ter no máximo 600 caracteres' })
   bio?: string;
+
+  @IsBoolean()
+  @IsOptional()
+  phoneVisibleToStudent?: boolean;
 }
