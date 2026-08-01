@@ -19,7 +19,9 @@ export const FIRESTORE = Symbol('FIRESTORE');
       provide: FIRESTORE,
       useFactory: (): Firestore => {
         initializeFirebase();
-        return admin.firestore();
+        const db = admin.firestore();
+        db.settings({ ignoreUndefinedProperties: true });
+        return db;
       },
     },
   ],

@@ -19,3 +19,6 @@
 - **Task 1** — Aplicar Guards rigorosos nas rotas de Gestão de Alunos. Somente `MANAGER` pode criar alunos.
 - **Task 2** — Modificar a listagem de alunos: `GET /students` para a professora retorna apenas os vinculados ao seu `teacherId`.
 - **Task 3** — Criar endpoint financeiro para a professora (`GET /finance/teacher/me`), retornando cálculo de faturamento (mensal/semanal) baseado nos alunos ativos e valor-hora.
+
+## Bug Fixes
+- **Fix [Nest] 23164 (Firestore undefined field `profileImageUrl`)** — Configuramos o Firestore em `FirestoreModule` com a opção `ignoreUndefinedProperties: true` para ignorar propriedades indefinidas, prevenindo crashes ao tentar salvar objetos com valores `undefined` via repositório.
