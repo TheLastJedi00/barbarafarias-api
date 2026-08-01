@@ -26,3 +26,8 @@ Para proteger e limpar as senhas já salvas na coleção `users`, recomendamos a
 2. Onde existir uma propriedade `password`, aplique uma mutação utilizando `FieldValue.delete()` unicamente naquele campo.
 
 Isso não causará nenhuma falha na aplicação nem nos logins futuros, já que a verificação verdadeira do login, tokens e senhas sempre foi realizada pelo FirebaseAuth de forma totalmente agnóstica à base do Firestore.
+
+## Tasks
+- [x] Corrigir vazamento da senha via DTO no `UserService`.
+- [x] Fazer merge na branch `dev` e abrir PR para `main`.
+- [ ] Criar script/endpoint para limpar `password` de usuários antigos do Firestore.
