@@ -56,7 +56,7 @@ export class ArticleRepository {
       authorId: article.authorId,
       authorName: article.authorName ?? null,
       authorRole: article.authorRole ?? null,
-      status: article.status ?? 'draft',
+      status: article.status ?? null,
       createdAt: article.createdAt,
       updatedAt: article.updatedAt,
     };
@@ -71,7 +71,10 @@ export class ArticleRepository {
       authorId: data.authorId ?? '',
       authorName: data.authorName ?? undefined,
       authorRole: data.authorRole ?? undefined,
-      status: data.status ?? 'draft',
+      // Sem default: artigo da Fase 3 não tem `status`, e assumir `draft` aqui
+      // esconderia da biblioteca material que sempre esteve no ar. Quem
+      // resolve a ausência é o `statusOf` do service.
+      status: data.status ?? undefined,
       createdAt: data.createdAt ?? '',
       updatedAt: data.updatedAt ?? data.createdAt ?? '',
     });
