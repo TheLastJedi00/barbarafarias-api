@@ -4,6 +4,7 @@ import {
   Delete,
   Get,
   Param,
+  Patch,
   Post,
   Put,
   Query,
@@ -11,7 +12,10 @@ import {
 import { CreateUserDto } from './dto/CreateUser.dto';
 import { User } from './user.entity';
 import { UpdateUserDto } from './dto/UpdateUser.dto';
+import { UpdateProfileDto } from './dto/UpdateProfile.dto';
 import { Roles } from '../decorators/roles.decorator';
+import { CurrentUser } from '../decorators/current-user.decorator';
+import type { AuthenticatedUser } from '../decorators/current-user.decorator';
 import { ResponseUserDto } from './dto/ResponseUser.dto';
 import { UserService } from './user.service';
 import { ROLES } from '../types/role';
@@ -31,6 +35,23 @@ export class UserController {
   async getAll(@Query('role') role?: Role): Promise<User[]> {
     return this.service.getAllUsers(role);
   }
+  /** Perfil do aluno logado. Rota fixa antes das paramétricas. */
+  @Get('me')
+  @Roles(ROLES.STUDENT)
+  async me(@CurrentUser() user: AuthenticatedUser): Promise<User> {
+    return this.service.findById(user.sub);
+  }
+
+  /** Edição que o próprio aluno faz: nome, telefone e foto (spec 011 RF14). */
+  @Patch('me')
+  @Roles(ROLES.STUDENT)
+  async updateOwnProfile(
+    @CurrentUser() user: AuthenticatedUser,
+    @Body() dto: UpdateProfileDto,
+  ): Promise<User> {
+    return this.service.updateOwnProfile(user.sub, dto);
+  }
+
   @Get(':id')
   async findById(@Param('id') id: string): Promise<User | null> {
     return this.service.findById(id);

@@ -10,6 +10,8 @@ import { AuthService } from '../auth/auth.service';
 import { User } from '../users/user.entity';
 import { CreateTeacherDto } from './dto/CreateTeacher.dto';
 import { UpdateTeacherDto } from './dto/UpdateTeacher.dto';
+import { UpdateTeacherProfileDto } from '../users/dto/UpdateProfile.dto';
+import { pickDefined } from '../common/patch';
 import { ROLES, resolveRole, isStaff } from '../types/role';
 import { NotificationService } from '../notifications/notification.service';
 
@@ -89,7 +91,22 @@ export class TeacherService {
 
   async update(id: string, dto: UpdateTeacherDto): Promise<User> {
     const teacher = await this.findById(id);
-    const updated = new User({ ...teacher, ...dto, id });
+    const updated = new User({ ...teacher, ...pickDefined(dto), id });
+    await this.userRepository.update(updated);
+    return updated;
+  }
+
+  /**
+   * Edição que a própria professora faz do seu perfil (spec 011 RF13).
+   * Restrito a nome, telefone, foto e bio: dados fiscais e valor-hora
+   * continuam saindo só pelo painel da gerente.
+   */
+  async updateOwnProfile(
+    id: string,
+    dto: UpdateTeacherProfileDto,
+  ): Promise<User> {
+    const teacher = await this.findById(id);
+    const updated = new User({ ...teacher, ...pickDefined(dto), id });
     await this.userRepository.update(updated);
     return updated;
   }
