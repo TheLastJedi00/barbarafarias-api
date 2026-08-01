@@ -30,4 +30,13 @@ Isso não causará nenhuma falha na aplicação nem nos logins futuros, já que 
 ## Tasks
 - [x] Corrigir vazamento da senha via DTO no `UserService`.
 - [x] Fazer merge na branch `dev` e abrir PR para `main`.
-- [ ] Criar script/endpoint para limpar `password` de usuários antigos do Firestore.
+- [x] ~~Criar script/endpoint para limpar `password` de usuários antigos do Firestore.~~
+  **Feito manualmente pelo dono em 2026-08-01** — a coleção `users` foi saneada direto no
+  console. Não há script a escrever.
+
+## Nota de fechamento (2026-08-01)
+
+A auditoria da spec 011 encontrou um agravante que já não vale mais: `GET /users/:id` estava
+**sem `@Roles`**, então qualquer usuário autenticado lia o documento cru de qualquer pessoa
+— inclusive os `password` ainda não saneados. As duas pontas foram fechadas: a base está
+limpa e a rota passou a ser recortada por papel (fix A11).
