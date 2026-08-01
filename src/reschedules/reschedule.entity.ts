@@ -45,6 +45,8 @@ export class RescheduleRequest {
   reasonType!: ReasonType;
   reasonText?: string;
   status!: RescheduleStatus;
+  requesterId?: string;
+  requesterRole?: string;
   requestedAt!: string;
   decidedAt?: string;
   decidedBy?: string;

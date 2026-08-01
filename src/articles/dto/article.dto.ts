@@ -1,5 +1,6 @@
 import { IsNotEmpty, IsOptional, IsString, MaxLength } from 'class-validator';
 import { Article } from '../article.entity';
+import { User } from '../../users/user.entity';
 
 export class CreateArticleDto {
   @IsString()
@@ -31,27 +32,75 @@ export class UpdateArticleDto {
   coverImageUrl?: string;
 }
 
-/**
- * Item de listagem: sem o corpo em Markdown, que pode ser longo. A lista de
- * artigos do aluno carrega dezenas de registros e não precisa do texto inteiro.
- */
 export class ArticleSummaryDto {
   id: string;
   title: string;
   coverImageUrl?: string;
-  authorName?: string;
+  status: string;
+  authorRole: string;
+  author: {
+    id: string;
+    name: string;
+    avatarUrl?: string;
+    bio?: string;
+    phone?: string;
+  };
   createdAt: string;
   updatedAt: string;
   excerpt: string;
 
-  constructor(article: Article) {
+  constructor(article: Article, authorUser?: User | null) {
     this.id = article.id!;
     this.title = article.title;
     this.coverImageUrl = article.coverImageUrl;
-    this.authorName = article.authorName;
+    this.status = article.status ?? 'draft';
+    this.authorRole = article.authorRole ?? 'teacher';
+    this.author = {
+      id: article.authorId,
+      name: authorUser?.fullName ?? article.authorName ?? '',
+      avatarUrl: authorUser?.profileImageUrl,
+      bio: authorUser?.bio,
+      phone: authorUser?.phone,
+    };
     this.createdAt = article.createdAt;
     this.updatedAt = article.updatedAt;
     this.excerpt = buildExcerpt(article.content);
+  }
+}
+
+export class ArticleDto {
+  id: string;
+  title: string;
+  content: string;
+  coverImageUrl?: string;
+  status: string;
+  authorRole: string;
+  author: {
+    id: string;
+    name: string;
+    avatarUrl?: string;
+    bio?: string;
+    phone?: string;
+  };
+  createdAt: string;
+  updatedAt: string;
+
+  constructor(article: Article, authorUser?: User | null) {
+    this.id = article.id!;
+    this.title = article.title;
+    this.content = article.content;
+    this.coverImageUrl = article.coverImageUrl;
+    this.status = article.status ?? 'draft';
+    this.authorRole = article.authorRole ?? 'teacher';
+    this.author = {
+      id: article.authorId,
+      name: authorUser?.fullName ?? article.authorName ?? '',
+      avatarUrl: authorUser?.profileImageUrl,
+      bio: authorUser?.bio,
+      phone: authorUser?.phone,
+    };
+    this.createdAt = article.createdAt;
+    this.updatedAt = article.updatedAt;
   }
 }
 

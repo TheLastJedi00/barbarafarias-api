@@ -37,9 +37,15 @@ export class RescheduleController {
   constructor(private readonly service: RescheduleService) {}
 
   @Get()
-  @Roles(ROLES.MANAGER)
-  listPending() {
-    return this.service.listPending();
+  @Roles(ROLES.MANAGER, ROLES.TEACHER)
+  listPending(@CurrentUser() user: AuthenticatedUser) {
+    return this.service.listPending(user);
+  }
+
+  @Get('students-requests')
+  @Roles(ROLES.TEACHER)
+  listStudentRequests(@CurrentUser() user: AuthenticatedUser) {
+    return this.service.listStudentRequests(user);
   }
 
   @Get('mine')
