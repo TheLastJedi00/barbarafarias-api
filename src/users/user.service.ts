@@ -7,7 +7,8 @@ import { pickDefined } from '../common/patch';
 import { ResponseUserDto } from './dto/ResponseUser.dto';
 import { UserRepository } from './user.repository';
 import { AuthService } from '../auth/auth.service';
-import { ROLES, Role } from '../types/role';
+import { ROLES, Role, resolveRole } from '../types/role';
+import type { AuthenticatedUser } from '../decorators/current-user.decorator';
 import { randomUUID } from 'node:crypto';
 
 @Injectable()
@@ -43,6 +44,27 @@ export class UserService {
 
   async getAllUsers(role?: Role): Promise<User[]> {
     return this.userRepository.findAll(role);
+  }
+
+  /**
+   * Listagem já recortada pelo papel de quem pede (spec 011 RF2.1):
+   * a gerente recebe a base inteira, a professora só os alunos vinculados
+   * a ela. O filtro mora aqui — nenhuma rota devolve a base crua para quem
+   * não é gerente.
+   */
+  async getUsersForRequester(
+    requester: AuthenticatedUser,
+    role?: Role,
+  ): Promise<User[]> {
+    const users = await this.userRepository.findAll(role);
+    if (requester.role === ROLES.MANAGER) {
+      return users;
+    }
+    return users.filter(
+      (user) =>
+        resolveRole(user) !== ROLES.STUDENT ||
+        user.teacherId === requester.sub,
+    );
   }
 
   async updateUser(id: string, dto: UpdateUserDto): Promise<User> {

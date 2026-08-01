@@ -32,10 +32,18 @@ export class UserController {
     return this.service.createUser(user);
   }
 
+  /**
+   * A gerente enxerga a base inteira; a professora, apenas os alunos
+   * vinculados a ela (spec 011 RF2.1) — o recorte é feito no service, não
+   * pelo cliente.
+   */
   @Get()
-  @Roles(ROLES.TEACHER)
-  async getAll(@Query('role') role?: Role): Promise<User[]> {
-    return this.service.getAllUsers(role);
+  @Roles(ROLES.MANAGER, ROLES.TEACHER)
+  async getAll(
+    @CurrentUser() user: AuthenticatedUser,
+    @Query('role') role?: Role,
+  ): Promise<User[]> {
+    return this.service.getUsersForRequester(user, role);
   }
   /** Perfil do aluno logado. Rota fixa antes das paramétricas. */
   @Get('me')
