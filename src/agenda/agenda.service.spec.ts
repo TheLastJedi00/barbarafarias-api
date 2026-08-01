@@ -13,6 +13,7 @@ describe('AgendaService', () => {
     findAll: jest.Mock;
     findByStudentId: jest.Mock;
     findByTurmaIds: jest.Mock;
+    findBySlot: jest.Mock;
     findCovering: jest.Mock;
     upsert: jest.Mock;
     upsertMany: jest.Mock;
@@ -26,6 +27,7 @@ describe('AgendaService', () => {
       findAll: jest.fn().mockResolvedValue([]),
       findByStudentId: jest.fn().mockResolvedValue([]),
       findByTurmaIds: jest.fn().mockResolvedValue([]),
+      findBySlot: jest.fn().mockResolvedValue(null),
       findCovering: jest.fn().mockResolvedValue([]),
       upsert: jest.fn().mockResolvedValue(undefined),
       upsertMany: jest.fn().mockResolvedValue(undefined),
@@ -84,6 +86,51 @@ describe('AgendaService', () => {
   });
 
   describe('assign', () => {
+    it('encurtar um bloco de 1h para 30min apaga a metade que sobra', async () => {
+      // Bloco de 1 hora já gravado: documentos em 10:00 e 10:30.
+      agendaRepository.findBySlot.mockResolvedValue(
+        new AgendaSlot('t1', 3, 10, 'student', {
+          studentId: 's1',
+          studentName: 'Léo',
+          startHour: 10,
+          slotCount: 2,
+        }),
+      );
+
+      await service.assign({
+        teacherId: 't1',
+        dayOfWeek: 3,
+        hour: 10,
+        slotCount: 1,
+        occupantType: 'student',
+        studentId: 's1',
+        studentName: 'Léo',
+      } as any);
+
+      expect(agendaRepository.removeMany).toHaveBeenCalledWith('t1', 3, [10.5]);
+    });
+
+    it('realocar mantendo a duração não apaga nada', async () => {
+      agendaRepository.findBySlot.mockResolvedValue(
+        new AgendaSlot('t1', 3, 10, 'student', {
+          studentId: 's1',
+          startHour: 10,
+          slotCount: 2,
+        }),
+      );
+
+      await service.assign({
+        teacherId: 't1',
+        dayOfWeek: 3,
+        hour: 10,
+        occupantType: 'student',
+        studentId: 's2',
+        studentName: 'Bia',
+      } as any);
+
+      expect(agendaRepository.removeMany).not.toHaveBeenCalled();
+    });
+
     it('grava o slot com a professora dona', async () => {
       await service.assign({
         teacherId: 't1',

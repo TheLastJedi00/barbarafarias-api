@@ -62,17 +62,28 @@ export class UserController {
     return this.service.updateOwnProfile(user.sub, dto);
   }
 
+  /**
+   * Ficha de um usuário. Sem escopo, qualquer aluno autenticado lia o
+   * documento cru de qualquer pessoa — inclusive PIX, CPF, CNPJ e valor-hora
+   * das professoras (spec 010 RNF4). O recorte fica no service.
+   */
   @Get(':id')
-  async findById(@Param('id') id: string): Promise<User | null> {
-    return this.service.findById(id);
+  async findById(
+    @CurrentUser() requester: AuthenticatedUser,
+    @Param('id') id: string,
+  ): Promise<User> {
+    return this.service.findByIdForRequester(requester, id);
   }
+
+  /** Professora só edita aluno vinculado a ela (spec 011 RF2.1). */
   @Put(':id')
-  @Roles(ROLES.TEACHER)
+  @Roles(ROLES.MANAGER, ROLES.TEACHER)
   async update(
+    @CurrentUser() requester: AuthenticatedUser,
     @Param('id') id: string,
     @Body() user: UpdateUserDto,
   ): Promise<User> {
-    return this.service.updateUser(id, user);
+    return this.service.updateUser(requester, id, user);
   }
   /** Excluir aluno é ato de gestão, não de sala de aula (spec 011 RF2.1). */
   @Delete(':id')

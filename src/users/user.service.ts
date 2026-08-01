@@ -1,4 +1,8 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import {
+  ForbiddenException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { User } from './user.entity';
 import { CreateUserDto } from './dto/CreateUser.dto';
 import { UpdateUserDto } from './dto/UpdateUser.dto';
@@ -68,16 +72,55 @@ export class UserService {
     );
   }
 
-  async updateUser(id: string, dto: UpdateUserDto): Promise<User> {
+  async updateUser(
+    requester: AuthenticatedUser,
+    id: string,
+    dto: UpdateUserDto,
+  ): Promise<User> {
     const foundUser = await this.userRepository.findById(id);
     if (!foundUser) {
       throw new NotFoundException('User not found');
     }
+    this.assertCanReach(requester, id, foundUser);
     // merge over the existing user and pin the id from the route param,
     // so partial updates don't wipe fields nor depend on the request body id
     const user = new User({ ...foundUser, ...dto, id });
     await this.userRepository.update(user);
     return user;
+  }
+
+  /**
+   * Ficha de um usuário, recortada por quem pede (spec 011 RF2.1).
+   *
+   * A gerente alcança qualquer um; a professora, a si mesma e os alunos
+   * vinculados a ela; o aluno, só a si mesmo. Sem isso, `GET /users/:id`
+   * entregava o documento cru — PIX, CPF, CNPJ, valor-hora e sala fixa — a
+   * qualquer pessoa logada que soubesse um id.
+   */
+  async findByIdForRequester(
+    requester: AuthenticatedUser,
+    id: string,
+  ): Promise<User> {
+    const user = await this.findById(id);
+    this.assertCanReach(requester, id, user);
+    return user;
+  }
+
+  private assertCanReach(
+    requester: AuthenticatedUser,
+    id: string,
+    target: User,
+  ): void {
+    if (requester.role === ROLES.MANAGER) return;
+    if (requester.sub === id) return;
+    if (
+      requester.role === ROLES.TEACHER &&
+      resolveRole(target) === ROLES.STUDENT &&
+      target.teacherId === requester.sub
+    ) {
+      return;
+    }
+    throw new ForbiddenException('Sem acesso a este usuário');
   }
 
   /**

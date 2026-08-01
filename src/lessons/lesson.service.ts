@@ -75,7 +75,13 @@ export class LessonService {
     const candidates: Lesson[] = [];
     for (const date of datesBetween(start, to)) {
       const dayOfWeek = dayOfWeekOf(date);
-      for (const slot of slots.filter((s) => s.dayOfWeek === dayOfWeek)) {
+      // Um bloco de 1 hora ocupa DOIS documentos de agenda (spec 011 RF5), mas
+      // é UMA aula. Sem filtrar pelo início do bloco, a segunda meia-hora
+      // materializaria uma aula gêmea às 08:30 — duplicando presença,
+      // reposição e, sobretudo, o repasse no fechamento da gerente.
+      for (const slot of slots.filter(
+        (s) => s.dayOfWeek === dayOfWeek && s.isBlockStart(),
+      )) {
         const occupantId = slot.studentId ?? slot.turmaId;
         if (!slot.teacherId || !occupantId) {
           continue; // slot legado ou incompleto: ignorado até a migração

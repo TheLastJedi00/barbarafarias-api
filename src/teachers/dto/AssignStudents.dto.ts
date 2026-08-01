@@ -9,8 +9,11 @@ import {
   IsUrl,
   Max,
   Min,
+  Validate,
   ValidateNested,
 } from 'class-validator';
+import { IsHalfHourStep } from '../../common/half-hour-step.validator';
+import { FIRST_HOUR, LAST_HOUR } from '../../common/slot-time';
 
 /** Roster completo de alunos de uma professora (substitui o anterior). */
 export class AssignStudentsDto {
@@ -26,9 +29,11 @@ export class WeeklySlotDto {
   @Max(6)
   dayOfWeek!: number;
 
-  @IsInt()
-  @Min(8)
-  @Max(20)
+  /** Mesma grade de 30 min da agenda (spec 011 RF4): 8, 8.5 … 20.5. */
+  @IsNumber()
+  @Min(FIRST_HOUR)
+  @Max(LAST_HOUR)
+  @Validate(IsHalfHourStep)
   hour!: number;
 }
 
