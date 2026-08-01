@@ -240,10 +240,19 @@ Gestão de alunos exige `manager` explicitamente, sem herança:
 | `POST /users` | `teacher` | **`manager`** — a professora não cadastra alunos |
 | `DELETE /users/:id` | `teacher` | **`manager`** — excluir é ato de gestão |
 | `GET /users` | `teacher` (base inteira) | `manager` \| `teacher` **com escopo**: a professora só recebe os alunos com `teacherId === user.sub` |
+| `GET /users/:id` | **sem `@Roles`** — qualquer autenticado lia qualquer ficha | `manager` \| dono da conta \| professora do aluno |
+| `PUT /users/:id` | `teacher` (qualquer usuário) | `manager` \| professora **do próprio aluno** |
 
 `PUT /users/:id` **continua** liberado para `teacher`: nível, objetivo e prognóstico são
 dados pedagógicos que a professora mantém. A restrição é sobre **quem entra e sai da
-base**, não sobre o acompanhamento do aluno.
+base** e sobre **de quem** é o aluno — não sobre o acompanhamento em si.
+
+> **Correção posterior à spec (fix A11):** as rotas `:id` tinham ficado de fora do recorte
+> do RF2.1. O `GET` sem `@Roles` entregava a entidade crua — `pixKey`, `cpf`, `cnpj`,
+> `hourlyRate`, `meetUrl` — a qualquer pessoa logada que soubesse um id, contrariando os
+> DTOs `ResponseTeacher`/`PublicTeacher` que existem justamente para blindar isso
+> (spec 010 RNF4). A regra agora é a mesma nas duas: **gerente alcança todos; professora
+> alcança a si mesma e os alunos vinculados a ela; aluno alcança só a si mesmo.**
 
 ### Header de Autenticação
 
@@ -926,6 +935,12 @@ o DTO público entrega apenas nome e, se a professora permitir, telefone.
 `${teacherId}_${occupantId}_${date}_${hour}` — materializar de novo nunca duplica.
 As aulas nascem sob demanda da grade recorrente (`ensureLessons`), **nunca no passado**.
 
+> ⚠️ **Uma aula por bloco, não uma por meia-hora.** Desde a spec 011 um bloco de 1 hora
+> grava **dois** documentos de agenda (`_8` e `_8.5`), mas é **uma** aula. O `ensureLessons`
+> materializa só o **início do bloco** (`isBlockStart()`). Sem esse filtro nascia uma aula
+> gêmea às 08:30: dois cards no dia, duas presenças possíveis, duas chamadas de
+> `priceLesson` e **repasse dobrado** no fechamento da gerente.
+
 > ⚠️ **Exige índices compostos no Firestore.** As duas consultas de período filtram por dono
 > (igualdade) **e** por janela de datas (intervalo) — combinação que o Firestore não resolve
 > com os índices automáticos de campo único. Sem eles, a rota devolve **500
@@ -975,6 +990,12 @@ Motivo classificado: `saude` · `imprevisto` · `pessoal` · `outro` (exige desc
 | `GET` | `/reschedule-requests/mine` | `manager`, `teacher` | Acompanhamento próprio |
 | `POST` | `/reschedule-requests/:id/approve` | `manager` | Original vira `teacher_absence` (não paga) + cria a remarcada |
 | `POST` | `/reschedule-requests/:id/reject` | `manager` | Mantém a aula original |
+
+> **`proposedHour` aceita meia-hora** (`8`, `8.5` … `20.5`), como o resto da grade
+> (spec 011 RF4). Era `@IsInt() @Max(20)`: remarcar para 08:30 — ou para as 20:30, último
+> início válido — devolvia **400**, e a sugestão pós-ausência de uma aula de meia-hora vinha
+> com um valor que a própria API recusava. O mesmo vale para o `makeupSlot.hour` em
+> `PATCH /teachers/students/:studentId`. A regra é única: `IsHalfHourStep`, em `common/`.
 
 ---
 
@@ -1108,16 +1129,38 @@ que alimenta a geração de material: prompt principal (global), prompt por nív
 Material de apoio escrito em **Markdown** (spec 011 RF7–RF10). Substitui a antiga página
 do IPA como repositório de conteúdo.
 
-**Escrita é exclusiva da gerente; leitura é aberta a qualquer usuário autenticado** — é o
-material que aluno e professora consultam.
+**Gerente e professora escrevem; a leitura é aberta a qualquer usuário autenticado** — mas
+**o que cada um enxerga depende do status**, e o recorte é do service, nunca do cliente.
 
 | Método | Rota | Auth | Descrição |
 |---|---|---|---|
-| `GET` | `/articles` | autenticado | Lista (`ArticleSummaryDto`), mais recente primeiro |
+| `GET` | `/articles` | autenticado | Lista (`ArticleSummaryDto`), mais recente primeiro. Aceita `?status=draft\|pending\|published` |
 | `GET` | `/articles/:id` | autenticado | Artigo completo, com o Markdown cru |
-| `POST` | `/articles` | `manager` | Cria. Body `{ title, content, coverImageUrl? }` |
-| `PUT` | `/articles/:id` | `manager` | Atualiza (parcial); renova `updatedAt` |
-| `DELETE` | `/articles/:id` | `manager` | Remove (**204**; **404** se não existir) |
+| `POST` | `/articles` | `manager` \| `teacher` | Cria. Body `{ title, content, coverImageUrl? }` |
+| `PUT` | `/articles/:id` | autor \| `manager` | Atualiza (parcial); renova `updatedAt` |
+| `POST` | `/articles/:id/approve` | `manager` | Publica o artigo pendente |
+| `POST` | `/articles/:id/reject` | `manager` | Devolve a `draft` para a autora corrigir |
+| `DELETE` | `/articles/:id` | autor \| `manager` | Remove (**204**; **404** se não existir) |
+
+#### Ciclo de vida e visibilidade
+
+| `status` | Como se chega | Quem enxerga |
+|---|---|---|
+| `published` | artigo da gerente nasce assim; ou `approve` | todos |
+| `pending` | artigo da professora nasce assim; ou reedição do que não está no ar | a autora e a gerente |
+| `draft` | `reject` da gerente | a autora e a gerente |
+
+- **Quem não pode ler recebe `404`, não `403`** — quem não lê também não precisa saber que
+  o artigo existe.
+- **Reeditar o que ainda não foi aprovado devolve o artigo à fila** (`pending`): é como a
+  autora reenvia depois de uma recusa. O que já está publicado **continua publicado** — a
+  gerente corrigindo um texto no ar não o tira do ar.
+- **Recusar não apaga.** O artigo volta a `draft` e segue na lista da autora.
+- **Artigos da Fase 3** foram gravados **sem** o campo `status`. A ausência é lida como
+  `published` (todos eram da gerente e já estavam no ar); assumir `draft` faria o material
+  antigo sumir da biblioteca do aluno no dia em que o filtro entrasse.
+- O **telefone do autor** no card e no modal respeita `phoneVisibleToStudent`, o mesmo
+  interruptor do `PublicTeacherDto`. Gerente e a própria autora sempre o veem.
 
 - `content` guarda **Markdown cru** — a renderização e a **sanitização contra XSS**
   acontecem no front (`ngx-markdown`). A API não confia no conteúdo nem o interpreta.
@@ -1312,8 +1355,10 @@ Material de apoio em Markdown (spec 011). Substitui a antiga página do IPA.
   "title": "string (≤160 chars)",
   "content": "string — Markdown cru, renderizado e sanitizado no front",
   "coverImageUrl": "string? — URL no Firebase Storage",
-  "authorId": "string — uid da gerente que escreveu",
+  "authorId": "string — uid de quem escreveu (gerente ou professora)",
   "authorName": "string? — nome de exibição, gravado para evitar join na listagem",
+  "authorRole": "string? — 'manager' | 'teacher', decide o status inicial",
+  "status": "string? — 'draft' | 'pending' | 'published'; ausente nos artigos da Fase 3",
   "createdAt": "string ISO",
   "updatedAt": "string ISO"
 }

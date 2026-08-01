@@ -1,4 +1,4 @@
-import { NotFoundException } from '@nestjs/common';
+import { ForbiddenException, NotFoundException } from '@nestjs/common';
 import { UserService } from './user.service';
 import { User } from './user.entity';
 import { ROLES, resolveRole } from '../types/role';
@@ -69,12 +69,16 @@ describe('UserService', () => {
     });
   });
 
+  const manager = { sub: 'm1', email: 'g@x.com', role: 'manager' } as any;
+  const teacher = { sub: 't1', email: 't@x.com', role: 'teacher' } as any;
+  const student = { sub: 'a1', email: 'a@x.com', role: 'student' } as any;
+
   describe('updateUser', () => {
     it('lança NotFound quando o usuário não existe', async () => {
       userRepository.findById.mockResolvedValue(null);
-      await expect(service.updateUser('id-1', {} as any)).rejects.toBeInstanceOf(
-        NotFoundException,
-      );
+      await expect(
+        service.updateUser(manager, 'id-1', {} as any),
+      ).rejects.toBeInstanceOf(NotFoundException);
     });
 
     it('faz merge parcial preservando campos e fixa o id do param', async () => {
@@ -87,7 +91,7 @@ describe('UserService', () => {
         }),
       );
 
-      const result = await service.updateUser('route-id', {
+      const result = await service.updateUser(manager, 'route-id', {
         fullName: 'Ana Maria',
       } as any);
 
@@ -98,6 +102,84 @@ describe('UserService', () => {
       // usa o id da rota, não o do corpo
       expect(result.id).toBe('route-id');
       expect(userRepository.update).toHaveBeenCalledTimes(1);
+    });
+
+    it('professora não edita aluno de outra professora', async () => {
+      userRepository.findById.mockResolvedValue(
+        new User({ id: 'a9', fullName: 'Léo', teacherId: 'outra', isTeacher: false }),
+      );
+
+      await expect(
+        service.updateUser(teacher, 'a9', { fullName: 'x' } as any),
+      ).rejects.toBeInstanceOf(ForbiddenException);
+      expect(userRepository.update).not.toHaveBeenCalled();
+    });
+
+    it('professora edita aluno vinculado a ela', async () => {
+      userRepository.findById.mockResolvedValue(
+        new User({ id: 'a1', fullName: 'Léo', teacherId: 't1', isTeacher: false }),
+      );
+
+      await service.updateUser(teacher, 'a1', { fullName: 'Léo M.' } as any);
+
+      expect(userRepository.update).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe('findByIdForRequester (spec 011 RF2.1)', () => {
+    const professora = new User({
+      id: 't1',
+      fullName: 'Ana',
+      isTeacher: true,
+      role: 'teacher',
+      pixKey: 'chave-secreta',
+      cpf: '000',
+    });
+
+    it('aluno não alcança a ficha da professora', async () => {
+      userRepository.findById.mockResolvedValue(professora);
+
+      await expect(
+        service.findByIdForRequester(student, 't1'),
+      ).rejects.toBeInstanceOf(ForbiddenException);
+    });
+
+    it('aluno alcança a própria ficha', async () => {
+      userRepository.findById.mockResolvedValue(
+        new User({ id: 'a1', fullName: 'Léo', isTeacher: false }),
+      );
+
+      const result = await service.findByIdForRequester(student, 'a1');
+
+      expect(result.id).toBe('a1');
+    });
+
+    it('professora não alcança a ficha de outra professora', async () => {
+      userRepository.findById.mockResolvedValue(
+        new User({ id: 't2', fullName: 'Bia', isTeacher: true, role: 'teacher' }),
+      );
+
+      await expect(
+        service.findByIdForRequester(teacher, 't2'),
+      ).rejects.toBeInstanceOf(ForbiddenException);
+    });
+
+    it('professora alcança aluno vinculado a ela', async () => {
+      userRepository.findById.mockResolvedValue(
+        new User({ id: 'a1', fullName: 'Léo', teacherId: 't1', isTeacher: false }),
+      );
+
+      const result = await service.findByIdForRequester(teacher, 'a1');
+
+      expect(result.id).toBe('a1');
+    });
+
+    it('gerente alcança qualquer um', async () => {
+      userRepository.findById.mockResolvedValue(professora);
+
+      const result = await service.findByIdForRequester(manager, 't1');
+
+      expect(result.pixKey).toBe('chave-secreta');
     });
   });
 

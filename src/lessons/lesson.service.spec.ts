@@ -73,6 +73,22 @@ describe('LessonService.ensureLessons', () => {
     });
   }
 
+  /** As DUAS metades de um bloco de 1 hora, como o repositório as devolve. */
+  function blockOnDate(date: string, startHour = 15) {
+    const [year, month, day] = date.split('-').map(Number);
+    const dayOfWeek = new Date(Date.UTC(year, month - 1, day)).getUTCDay();
+    return [startHour, startHour + 0.5].map(
+      (hour) =>
+        new AgendaSlot('t1', dayOfWeek, hour, 'student', {
+          teacherName: 'Ana',
+          studentId: 's1',
+          studentName: 'Léo',
+          startHour,
+          slotCount: 2,
+        }),
+    );
+  }
+
   it('cria uma aula por ocorrência do slot no intervalo', async () => {
     const from = today;
     const to = addDays(today, 14);
@@ -89,6 +105,30 @@ describe('LessonService.ensureLessons', () => {
       status: LESSON_STATUS.SCHEDULED,
       origin: 'regular',
     });
+  });
+
+  it('bloco de 1 hora vira UMA aula, não uma por meia-hora', async () => {
+    agendaService.getGrid.mockResolvedValue(blockOnDate(today));
+
+    await service.ensureLessons(today, today, 't1');
+
+    const lessons = lessonRepository.createMissing.mock.calls[0][0];
+    expect(lessons).toHaveLength(1);
+    expect(lessons[0]).toMatchObject({ hour: 15, id: `t1_s1_${today}_15` });
+  });
+
+  it('materializa a meia-hora quando ela é o início do próprio bloco', async () => {
+    const [, secondHalf] = blockOnDate(today);
+    // Slot de 08:30 que começa nele mesmo: aula própria, não sobra de bloco.
+    secondHalf.startHour = secondHalf.hour;
+    secondHalf.slotCount = 1;
+    agendaService.getGrid.mockResolvedValue([secondHalf]);
+
+    await service.ensureLessons(today, today, 't1');
+
+    const lessons = lessonRepository.createMissing.mock.calls[0][0];
+    expect(lessons).toHaveLength(1);
+    expect(lessons[0].hour).toBe(15.5);
   });
 
   it('usa docId determinístico — reexecutar não duplica', async () => {

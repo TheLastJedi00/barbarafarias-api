@@ -7,24 +7,27 @@ import {
   Param,
   Post,
   Put,
+  Query,
 } from '@nestjs/common';
 import { ArticleService } from './article.service';
 import {
   ArticleSummaryDto,
   CreateArticleDto,
+  ListArticlesQueryDto,
   UpdateArticleDto,
   ArticleDto,
 } from './dto/article.dto';
-import { Article } from './article.entity';
 import { Roles } from '../decorators/roles.decorator';
 import { CurrentUser } from '../decorators/current-user.decorator';
 import type { AuthenticatedUser } from '../decorators/current-user.decorator';
 import { ROLES } from '../types/role';
 
 /**
- * Escrita é exclusiva da gerente (spec 011 RF7); leitura fica aberta a
- * qualquer usuário autenticado — é o material de apoio que aluno e professora
- * consultam, no lugar da antiga página do IPA (RF10).
+ * Material de apoio no lugar da antiga página do IPA (spec 011 RF7/RF10).
+ *
+ * Gerente e professora escrevem; o artigo da professora entra na fila de
+ * aprovação. A leitura é aberta a qualquer usuário autenticado, mas o que
+ * cada um enxerga depende do status — o recorte é do service, não do cliente.
  */
 @Controller('articles')
 @Roles(ROLES.MANAGER)
@@ -33,14 +36,20 @@ export class ArticleController {
 
   @Get()
   @Roles(ROLES.MANAGER, ROLES.TEACHER, ROLES.STUDENT)
-  async findAll(): Promise<ArticleSummaryDto[]> {
-    return this.service.findAll();
+  async findAll(
+    @CurrentUser() user: AuthenticatedUser,
+    @Query() query: ListArticlesQueryDto,
+  ): Promise<ArticleSummaryDto[]> {
+    return this.service.findAll(user, query.status);
   }
 
   @Get(':id')
   @Roles(ROLES.MANAGER, ROLES.TEACHER, ROLES.STUDENT)
-  findById(@Param('id') id: string): Promise<ArticleDto> {
-    return this.service.findById(id);
+  findById(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') id: string,
+  ): Promise<ArticleDto> {
+    return this.service.findById(user, id);
   }
 
   @Post()
@@ -52,24 +61,43 @@ export class ArticleController {
     return this.service.create(dto, user);
   }
 
+  /** Autor ou gerente — a checagem de autoria mora no service. */
   @Put(':id')
   @Roles(ROLES.MANAGER, ROLES.TEACHER)
   update(
+    @CurrentUser() user: AuthenticatedUser,
     @Param('id') id: string,
     @Body() dto: UpdateArticleDto,
   ): Promise<ArticleDto> {
-    return this.service.update(id, dto);
+    return this.service.update(user, id, dto);
   }
 
   @Post(':id/approve')
   @Roles(ROLES.MANAGER)
-  approve(@Param('id') id: string): Promise<ArticleDto> {
-    return this.service.approve(id);
+  approve(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') id: string,
+  ): Promise<ArticleDto> {
+    return this.service.approve(user, id);
+  }
+
+  /** Recusa devolve o artigo a rascunho para a autora corrigir e reenviar. */
+  @Post(':id/reject')
+  @Roles(ROLES.MANAGER)
+  reject(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') id: string,
+  ): Promise<ArticleDto> {
+    return this.service.reject(user, id);
   }
 
   @Delete(':id')
+  @Roles(ROLES.MANAGER, ROLES.TEACHER)
   @HttpCode(204)
-  delete(@Param('id') id: string): Promise<void> {
-    return this.service.delete(id);
+  delete(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') id: string,
+  ): Promise<void> {
+    return this.service.delete(user, id);
   }
 }
