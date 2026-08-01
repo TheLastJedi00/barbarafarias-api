@@ -18,9 +18,12 @@ export class User {
   level!: string;
   objective!: string;
   prognosis!: string;
+  /** URL pública no Firebase Storage; o arquivo é comprimido no cliente. */
+  profileImageUrl?: string;
 
   // --- professora (role manager/teacher) ---
   createdAt?: string; // ISO — data de cadastro
+  bio?: string; // texto de apresentação exibido ao aluno
   pixKey?: string;
   cpf?: string;
   cnpj?: string;
