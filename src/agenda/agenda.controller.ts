@@ -5,6 +5,7 @@ import {
   ForbiddenException,
   Get,
   Param,
+  ParseFloatPipe,
   ParseIntPipe,
   Post,
   Query,
@@ -50,13 +51,14 @@ export class AgendaController {
     return this.agendaService.assign({ ...dto, teacherId });
   }
 
+  /** `hour` é decimal (8.5 = 08:30), por isso ParseFloat e não ParseInt. */
   @Delete(':teacherId/:dayOfWeek/:hour')
   @Roles(ROLES.MANAGER, ROLES.TEACHER)
   free(
     @CurrentUser() user: AuthenticatedUser,
     @Param('teacherId') teacherId: string,
     @Param('dayOfWeek', ParseIntPipe) dayOfWeek: number,
-    @Param('hour', ParseIntPipe) hour: number,
+    @Param('hour', ParseFloatPipe) hour: number,
   ) {
     const scoped = this.agendaService.resolveScope(user, teacherId);
     return this.agendaService.free(scoped!, dayOfWeek, hour);

@@ -102,7 +102,14 @@ describe('templates', () => {
     const content = templates.lessonMissed(
       new Lesson({ date: '2026-08-03', hour: 15 } as any),
     );
-    expect(content.html).toContain('03/08/2026 (segunda-feira) às 15h');
+    expect(content.html).toContain('03/08/2026 (segunda-feira) às 15:00');
+  });
+
+  it('formata meia-hora no padrão HH:MM', () => {
+    const content = templates.lessonMissed(
+      new Lesson({ date: '2026-08-03', hour: 8.5 } as any),
+    );
+    expect(content.html).toContain('03/08/2026 (segunda-feira) às 08:30');
   });
 
   it('mostra a justificativa quando o motivo é "outro"', () => {

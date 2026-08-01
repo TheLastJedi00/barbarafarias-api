@@ -32,4 +32,8 @@ export class UpdateUserDto {
   @IsString()
   @IsOptional()
   prognosis?: string;
+
+  @IsString()
+  @IsOptional()
+  profileImageUrl?: string;
 }

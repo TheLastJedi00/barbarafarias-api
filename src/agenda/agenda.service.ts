@@ -1,9 +1,20 @@
-import { BadRequestException, ForbiddenException, Injectable } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  ForbiddenException,
+  Injectable,
+} from '@nestjs/common';
 import { AgendaRepository } from './agenda.repository';
 import { TurmaRepository } from '../turmas/turma.repository';
 import { AgendaSlot, StudentSchedule } from './agenda.entity';
 import { AssignSlotDto } from './dto/assign-slot.dto';
 import { ROLES } from '../types/role';
+import {
+  DEFAULT_SLOT_COUNT,
+  LAST_HOUR,
+  formatSlotHour,
+  slotsOf,
+} from '../common/slot-time';
 import type { AuthenticatedUser } from '../decorators/current-user.decorator';
 
 @Injectable()
@@ -40,28 +51,93 @@ export class AgendaService {
     );
   }
 
+  /**
+   * Aloca um bloco de aula. A aula padrão de 1 hora materializa DOIS
+   * documentos de 30 min consecutivos (spec 011 RF5): a grade mostra as duas
+   * metades tomadas e qualquer tentativa de encaixar alguém no meio esbarra na
+   * verificação de colisão abaixo.
+   */
   async assign(dto: AssignSlotDto): Promise<void> {
     if (!dto.teacherId) {
       throw new BadRequestException('teacherId é obrigatório');
     }
-    const slot = new AgendaSlot(
-      dto.teacherId,
-      dto.dayOfWeek,
-      dto.hour,
-      dto.occupantType,
-      {
-        teacherName: dto.teacherName,
-        studentId: dto.studentId,
-        studentName: dto.studentName,
-        turmaId: dto.turmaId,
-        turmaName: dto.turmaName,
-      },
+
+    const slotCount = dto.slotCount ?? DEFAULT_SLOT_COUNT;
+    const hours = slotsOf(dto.hour, slotCount);
+
+    const last = hours[hours.length - 1];
+    if (last > LAST_HOUR) {
+      throw new BadRequestException(
+        `A aula ultrapassa o fim do expediente (${formatSlotHour(LAST_HOUR)})`,
+      );
+    }
+
+    await this.assertFree(dto.teacherId, dto.dayOfWeek, hours);
+
+    const slots = hours.map(
+      (hour) =>
+        new AgendaSlot(dto.teacherId!, dto.dayOfWeek, hour, dto.occupantType, {
+          teacherName: dto.teacherName,
+          studentId: dto.studentId,
+          studentName: dto.studentName,
+          turmaId: dto.turmaId,
+          turmaName: dto.turmaName,
+          startHour: dto.hour,
+          slotCount,
+        }),
     );
-    await this.agendaRepository.upsert(slot);
+    await this.agendaRepository.upsertMany(slots);
   }
 
-  free(teacherId: string, dayOfWeek: number, hour: number): Promise<void> {
-    return this.agendaRepository.remove(teacherId, dayOfWeek, hour);
+  /**
+   * Recusa a alocação se qualquer meia-hora do bloco já estiver tomada —
+   * inclusive por um bloco que começou meia hora antes e se estende sobre ela.
+   * Realocar o MESMO ocupante no mesmo bloco é permitido (é uma edição).
+   */
+  private async assertFree(
+    teacherId: string,
+    dayOfWeek: number,
+    hours: number[],
+  ): Promise<void> {
+    const blocks = await Promise.all(
+      hours.map((hour) =>
+        this.agendaRepository.findCovering(teacherId, dayOfWeek, hour),
+      ),
+    );
+
+    const startHour = hours[0];
+    for (const [index, covering] of blocks.entries()) {
+      const conflict = covering.find((slot) => slot.startHour !== startHour);
+      if (conflict) {
+        throw new ConflictException(
+          `Horário ${formatSlotHour(hours[index])} já ocupado por ${
+            conflict.studentName ?? conflict.turmaName ?? 'outra aula'
+          }`,
+        );
+      }
+    }
+  }
+
+  /**
+   * Libera o bloco inteiro a partir de qualquer uma das suas metades: clicar
+   * em "liberar" nas 08:30 de uma aula que começa às 08:00 apaga as duas.
+   */
+  async free(
+    teacherId: string,
+    dayOfWeek: number,
+    hour: number,
+  ): Promise<void> {
+    const covering = await this.agendaRepository.findCovering(
+      teacherId,
+      dayOfWeek,
+      hour,
+    );
+    const hours = covering.flatMap((slot) => slot.coveredHours());
+    await this.agendaRepository.removeMany(
+      teacherId,
+      dayOfWeek,
+      hours.length > 0 ? [...new Set(hours)] : [hour],
+    );
   }
 
   /** Turmas às quais o aluno pertence. */
@@ -83,21 +159,29 @@ export class AgendaService {
     const turmaIds = await this.getStudentTurmaIds(studentId);
     const turmaSlots = await this.agendaRepository.findByTurmaIds(turmaIds);
 
-    const individual: StudentSchedule[] = direct.map((s) => ({
-      dayOfWeek: s.dayOfWeek,
-      hour: s.hour,
-      kind: 'individual',
-      teacherId: s.teacherId,
-      teacherName: s.teacherName,
-    }));
-    const group: StudentSchedule[] = turmaSlots.map((s) => ({
-      dayOfWeek: s.dayOfWeek,
-      hour: s.hour,
-      kind: 'turma',
-      turmaName: s.turmaName,
-      teacherId: s.teacherId,
-      teacherName: s.teacherName,
-    }));
+    // Um bloco de 1 hora tem dois documentos; o aluno vê UMA aula, então só o
+    // slot inicial vira card — a duração vai em `slotCount` (spec 011 RF5).
+    const individual: StudentSchedule[] = direct
+      .filter((s) => s.isBlockStart())
+      .map((s) => ({
+        dayOfWeek: s.dayOfWeek,
+        hour: s.hour,
+        kind: 'individual',
+        teacherId: s.teacherId,
+        teacherName: s.teacherName,
+        slotCount: s.slotCount,
+      }));
+    const group: StudentSchedule[] = turmaSlots
+      .filter((s) => s.isBlockStart())
+      .map((s) => ({
+        dayOfWeek: s.dayOfWeek,
+        hour: s.hour,
+        kind: 'turma',
+        turmaName: s.turmaName,
+        teacherId: s.teacherId,
+        teacherName: s.teacherName,
+        slotCount: s.slotCount,
+      }));
 
     return [...individual, ...group].sort(
       (a, b) => a.dayOfWeek - b.dayOfWeek || a.hour - b.hour,

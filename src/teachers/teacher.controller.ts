@@ -10,6 +10,7 @@ import {
 import { TeacherService } from './teacher.service';
 import { CreateTeacherDto } from './dto/CreateTeacher.dto';
 import { UpdateTeacherDto } from './dto/UpdateTeacher.dto';
+import { UpdateTeacherProfileDto } from '../users/dto/UpdateProfile.dto';
 import { SetActiveDto } from './dto/SetActive.dto';
 import { PhoneVisibilityDto } from './dto/PhoneVisibility.dto';
 import { PublicTeacherDto, ResponseTeacherDto } from './dto/ResponseTeacher.dto';
@@ -47,6 +48,18 @@ export class TeacherController {
   @Roles(ROLES.MANAGER, ROLES.TEACHER)
   async me(@CurrentUser() user: AuthenticatedUser): Promise<ResponseTeacherDto> {
     return new ResponseTeacherDto(await this.service.findById(user.sub));
+  }
+
+  /** Perfil editável pela própria professora: nome, telefone, foto e bio. */
+  @Patch('me')
+  @Roles(ROLES.MANAGER, ROLES.TEACHER)
+  async updateOwnProfile(
+    @CurrentUser() user: AuthenticatedUser,
+    @Body() dto: UpdateTeacherProfileDto,
+  ): Promise<ResponseTeacherDto> {
+    return new ResponseTeacherDto(
+      await this.service.updateOwnProfile(user.sub, dto),
+    );
   }
 
   @Patch('me/phone-visibility')

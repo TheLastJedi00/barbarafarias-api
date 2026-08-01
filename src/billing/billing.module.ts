@@ -2,6 +2,8 @@ import { Module } from '@nestjs/common';
 import { BillingController } from './billing.controller';
 import { BillingService } from './billing.service';
 import { BillingSummaryService } from './billing-summary.service';
+import { FinanceController } from './finance.controller';
+import { TeacherEarningsService } from './teacher-earnings.service';
 import { BillingRepository } from './billing.repository';
 import { LessonRepository } from '../lessons/lesson.repository';
 import { TeacherRepository } from '../teachers/teacher.repository';
@@ -17,10 +19,11 @@ import { ManualPixProvider, PayoutProvider } from './payout.provider';
  */
 @Module({
   imports: [UserModule],
-  controllers: [BillingController],
+  controllers: [BillingController, FinanceController],
   providers: [
     BillingService,
     BillingSummaryService,
+    TeacherEarningsService,
     BillingRepository,
     LessonRepository,
     TeacherRepository,

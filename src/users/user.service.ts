@@ -2,10 +2,13 @@ import { Injectable, NotFoundException } from '@nestjs/common';
 import { User } from './user.entity';
 import { CreateUserDto } from './dto/CreateUser.dto';
 import { UpdateUserDto } from './dto/UpdateUser.dto';
+import { UpdateProfileDto } from './dto/UpdateProfile.dto';
+import { pickDefined } from '../common/patch';
 import { ResponseUserDto } from './dto/ResponseUser.dto';
 import { UserRepository } from './user.repository';
 import { AuthService } from '../auth/auth.service';
-import { ROLES, Role } from '../types/role';
+import { ROLES, Role, resolveRole } from '../types/role';
+import type { AuthenticatedUser } from '../decorators/current-user.decorator';
 import { randomUUID } from 'node:crypto';
 
 @Injectable()
@@ -43,6 +46,27 @@ export class UserService {
     return this.userRepository.findAll(role);
   }
 
+  /**
+   * Listagem já recortada pelo papel de quem pede (spec 011 RF2.1):
+   * a gerente recebe a base inteira, a professora só os alunos vinculados
+   * a ela. O filtro mora aqui — nenhuma rota devolve a base crua para quem
+   * não é gerente.
+   */
+  async getUsersForRequester(
+    requester: AuthenticatedUser,
+    role?: Role,
+  ): Promise<User[]> {
+    const users = await this.userRepository.findAll(role);
+    if (requester.role === ROLES.MANAGER) {
+      return users;
+    }
+    return users.filter(
+      (user) =>
+        resolveRole(user) !== ROLES.STUDENT ||
+        user.teacherId === requester.sub,
+    );
+  }
+
   async updateUser(id: string, dto: UpdateUserDto): Promise<User> {
     const foundUser = await this.userRepository.findById(id);
     if (!foundUser) {
@@ -51,6 +75,22 @@ export class UserService {
     // merge over the existing user and pin the id from the route param,
     // so partial updates don't wipe fields nor depend on the request body id
     const user = new User({ ...foundUser, ...dto, id });
+    await this.userRepository.update(user);
+    return user;
+  }
+
+  /**
+   * Atualização que o próprio usuário faz do seu perfil. Só os campos do
+   * `UpdateProfileDto` são gravados — o resto do documento permanece como
+   * está, para que a edição do aluno não alcance dados de gestão.
+   */
+  async updateOwnProfile(id: string, dto: UpdateProfileDto): Promise<User> {
+    const foundUser = await this.userRepository.findById(id);
+    if (!foundUser) {
+      throw new NotFoundException('User not found');
+    }
+    const patch = pickDefined(dto);
+    const user = new User({ ...foundUser, ...patch, id });
     await this.userRepository.update(user);
     return user;
   }

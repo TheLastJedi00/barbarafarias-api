@@ -1,6 +1,7 @@
 import { NotFoundException } from '@nestjs/common';
 import { UserService } from './user.service';
 import { User } from './user.entity';
+import { ROLES, resolveRole } from '../types/role';
 
 describe('UserService', () => {
   let service: UserService;
@@ -97,6 +98,49 @@ describe('UserService', () => {
       // usa o id da rota, não o do corpo
       expect(result.id).toBe('route-id');
       expect(userRepository.update).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe('getUsersForRequester (spec 011 RF2.1)', () => {
+    const base = [
+      new User({ id: 's1', fullName: 'Aluno da Ana', role: ROLES.STUDENT, teacherId: 't1' }),
+      new User({ id: 's2', fullName: 'Aluno da Bia', role: ROLES.STUDENT, teacherId: 't2' }),
+      new User({ id: 's3', fullName: 'Sem professora', role: ROLES.STUDENT }),
+      new User({ id: 't2', fullName: 'Bia', role: ROLES.TEACHER }),
+    ];
+
+    const manager = { sub: 'm1', email: 'g@x.com', role: ROLES.MANAGER } as any;
+    const teacher = { sub: 't1', email: 't@x.com', role: ROLES.TEACHER } as any;
+
+    beforeEach(() => userRepository.findAll.mockResolvedValue(base));
+
+    it('a gerente recebe a base inteira', async () => {
+      const users = await service.getUsersForRequester(manager);
+      expect(users).toHaveLength(4);
+    });
+
+    it('a professora só vê os alunos vinculados a ela', async () => {
+      const users = await service.getUsersForRequester(teacher);
+      const students = users.filter((u) => resolveRole(u) === ROLES.STUDENT);
+
+      expect(students.map((u) => u.id)).toEqual(['s1']);
+    });
+
+    it('a professora não vê aluno sem vínculo nem aluno de outra', async () => {
+      const users = await service.getUsersForRequester(teacher);
+      const ids = users.map((u) => u.id);
+
+      expect(ids).not.toContain('s2');
+      expect(ids).not.toContain('s3');
+    });
+
+    it('o filtro alcança documentos legados sem `role`', async () => {
+      userRepository.findAll.mockResolvedValueOnce([
+        new User({ id: 's9', fullName: 'Legado', isTeacher: false, teacherId: 't2' }),
+      ]);
+
+      const users = await service.getUsersForRequester(teacher);
+      expect(users).toHaveLength(0);
     });
   });
 });
