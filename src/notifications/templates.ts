@@ -1,5 +1,6 @@
 import { Lesson } from '../lessons/lesson.entity';
 import { RescheduleRequest } from '../reschedules/reschedule.entity';
+import { formatSlotHour } from '../common/slot-time';
 
 export interface EmailContent {
   subject: string;
@@ -31,7 +32,7 @@ function formatDate(date: string): string {
 }
 
 function formatSlot(date: string, hour: number): string {
-  return `${formatDate(date)} às ${String(hour).padStart(2, '0')}h`;
+  return `${formatDate(date)} às ${formatSlotHour(hour)}`;
 }
 
 function layout(title: string, body: string): string {

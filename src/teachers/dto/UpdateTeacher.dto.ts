@@ -4,6 +4,7 @@ import {
   IsNumber,
   IsOptional,
   IsString,
+  MaxLength,
   Min,
 } from 'class-validator';
 
@@ -40,4 +41,13 @@ export class UpdateTeacherDto {
   @IsBoolean()
   @IsOptional()
   phoneVisibleToStudent?: boolean;
+
+  @IsString()
+  @IsOptional()
+  profileImageUrl?: string;
+
+  @IsString()
+  @IsOptional()
+  @MaxLength(600, { message: 'Bio deve ter no máximo 600 caracteres' })
+  bio?: string;
 }

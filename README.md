@@ -59,6 +59,7 @@ npm run start:prod
 | `FIREBASE_AUTH_EMULATOR_HOST` | Host do emulador de auth (desenvolvimento) |
 | `FIRESTORE_EMULATOR_HOST` | Host do emulador do Firestore (desenvolvimento) |
 | `RESEND_API_KEY` | Chave da [Resend](https://resend.com) para e-mail transacional |
+| `FIREBASE_STORAGE_BUCKET` | *(opcional)* Bucket do Firebase Storage para avatares e capas |
 | `RESEND_FROM` | *(opcional)* Remetente próprio, ex.: `Bárbara Farias <no-reply@barbarafarias.com.br>` |
 
 > **`.env.example`** na raiz lista todas as variáveis obrigatórias — copie para `.env` e preencha.
@@ -95,7 +96,8 @@ src/
 │   ├── user.entity.ts         # Entidade de usuário
 │   └── dto/
 │       ├── CreateUser.dto.ts   # DTO de criação
-│       ├── UpdateUser.dto.ts   # DTO de atualização
+│       ├── UpdateUser.dto.ts   # DTO de atualização (gerência)
+│       ├── UpdateProfile.dto.ts # DTO de auto-edição do perfil (Spec 011)
 │       └── ResponseUser.dto.ts # DTO de resposta
 ├── supply/                # Módulo de materiais didáticos (IA)
 │   ├── supply.controller.ts   # Endpoints granulares (skeleton/topic/consolidate)
@@ -142,10 +144,21 @@ src/
 │   ├── reschedule.controller.ts # /lessons/:id/reschedule-* e /reschedule-requests
 │   ├── reschedule.service.ts    # Regras de 4h, sugestão pós-ausência, decisão
 │   └── reschedule.entity.ts     # kind, status, motivo classificado
+├── uploads/               # Upload de mídia para o Firebase Storage (Spec 011)
+│   ├── upload.controller.ts   # /uploads/:folder (multipart, valida mime e tamanho)
+│   └── storage.service.ts     # Grava no bucket e devolve URL com token de download
+├── articles/              # Material de apoio em Markdown (Spec 011)
+│   ├── article.controller.ts  # /articles — escrita da gerente, leitura de todos
+│   ├── article.service.ts     # CRUD + carimbo de autor e datas
+│   ├── article.repository.ts  # Coleção `articles`
+│   ├── article.entity.ts      # Article (content = Markdown cru)
+│   └── dto/article.dto.ts     # Create/Update + ArticleSummaryDto (excerpt)
 ├── billing/               # Financeiro (Spec 010)
 │   ├── billing.controller.ts    # /billing (settings, summary, detalhe, pagar)
 │   ├── billing.service.ts       # Valor-hora vigente, `payable`, congelamento
 │   ├── billing-summary.service.ts # Fechamento mensal por professora
+│   ├── finance.controller.ts    # /finance — faturamento sob a ótica da professora (Spec 011)
+│   ├── teacher-earnings.service.ts # Projeção semanal/mensal por alunos ativos (Spec 011)
 │   └── payout.provider.ts       # Porta de pagamento (ManualPix hoje, AbacatePay depois)
 ├── feedbacks/             # Acompanhamento pedagógico (Spec 010)
 │   ├── feedback.controller.ts # /students/:id/feedbacks
@@ -158,6 +171,8 @@ src/
 │   └── admin.service.ts       # Migração de papéis + docIds da agenda
 ├── common/
 │   ├── time.ts            # Fuso America/Sao_Paulo, datas e slots recorrentes
+│   ├── slot-time.ts       # Grade de 30 min: validação, cobertura e rótulo (Spec 011)
+│   ├── patch.ts           # pickDefined — merge parcial sem apagar campo gravado
 │   ├── cors.config.ts
 │   └── filters/
 ├── guards/                # Guards globais
@@ -215,6 +230,20 @@ A API utiliza um sistema duplo de proteção:
   (menor privilégio). Mesma ordem usada por `POST /admin/migrate-roles`.
 - **Promover alguém à mão:** edite `users/{id}.role`. Depois é só relogar — ou rodar
   "Corrigir papéis dos usuários" no painel, que propaga para o resto da base.
+
+#### Onde a herança gerente→professora **não** vale (spec 011 RF2.1)
+
+Gestão de alunos exige `manager` explicitamente, sem herança:
+
+| Rota | Antes | Agora |
+|---|---|---|
+| `POST /users` | `teacher` | **`manager`** — a professora não cadastra alunos |
+| `DELETE /users/:id` | `teacher` | **`manager`** — excluir é ato de gestão |
+| `GET /users` | `teacher` (base inteira) | `manager` \| `teacher` **com escopo**: a professora só recebe os alunos com `teacherId === user.sub` |
+
+`PUT /users/:id` **continua** liberado para `teacher`: nível, objetivo e prognóstico são
+dados pedagógicos que a professora mantém. A restrição é sobre **quem entra e sai da
+base**, não sobre o acompanhamento do aluno.
 
 ### Header de Autenticação
 
@@ -281,7 +310,10 @@ Cria um novo usuário (aluno ou professor).
 | Propriedade | Valor |
 |---|---|
 | **Autenticação** | 🔒 Requerida |
-| **Roles** | `teacher` |
+| **Roles** | `manager` |
+
+> **Spec 011 RF2.1:** cadastrar aluno é ato de gestão. A professora **não** cria alunos —
+> a rota exige `manager`, sem a herança que `@Roles(teacher)` concedia.
 
 **Request Body (`CreateUserDto`):**
 
@@ -322,10 +354,15 @@ Retorna os usuários cadastrados. Aceita o query param opcional `role` para
 filtrar por papel **no servidor** — usado pela tela de gestão de alunos para
 garantir que professores nunca apareçam na listagem.
 
+**Escopo por papel:** a gerente recebe a base inteira; a **professora recebe apenas os
+alunos vinculados a ela** (`teacherId === user.sub`). O recorte é aplicado no
+`UserService`, não pelo cliente — nenhuma rota devolve a base crua para quem não é
+gerente. O filtro usa `resolveRole`, então também alcança documentos legados sem `role`.
+
 | Propriedade | Valor |
 |---|---|
 | **Autenticação** | 🔒 Requerida |
-| **Roles** | `teacher` |
+| **Roles** | `manager`, `teacher` (com escopo) |
 
 **Query params:**
 
@@ -446,7 +483,7 @@ Remove um usuário.
 | Propriedade | Valor |
 |---|---|
 | **Autenticação** | 🔒 Requerida |
-| **Roles** | `teacher` |
+| **Roles** | `manager` |
 
 **Parâmetros de rota:**
 
@@ -455,6 +492,31 @@ Remove um usuário.
 | `id` | `string` | UUID do usuário |
 
 **Response:** `200 OK` (sem body)
+
+---
+
+#### `GET /users/me` e `PATCH /users/me`
+
+Perfil do **aluno logado** e a edição que ele mesmo faz dele (spec 011 RF14).
+
+| Propriedade | Valor |
+|---|---|
+| **Autenticação** | 🔒 Requerida |
+| **Roles** | `student` |
+
+**Request Body (`UpdateProfileDto`):**
+
+```json
+{
+  "fullName": "João Silva",
+  "phone": "11999999999",
+  "profileImageUrl": "https://firebasestorage.../avatars/uid.jpg"
+}
+```
+
+> A whitelist é intencional e **não** é a mesma do `PUT /users/:id`. Papel, professora
+> responsável, nível e situação de pagamento continuam exclusivos da gerente — sem esse
+> recorte, um aluno poderia se promover ou trocar de professora pelo próprio painel.
 
 ---
 
@@ -797,12 +859,38 @@ toda semana); as aulas datadas (`/lessons`) são os **fatos**. Cada slot
 turma. Unicidade pelo docId `${teacherId}_${dayOfWeek}_${hour}` — duas professoras podem
 usar o mesmo dia/hora.
 
+#### Granularidade de 30 minutos
+
+`hour` é **decimal**: `8` = 08:00, `8.5` = 08:30. A grade vai de **08:00 a 20:30** em
+passos de meia hora (`src/common/slot-time.ts` é a fonte única desse vocabulário).
+
+A representação decimal foi escolhida para **preservar os documentos já gravados**: hora
+cheia continua serializando sem casas (`..._8`), então nenhuma migração do Firestore foi
+necessária — só as meias-horas estreiam ids com `.5`.
+
+Uma **aula padrão de 1 hora ocupa 2 slots consecutivos** e grava **dois documentos**,
+ambos apontando para o mesmo `startHour`:
+
+| Campo | Significado |
+|---|---|
+| `hour` | A meia-hora deste documento |
+| `startHour` | Início do bloco ao qual ele pertence |
+| `slotCount` | `1` = meia hora, `2` = uma hora |
+
+- **Colisão:** `POST /agenda` responde **409** se qualquer meia-hora do bloco já estiver
+  tomada — inclusive por um bloco que começou 30 min antes e se estende sobre ela.
+  Reescrever o mesmo bloco (mesmo `startHour`) é edição, não conflito.
+- **Liberação:** apagar qualquer metade derruba o bloco inteiro.
+- **Documentos legados** (sem `startHour`/`slotCount`) são lidos como bloco de 1 hora
+  começando na própria hora — sem isso, a meia-hora seguinte a uma aula antiga apareceria
+  livre e permitiria sobreposição.
+
 | Método | Rota | Auth | Descrição |
 |---|---|---|---|
 | `GET` | `/agenda?teacherId=` | `manager`, `teacher` | Grade. A gerente vê todas (ou filtra); a professora fica presa à própria |
-| `GET` | `/agenda/student/:studentId` | autenticado (dono) | Horário resolvido do aluno (individual + turmas) → `StudentSchedule[]` |
-| `POST` | `/agenda` | `manager`, `teacher` | Atribui/atualiza slot (upsert). Body `{ teacherId, teacherName?, dayOfWeek:0-6, hour:8-20, occupantType:'student'\|'turma', studentId?, studentName?, turmaId?, turmaName? }` |
-| `DELETE` | `/agenda/:teacherId/:dayOfWeek/:hour` | `manager`, `teacher` | Libera o slot |
+| `GET` | `/agenda/student/:studentId` | autenticado (dono) | Horário resolvido do aluno (individual + turmas) → `StudentSchedule[]`. Só o slot inicial de cada bloco vira item, com a duração em `slotCount` |
+| `POST` | `/agenda` | `manager`, `teacher` | Atribui/atualiza bloco. Body `{ teacherId, teacherName?, dayOfWeek:0-6, hour:8–20.5 (passo 0.5), slotCount?:1\|2, occupantType:'student'\|'turma', studentId?, studentName?, turmaId?, turmaName? }`. **409** em colisão |
+| `DELETE` | `/agenda/:teacherId/:dayOfWeek/:hour` | `manager`, `teacher` | Libera o bloco inteiro a partir de qualquer uma das metades |
 
 ---
 
@@ -822,8 +910,13 @@ o DTO público entrega apenas nome e, se a professora permitir, telefone.
 | `PUT` | `/teachers/:id/students` | `manager` | Substitui o roster. Body `{ studentIds[] }` |
 | `PATCH` | `/teachers/students/:studentId` | `manager` | Config do aluno: `{ teacherId?, lessonsPerWeek?, makeupSlot?, meetUrl? }` |
 | `GET` | `/teachers/me` | `manager`, `teacher` | Perfil próprio |
+| `PATCH` | `/teachers/me` | `manager`, `teacher` | **Edição do próprio perfil**: `{ fullName?, phone?, profileImageUrl?, bio? }` |
 | `PATCH` | `/teachers/me/phone-visibility` | `manager`, `teacher` | Body `{ visible }` |
-| `GET` | `/teachers/mine` | `student` | Professora responsável (DTO público) |
+| `GET` | `/teachers/mine` | `student` | Professora responsável (DTO público: nome, foto, bio e — se permitido — telefone) |
+
+> `PATCH /teachers/me` é deliberadamente separado de `PUT /teachers/:id`: a professora
+> edita nome, telefone, foto e bio; **dados fiscais e valor-hora continuam saindo só pelo
+> painel da gerente**.
 
 ---
 
@@ -910,6 +1003,32 @@ A gerente aparece marcada (`isManager`) e **não entra na folha como despesa**.
 | `GET` | `/billing/summary/:teacherId?month=` | `manager` | Detalhe aula a aula |
 | `POST` | `/billing/summary/:teacherId/pay?month=` | `manager` | Instrução de pagamento (`PayoutProvider`) |
 
+#### Faturamento da professora — `/finance`
+
+Projeção sob a ótica da professora (spec 011 RF12.1). Vive **fora de `/billing`** porque
+aquele é o painel de fechamento da gerente e carrega PIX, CPF e a folha inteira.
+
+| Método | Rota | Auth | Descrição |
+|---|---|---|---|
+| `GET` | `/finance/teacher/me` | `manager`, `teacher` | Projeção da professora logada |
+| `GET` | `/finance/teacher/:teacherId` | `manager` (ou a própria) | Projeção de uma professora |
+
+```jsonc
+{
+  "teacherId": "…",
+  "hourlyRate": 60,
+  "activeStudents": 8,
+  "lessonsPerWeek": 11,   // soma de lessonsPerWeek dos alunos ativos
+  "weekly": 660,          // lessonsPerWeek × hourlyRate
+  "monthly": 2857.8,      // weekly × 4.33
+  "currency": "BRL"
+}
+```
+
+> É uma **projeção contratual**, não o fechamento: parte dos alunos **ativos** vinculados
+> (aluno `pendingTeacher` não conta) e da carga semanal de cada um. O apurado real, aula a
+> aula, continua no `BillingSummaryService`. Aluno sem `lessonsPerWeek` conta como 1.
+
 > O pagamento é **PIX manual** (`ManualPixProvider`). A porta `PayoutProvider` existe para
 > trocar por AbacatePay sem tocar em controller nem em regra de negócio.
 
@@ -984,6 +1103,32 @@ que alimenta a geração de material: prompt principal (global), prompt por nív
 
 ---
 
+### 📝 Articles — `/articles`
+
+Material de apoio escrito em **Markdown** (spec 011 RF7–RF10). Substitui a antiga página
+do IPA como repositório de conteúdo.
+
+**Escrita é exclusiva da gerente; leitura é aberta a qualquer usuário autenticado** — é o
+material que aluno e professora consultam.
+
+| Método | Rota | Auth | Descrição |
+|---|---|---|---|
+| `GET` | `/articles` | autenticado | Lista (`ArticleSummaryDto`), mais recente primeiro |
+| `GET` | `/articles/:id` | autenticado | Artigo completo, com o Markdown cru |
+| `POST` | `/articles` | `manager` | Cria. Body `{ title, content, coverImageUrl? }` |
+| `PUT` | `/articles/:id` | `manager` | Atualiza (parcial); renova `updatedAt` |
+| `DELETE` | `/articles/:id` | `manager` | Remove (**204**; **404** se não existir) |
+
+- `content` guarda **Markdown cru** — a renderização e a **sanitização contra XSS**
+  acontecem no front (`ngx-markdown`). A API não confia no conteúdo nem o interpreta.
+- `coverImageUrl` aponta para o **Firebase Storage**; o binário nunca entra no Firestore.
+- A **listagem não devolve o corpo**: `ArticleSummaryDto` carrega um `excerpt` de 180
+  caracteres já limpo de marcação, para a lista não arrastar dezenas de textos longos.
+- `authorName` é gravado junto do artigo (o JWT só tem `sub`/`email`/`role`), evitando um
+  join a cada leitura.
+
+---
+
 ## 📊 Estrutura de Dados e Coleções do Firestore
 
 Abaixo está a estrutura de dados armazenada em cada coleção do banco de dados:
@@ -1013,9 +1158,16 @@ Armazena os dados pessoais e de perfil dos usuários (alunos e professores).
   "isTeacher": "boolean",
   "level": "string (ex: 'A1')",
   "objective": "string",
-  "prognosis": "string"
+  "prognosis": "string",
+
+  "profileImageUrl": "string? — URL no Firebase Storage (spec 011)",
+  "bio": "string? — apresentação da professora, ≤600 chars (spec 011)"
 }
 ```
+
+> `profileImageUrl` vale para **todos** os papéis; `bio` só é preenchida para
+> professora/gerente. A imagem é comprimida e redimensionada **no cliente** antes do
+> upload (256×256 para avatar) — o Firestore guarda apenas a URL.
 
 ### 3. `student_supplies`
 Armazena os materiais didáticos personalizados gerados pela IA (Google Gemini).
@@ -1101,12 +1253,17 @@ Grupos nomeados de alunos.
 ```
 
 ### 7. `agenda`
-Slots da grade semanal recorrente (1 ocupante por slot).
-- **Doc ID:** `${dayOfWeek}_${hour}` (ex.: `2_15` = terça às 15h)
+Slots da grade semanal recorrente (1 ocupante por slot **de 30 min**).
+- **Doc ID:** `${teacherId}_${dayOfWeek}_${hour}` (ex.: `abc_2_15` = terça às 15:00;
+  `abc_2_15.5` = terça às 15:30)
 ```json
 {
+  "teacherId": "string — professora dona do slot",
+  "teacherName": "string?",
   "dayOfWeek": "number (0=domingo … 6=sábado)",
-  "hour": "number (8..20)",
+  "hour": "number (8 … 20.5, passo 0.5) — 8.5 = 08:30",
+  "startHour": "number — início do bloco a que este slot pertence",
+  "slotCount": "number (1=meia hora, 2=uma hora)",
   "occupantType": "'student' | 'turma'",
   "studentId": "string (se occupantType='student')",
   "studentName": "string (se occupantType='student')",
@@ -1114,6 +1271,11 @@ Slots da grade semanal recorrente (1 ocupante por slot).
   "turmaName": "string (se occupantType='turma')"
 }
 ```
+
+> **Aula de 1 hora = 2 documentos** (`_8` e `_8.5`), ambos com `startHour: 8` e
+> `slotCount: 2`. Documentos **anteriores à spec 011** não têm `startHour`/`slotCount` e
+> são lidos como bloco de 1 hora começando na própria hora — por isso **nenhuma migração
+> foi necessária**.
 
 ### 8. `curriculum`
 Planta baixa editável de prompts/estrutura curricular (Spec 008).
@@ -1141,6 +1303,55 @@ Planta baixa editável de prompts/estrutura curricular (Spec 008).
 ```
 > Coleção **desacoplada** da legada `prompts`: a `curriculum` é a fonte do painel e do
 > blueprint; a `prompts` continua sendo lida pela geração atual até a integração da Spec 006.
+
+### 9. `articles`
+Material de apoio em Markdown (spec 011). Substitui a antiga página do IPA.
+- **Doc ID:** UUID gerado na criação
+```json
+{
+  "title": "string (≤160 chars)",
+  "content": "string — Markdown cru, renderizado e sanitizado no front",
+  "coverImageUrl": "string? — URL no Firebase Storage",
+  "authorId": "string — uid da gerente que escreveu",
+  "authorName": "string? — nome de exibição, gravado para evitar join na listagem",
+  "createdAt": "string ISO",
+  "updatedAt": "string ISO"
+}
+```
+
+> A ordenação da listagem (mais recente primeiro) é feita **em memória**: a coleção é
+> pequena e curada pela gerente, então não exige índice composto.
+
+---
+
+## 🖼️ Upload de imagens — `/uploads`
+
+Avatares e capas de artigo vivem no **Firebase Storage**; o Firestore guarda só a URL
+(spec 011 §3). Guardar base64 no documento estouraria o limite de 1 MB e encareceria toda
+leitura que trouxesse o registro.
+
+| Método | Rota | Auth | Descrição |
+|---|---|---|---|
+| `POST` | `/uploads/avatars` | autenticado | Foto de perfil (o aluno troca a própria) |
+| `POST` | `/uploads/articles` | autenticado | Capa de artigo |
+
+`multipart/form-data`, campo **`file`**. Aceita `image/jpeg`, `image/png`, `image/webp`,
+até **5 MB**. Responde `{ url, path }`.
+
+**O binário passa pela API, não direto do navegador.** Este projeto não publica regras do
+Firebase (§ Deploy): o cliente nunca fala com o Firebase, só com esta API, que usa o Admin
+SDK. Um upload direto exigiria abrir um segundo canal de escrita com regras próprias.
+
+A imagem chega **já comprimida e redimensionada pelo cliente** (avatar 256×256, capa até
+1200px), então o payload real fica na casa de dezenas de KB — o teto de 5 MB é só rede de
+segurança.
+
+| Variável | Descrição |
+|---|---|
+| `FIREBASE_STORAGE_BUCKET` | *(opcional)* Bucket a usar. Sem ela, o SDK usa o bucket padrão do projeto |
+
+> A URL devolvida carrega um `token` de download: o arquivo fica legível por quem tem o
+> link, **sem** tornar o bucket inteiro público.
 
 ---
 

@@ -20,6 +20,8 @@ export class ResponseTeacherDto {
   phoneVisibleToStudent: boolean;
   active: boolean;
   studentsCount?: number;
+  profileImageUrl?: string;
+  bio?: string;
 
   constructor(user: User, studentsCount?: number) {
     this.id = user.id!;
@@ -35,21 +37,29 @@ export class ResponseTeacherDto {
     this.phoneVisibleToStudent = user.phoneVisibleToStudent ?? false;
     this.active = user.active ?? true;
     this.studentsCount = studentsCount;
+    this.profileImageUrl = user.profileImageUrl;
+    this.bio = user.bio;
   }
 }
 
 /**
- * Visão que o aluno pode receber: nome e, só se a professora permitiu,
- * o telefone. Nenhum dado fiscal ou financeiro.
+ * Visão que o aluno pode receber: nome, foto, bio e — só se a professora
+ * permitiu — o telefone. Nenhum dado fiscal ou financeiro. Foto e bio são
+ * públicas por natureza: alimentam o card da agenda e o modal de detalhes
+ * do aluno (spec 011 RF5.1).
  */
 export class PublicTeacherDto {
   id: string;
   fullName: string;
   phone?: string;
+  profileImageUrl?: string;
+  bio?: string;
 
   constructor(user: User) {
     this.id = user.id!;
     this.fullName = user.fullName;
     this.phone = user.phoneVisibleToStudent ? user.phone : undefined;
+    this.profileImageUrl = user.profileImageUrl;
+    this.bio = user.bio;
   }
 }

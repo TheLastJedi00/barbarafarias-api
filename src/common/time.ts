@@ -34,14 +34,20 @@ function offsetMinutes(date: Date, timeZone = APP_TIMEZONE): number {
   return (asUtc - date.getTime()) / 60000;
 }
 
-/** 'YYYY-MM-DD' + hora local do fuso → instante absoluto. */
+/**
+ * 'YYYY-MM-DD' + hora local do fuso → instante absoluto.
+ * `hour` pode ser decimal (8.5 = 08:30): `Date.UTC` trunca frações, então os
+ * minutos são passados em separado (spec 011 RF4).
+ */
 export function zonedDateTimeToUtc(
   date: string,
   hour: number,
   timeZone = APP_TIMEZONE,
 ): Date {
   const [year, month, day] = date.split('-').map(Number);
-  const naive = Date.UTC(year, month - 1, day, hour);
+  const wholeHours = Math.floor(hour);
+  const minutes = Math.round((hour - wholeHours) * 60);
+  const naive = Date.UTC(year, month - 1, day, wholeHours, minutes);
   // duas passadas resolvem a virada de horário de verão, se um dia voltar
   let timestamp = naive;
   for (let i = 0; i < 2; i++) {

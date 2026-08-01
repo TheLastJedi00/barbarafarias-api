@@ -9,6 +9,8 @@ import { PromptsModule } from './prompts/prompts.module';
 import { TurmaModule } from './turmas/turma.module';
 import { AgendaModule } from './agenda/agenda.module';
 import { CurriculumModule } from './curriculum/curriculum.module';
+import { ArticleModule } from './articles/article.module';
+import { UploadModule } from './uploads/upload.module';
 import { TeacherModule } from './teachers/teacher.module';
 import { AdminModule } from './admin/admin.module';
 import { LessonModule } from './lessons/lesson.module';
@@ -31,6 +33,7 @@ import { FirestoreModule } from './firestore/firestore.module';
     TurmaModule,
     AgendaModule,
     CurriculumModule,
+    ArticleModule,
     TeacherModule,
     AdminModule,
     LessonModule,
