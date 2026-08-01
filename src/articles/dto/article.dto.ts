@@ -1,10 +1,6 @@
 import { IsIn, IsNotEmpty, IsOptional, IsString, MaxLength } from 'class-validator';
-import {
-  ARTICLE_STATUS,
-  Article,
-  ArticleStatus,
-  resolveArticleStatus,
-} from '../article.entity';
+import { ARTICLE_STATUS, resolveArticleStatus } from '../article.entity';
+import type { Article, ArticleStatus } from '../article.entity';
 import { User } from '../../users/user.entity';
 import { ROLES } from '../../types/role';
 import type { AuthenticatedUser } from '../../decorators/current-user.decorator';
