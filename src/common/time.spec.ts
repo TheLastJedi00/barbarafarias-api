@@ -19,6 +19,11 @@ describe('time (fuso da operação)', () => {
     expect(toZonedDateString(startAt)).toBe('2026-08-03');
   });
 
+  it('preserva os 30 minutos de uma hora quebrada (spec 011 RF4)', () => {
+    const startAt = zonedDateTimeToUtc('2026-08-03', 8.5);
+    expect(startAt.toISOString()).toBe('2026-08-03T11:30:00.000Z');
+  });
+
   it('mantém a data local mesmo quando o UTC já virou o dia', () => {
     // 21h em SP = 00h do dia seguinte em UTC
     const startAt = zonedDateTimeToUtc('2026-08-03', 21);
