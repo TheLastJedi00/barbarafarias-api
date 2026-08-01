@@ -25,11 +25,13 @@ import type { Role } from '../types/role';
 export class UserController {
   constructor(private service: UserService) {}
 
+  /** Só a gerente cadastra alunos (spec 011 RF2.1). */
   @Post()
-  @Roles(ROLES.TEACHER)
+  @Roles(ROLES.MANAGER)
   async createUser(@Body() user: CreateUserDto): Promise<ResponseUserDto> {
     return this.service.createUser(user);
   }
+
   @Get()
   @Roles(ROLES.TEACHER)
   async getAll(@Query('role') role?: Role): Promise<User[]> {
@@ -64,8 +66,9 @@ export class UserController {
   ): Promise<User> {
     return this.service.updateUser(id, user);
   }
+  /** Excluir aluno é ato de gestão, não de sala de aula (spec 011 RF2.1). */
   @Delete(':id')
-  @Roles(ROLES.TEACHER)
+  @Roles(ROLES.MANAGER)
   async delete(@Param('id') id: string): Promise<void> {
     return this.service.delete(id);
   }
