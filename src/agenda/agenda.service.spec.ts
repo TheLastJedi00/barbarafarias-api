@@ -138,6 +138,7 @@ describe('AgendaService', () => {
           kind: 'individual',
           teacherId: 't1',
           teacherName: 'Ana',
+          slotCount: 2,
         },
       ]);
     });

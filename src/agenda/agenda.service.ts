@@ -83,21 +83,29 @@ export class AgendaService {
     const turmaIds = await this.getStudentTurmaIds(studentId);
     const turmaSlots = await this.agendaRepository.findByTurmaIds(turmaIds);
 
-    const individual: StudentSchedule[] = direct.map((s) => ({
-      dayOfWeek: s.dayOfWeek,
-      hour: s.hour,
-      kind: 'individual',
-      teacherId: s.teacherId,
-      teacherName: s.teacherName,
-    }));
-    const group: StudentSchedule[] = turmaSlots.map((s) => ({
-      dayOfWeek: s.dayOfWeek,
-      hour: s.hour,
-      kind: 'turma',
-      turmaName: s.turmaName,
-      teacherId: s.teacherId,
-      teacherName: s.teacherName,
-    }));
+    // Um bloco de 1 hora tem dois documentos; o aluno vê UMA aula, então só o
+    // slot inicial vira card — a duração vai em `slotCount` (spec 011 RF5).
+    const individual: StudentSchedule[] = direct
+      .filter((s) => s.isBlockStart())
+      .map((s) => ({
+        dayOfWeek: s.dayOfWeek,
+        hour: s.hour,
+        kind: 'individual',
+        teacherId: s.teacherId,
+        teacherName: s.teacherName,
+        slotCount: s.slotCount,
+      }));
+    const group: StudentSchedule[] = turmaSlots
+      .filter((s) => s.isBlockStart())
+      .map((s) => ({
+        dayOfWeek: s.dayOfWeek,
+        hour: s.hour,
+        kind: 'turma',
+        turmaName: s.turmaName,
+        teacherId: s.teacherId,
+        teacherName: s.teacherName,
+        slotCount: s.slotCount,
+      }));
 
     return [...individual, ...group].sort(
       (a, b) => a.dayOfWeek - b.dayOfWeek || a.hour - b.hour,

@@ -2,6 +2,7 @@ import { Inject, Injectable } from '@nestjs/common';
 import { Firestore } from 'firebase-admin/firestore';
 import { FIRESTORE } from '../firestore/firestore.module';
 import { AgendaSlot } from './agenda.entity';
+import { DEFAULT_SLOT_COUNT, SLOT_STEP } from '../common/slot-time';
 
 @Injectable()
 export class AgendaRepository {
@@ -9,7 +10,12 @@ export class AgendaRepository {
 
   constructor(@Inject(FIRESTORE) private readonly db: Firestore) {}
 
-  /** docId da spec 010: um ocupante por (professora, dia, hora). */
+  /**
+   * docId da spec 010: um ocupante por (professora, dia, hora). Com a grade de
+   * 30 min, a hora cheia continua serializando sem casas decimais (`8` → `_8`),
+   * então os documentos já gravados seguem válidos; só as meias-horas
+   * introduzem ids novos (`8.5` → `_8.5`).
+   */
   docId(teacherId: string, dayOfWeek: number, hour: number): string {
     return `${teacherId}_${dayOfWeek}_${hour}`;
   }
@@ -60,11 +66,41 @@ export class AgendaRepository {
     return results;
   }
 
+  /**
+   * Blocos que ocupam a meia-hora informada. Além do documento da própria
+   * hora, consulta a meia-hora anterior: um bloco de 1 hora que começa em
+   * 08:00 também toma as 08:30 (spec 011 RF5).
+   */
+  async findCovering(
+    teacherId: string,
+    dayOfWeek: number,
+    hour: number,
+  ): Promise<AgendaSlot[]> {
+    const candidates = await Promise.all(
+      [hour - SLOT_STEP, hour].map((candidate) =>
+        this.findBySlot(teacherId, dayOfWeek, candidate),
+      ),
+    );
+    return candidates.filter(
+      (slot): slot is AgendaSlot => slot !== null && slot.covers(hour),
+    );
+  }
+
   async upsert(slot: AgendaSlot): Promise<void> {
-    await this.db
-      .collection(this.collection)
-      .doc(this.docId(slot.teacherId, slot.dayOfWeek, slot.hour))
-      .set(this.toPlain(slot));
+    await this.upsertMany([slot]);
+  }
+
+  /** Grava o bloco inteiro de uma vez — as duas metades entram juntas ou não entram. */
+  async upsertMany(slots: AgendaSlot[]): Promise<void> {
+    if (slots.length === 0) return;
+    const batch = this.db.batch();
+    for (const slot of slots) {
+      const ref = this.db
+        .collection(this.collection)
+        .doc(this.docId(slot.teacherId, slot.dayOfWeek, slot.hour));
+      batch.set(ref, this.toPlain(slot));
+    }
+    await batch.commit();
   }
 
   async remove(
@@ -72,10 +108,24 @@ export class AgendaRepository {
     dayOfWeek: number,
     hour: number,
   ): Promise<void> {
-    await this.db
-      .collection(this.collection)
-      .doc(this.docId(teacherId, dayOfWeek, hour))
-      .delete();
+    await this.removeMany(teacherId, dayOfWeek, [hour]);
+  }
+
+  async removeMany(
+    teacherId: string,
+    dayOfWeek: number,
+    hours: number[],
+  ): Promise<void> {
+    if (hours.length === 0) return;
+    const batch = this.db.batch();
+    for (const hour of hours) {
+      batch.delete(
+        this.db
+          .collection(this.collection)
+          .doc(this.docId(teacherId, dayOfWeek, hour)),
+      );
+    }
+    await batch.commit();
   }
 
   private toPlain(slot: AgendaSlot): Record<string, any> {
@@ -84,6 +134,8 @@ export class AgendaRepository {
       teacherName: slot.teacherName ?? null,
       dayOfWeek: slot.dayOfWeek,
       hour: slot.hour,
+      startHour: slot.startHour,
+      slotCount: slot.slotCount,
       occupantType: slot.occupantType,
     };
     if (slot.occupantType === 'student') {
@@ -96,6 +148,12 @@ export class AgendaRepository {
     return base;
   }
 
+  /**
+   * Documentos anteriores à spec 011 não têm `startHour`/`slotCount`: eram
+   * sempre aulas de 1 hora em hora cheia. Normalizamos para um bloco de 2
+   * slots começando na própria hora — sem isso, a meia-hora seguinte a uma
+   * aula legada apareceria livre e permitiria sobreposição.
+   */
   private toEntity(data: Record<string, any>): AgendaSlot {
     return new AgendaSlot(
       data.teacherId ?? '',
@@ -108,6 +166,8 @@ export class AgendaRepository {
         studentName: data.studentName ?? undefined,
         turmaId: data.turmaId ?? undefined,
         turmaName: data.turmaName ?? undefined,
+        startHour: data.startHour ?? data.hour,
+        slotCount: data.slotCount ?? DEFAULT_SLOT_COUNT,
       },
     );
   }
