@@ -59,6 +59,7 @@ npm run start:prod
 | `FIREBASE_AUTH_EMULATOR_HOST` | Host do emulador de auth (desenvolvimento) |
 | `FIRESTORE_EMULATOR_HOST` | Host do emulador do Firestore (desenvolvimento) |
 | `RESEND_API_KEY` | Chave da [Resend](https://resend.com) para e-mail transacional |
+| `FIREBASE_STORAGE_BUCKET` | *(opcional)* Bucket do Firebase Storage para avatares e capas |
 | `RESEND_FROM` | *(opcional)* Remetente próprio, ex.: `Bárbara Farias <no-reply@barbarafarias.com.br>` |
 
 > **`.env.example`** na raiz lista todas as variáveis obrigatórias — copie para `.env` e preencha.
@@ -143,6 +144,9 @@ src/
 │   ├── reschedule.controller.ts # /lessons/:id/reschedule-* e /reschedule-requests
 │   ├── reschedule.service.ts    # Regras de 4h, sugestão pós-ausência, decisão
 │   └── reschedule.entity.ts     # kind, status, motivo classificado
+├── uploads/               # Upload de mídia para o Firebase Storage (Spec 011)
+│   ├── upload.controller.ts   # /uploads/:folder (multipart, valida mime e tamanho)
+│   └── storage.service.ts     # Grava no bucket e devolve URL com token de download
 ├── articles/              # Material de apoio em Markdown (Spec 011)
 │   ├── article.controller.ts  # /articles — escrita da gerente, leitura de todos
 │   ├── article.service.ts     # CRUD + carimbo de autor e datas
@@ -1317,6 +1321,37 @@ Material de apoio em Markdown (spec 011). Substitui a antiga página do IPA.
 
 > A ordenação da listagem (mais recente primeiro) é feita **em memória**: a coleção é
 > pequena e curada pela gerente, então não exige índice composto.
+
+---
+
+## 🖼️ Upload de imagens — `/uploads`
+
+Avatares e capas de artigo vivem no **Firebase Storage**; o Firestore guarda só a URL
+(spec 011 §3). Guardar base64 no documento estouraria o limite de 1 MB e encareceria toda
+leitura que trouxesse o registro.
+
+| Método | Rota | Auth | Descrição |
+|---|---|---|---|
+| `POST` | `/uploads/avatars` | autenticado | Foto de perfil (o aluno troca a própria) |
+| `POST` | `/uploads/articles` | autenticado | Capa de artigo |
+
+`multipart/form-data`, campo **`file`**. Aceita `image/jpeg`, `image/png`, `image/webp`,
+até **5 MB**. Responde `{ url, path }`.
+
+**O binário passa pela API, não direto do navegador.** Este projeto não publica regras do
+Firebase (§ Deploy): o cliente nunca fala com o Firebase, só com esta API, que usa o Admin
+SDK. Um upload direto exigiria abrir um segundo canal de escrita com regras próprias.
+
+A imagem chega **já comprimida e redimensionada pelo cliente** (avatar 256×256, capa até
+1200px), então o payload real fica na casa de dezenas de KB — o teto de 5 MB é só rede de
+segurança.
+
+| Variável | Descrição |
+|---|---|
+| `FIREBASE_STORAGE_BUCKET` | *(opcional)* Bucket a usar. Sem ela, o SDK usa o bucket padrão do projeto |
+
+> A URL devolvida carrega um `token` de download: o arquivo fica legível por quem tem o
+> link, **sem** tornar o bucket inteiro público.
 
 ---
 
