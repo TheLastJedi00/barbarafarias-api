@@ -323,3 +323,91 @@ decidido e por quê. Estas decisões também abrem o corpo dos PRs.
 33. **README do frontend na branch de release.**
     Mesma razão da decisão 21: o §5.2.1 do `github-flow.md` reserva o README à release. O
     conteúdo da Task 41.5 foi entregue lá, com a mensagem de commit da Task 41.5.
+
+---
+
+## Fixes pós-implementação (na branch de release, antes do merge)
+
+### Fix 1 — Inputs do painel financeiro sem padding nem borda arredondada (FE)
+
+**Sintoma.** Os campos das seções de metas, infraestrutura e cupons — e o campo de cupom do
+seletor de planos — apareciam sem espaçamento interno e com cantos retos, destoando de todo
+o resto do produto.
+
+**Causa.** `.bf-field`, em `styles.css`, carrega **apenas cores** (texto, fundo, borda,
+placeholder). Toda a geometria (`rounded-xl px-3 py-2 w-full transition-colors
+focus:outline-none`) mora em `controlClasses()` (`shared/form/field-styles.ts`), que os
+campos atômicos de `shared/form/fields` aplicam junto. Os `<input>` crus desta spec foram
+escritos com `class="bf-field bf-field--light w-full"` e herdaram só a cor.
+
+**Correção.** Os quatro componentes com `<input>` cru passaram a consumir o mesmo helper em
+vez de repetir classes à mão:
+
+```ts
+protected readonly fieldClass = `${controlClasses("light", false)} min-h-11`;
+protected fieldWith(extra: string): string { return `${this.fieldClass} ${extra}`; }
+```
+
+Atingiu 8 campos: `revenue-goal-form` (meta anual + 12 mensais), `infra-expense-manager`
+(valor + mês), `coupon-manager` (código, desconto, duração) e `plan-selector` (cupom).
+
+**Decisões do fix:**
+
+- **Reusar `controlClasses()` em vez de duplicar as utilitárias no template.** É a fonte
+  única da geometria dos campos; repetir `rounded-xl px-3 py-2` criaria um segundo lugar
+  para manter.
+- **Os campos continuam `<input>` crus, não `app-text-field`.** O field atômico não cobre
+  `type="month"` nem o par input+botão do cupom, e envolvê-lo para isso seria mais código
+  do que reusar o helper de classes.
+- **`min-h-11` (44px) somado ao helper.** `px-3 py-2` dá ~40px; a Task 39 prometeu alvos de
+  toque de 44px. Só os campos desta spec ganharam o mínimo — mexer no helper mudaria todos
+  os formulários do produto, fora do escopo de um fix.
+- **`fieldWith(extra)` no lugar de `class` estático + `[class]` no mesmo elemento.** O
+  Angular até mescla os dois, mas uma expressão só deixa explícito o que chega ao elemento.
+- **`color-scheme` no `<input type="month">`.** O seletor de mês é desenhado pelo navegador:
+  no tema escuro o ícone de calendário saía preto sobre superfície escura e sumia. A
+  propriedade é amarrada ao `data-theme`, escopada ao componente.
+
+Commit: `fix: inputs do painel financeiro herdam a geometria do design system de formulario`
+
+### Fix 2 — Faturamento do manager é o lucro do negócio, não valor-hora (BE + FE)
+
+**Sintoma.** O faturamento exibido para a gerente era calculado como
+`alunos ativos × carga semanal × valor-hora` — a mesma projeção da professora. Isso
+contradiz a regra que a própria spec 012 já encodava no RF11: **a gerente não recebe
+valor-hora**, ela fica com o lucro do negócio.
+
+**Correção.** Para `role === 'manager'`, o faturamento passa a ser o resultado do mês:
+
+```
+lucro = receita das assinaturas ativas
+      − custo com professoras (sem as horas da gerente)
+      − custo de infraestrutura vigente no mês
+```
+
+É exatamente a conta que o `ManagerFinanceService.getMonthlyOverview` já fazia para o painel
+— o faturamento agora **lê dela**, em vez de manter uma segunda definição de "quanto a
+gerente ganha".
+
+**Decisões do fix:**
+
+- **`finance.controller.ts` e `teacher-earnings.service.ts` foram movidos de `src/billing/`
+  para `src/finance/`.** Sem isso, `TeacherEarningsService` (em `BillingModule`) precisaria
+  de `ManagerFinanceService` (em `ManagerFinanceModule`, que já importa `BillingModule`) —
+  um ciclo, resolvível só com `forwardRef`. Com o módulo de `/finance` inteiro num lugar só,
+  a dependência é direta e o ciclo desaparece. O recorte de audiência continua onde estava:
+  cada rota mantém o seu `@Roles`, e `/finance/teacher/*` segue separado de
+  `/finance/manager/*`. `BillingModule` continua dono de `/billing` (settings, fechamento,
+  pagamento).
+- **A resposta ganhou o discriminador `kind: 'teacher' | 'manager'`,** em vez de dois
+  endpoints. Quem pergunta é sempre "quanto eu ganho"; qual conta responde isso é regra de
+  negócio, e o cliente não deveria precisar saber dela para escolher a URL.
+- **A resposta do manager carrega o detalhamento** (`revenue`, `teacherExpenses`,
+  `infraExpenses`, `activeStudents`) além do total. Um número de lucro sem a conta que o
+  gerou é um veredito sem justificativa — o mesmo princípio do card da professora.
+- **`weekly` não existe na resposta do manager.** Lucro é apuração mensal; dividir por 4,33
+  produziria um número que não corresponde a nada.
+- **`/financeiro` deixou de mostrar o card de faturamento para a gerente.** O
+  `revenue-overview-card` já exibe exatamente esse lucro, com meta e alunos pagantes. Dois
+  cards com o mesmo número, um deles antes errado, era a origem da confusão; o card da
+  professora continua para quem é professora.

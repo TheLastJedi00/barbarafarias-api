@@ -2,8 +2,6 @@ import { Module } from '@nestjs/common';
 import { BillingController } from './billing.controller';
 import { BillingService } from './billing.service';
 import { BillingSummaryService } from './billing-summary.service';
-import { FinanceController } from './finance.controller';
-import { TeacherEarningsService } from './teacher-earnings.service';
 import { BillingRepository } from './billing.repository';
 import { LessonRepository } from '../lessons/lesson.repository';
 import { TeacherRepository } from '../teachers/teacher.repository';
@@ -19,11 +17,10 @@ import { ManualPixProvider, PayoutProvider } from './payout.provider';
  */
 @Module({
   imports: [UserModule],
-  controllers: [BillingController, FinanceController],
+  controllers: [BillingController],
   providers: [
     BillingService,
     BillingSummaryService,
-    TeacherEarningsService,
     BillingRepository,
     LessonRepository,
     TeacherRepository,
@@ -31,6 +28,8 @@ import { ManualPixProvider, PayoutProvider } from './payout.provider';
   ],
   // `BillingSummaryService` sai daqui para o painel da gerente (spec 012
   // RF11) reaproveitar o fechamento aula a aula em vez de recalcular a folha.
+  // `BillingService` também: o faturamento da professora resolve o valor-hora
+  // por ele, e o serviço vive no `ManagerFinanceModule` desde o Fix 2.
   exports: [BillingService, BillingSummaryService],
 })
 export class BillingModule {}

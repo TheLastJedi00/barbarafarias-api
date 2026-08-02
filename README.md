@@ -174,7 +174,9 @@ src/
 │   ├── payment.gateway.ts         # Porta abstrata + AbacatePayGateway
 │   ├── payment-access.service.ts  # Bloqueio de aluno inadimplente (lado professora)
 │   └── dto/subscription.dto.ts    # ChoosePlanDto, CreateCouponDto, SubscriptionDto
-├── finance/               # Painel financeiro da gerente (Spec 012)
+├── finance/               # Tudo sob o prefixo /finance (Spec 012)
+│   ├── finance.controller.ts         # /finance/teacher/* (faturamento de quem pergunta)
+│   ├── teacher-earnings.service.ts   # Projeção da professora OU lucro da gerente
 │   ├── manager-finance.controller.ts # /finance/manager/*
 │   ├── manager-finance.service.ts    # Overview mensal/anual + dados do gráfico
 │   ├── infra-expense.service.ts      # Custo de infra com snapshots temporais
@@ -1124,18 +1126,23 @@ A gerente aparece marcada (`isManager`) e **não entra na folha como despesa**.
 | `GET` | `/billing/summary/:teacherId?month=` | `manager` | Detalhe aula a aula |
 | `POST` | `/billing/summary/:teacherId/pay?month=` | `manager` | Instrução de pagamento (`PayoutProvider`) |
 
-#### Faturamento da professora — `/finance`
+#### Faturamento — `/finance/teacher` (quanto eu ganho)
 
-Projeção sob a ótica da professora (spec 011 RF12.1). Vive **fora de `/billing`** porque
-aquele é o painel de fechamento da gerente e carrega PIX, CPF e a folha inteira.
+Vive **fora de `/billing`** porque aquele é o painel de fechamento da gerente e carrega PIX,
+CPF e a folha inteira. A resposta é **discriminada por `kind`**: a pergunta é sempre a mesma,
+mas quem responde depende do papel — e qual conta responde é regra de negócio, não decisão do
+cliente.
 
 | Método | Rota | Auth | Descrição |
 |---|---|---|---|
-| `GET` | `/finance/teacher/me` | `manager`, `teacher` | Projeção da professora logada |
-| `GET` | `/finance/teacher/:teacherId` | `manager` (ou a própria) | Projeção de uma professora |
+| `GET` | `/finance/teacher/me` | `manager`, `teacher` | Faturamento de quem está logado |
+| `GET` | `/finance/teacher/:teacherId` | `manager` (ou a própria) | Faturamento de uma professora |
+
+**Professora (`kind: "teacher"`)** — projeção contratual das horas:
 
 ```jsonc
 {
+  "kind": "teacher",
   "teacherId": "…",
   "hourlyRate": 60,
   "activeStudents": 8,
@@ -1149,6 +1156,33 @@ aquele é o painel de fechamento da gerente e carrega PIX, CPF e a folha inteira
 > É uma **projeção contratual**, não o fechamento: parte dos alunos **ativos** vinculados
 > (aluno `pendingTeacher` não conta) e da carga semanal de cada um. O apurado real, aula a
 > aula, continua no `BillingSummaryService`. Aluno sem `lessonsPerWeek` conta como 1.
+
+**Gerente (`kind: "manager"`)** — o **lucro do negócio**:
+
+```jsonc
+{
+  "kind": "manager",
+  "teacherId": "…",
+  "month": "2026-08",
+  "revenue": 4800,          // parcelas com vencimento no mês (assinaturas ativas)
+  "teacherExpenses": 1800,  // folha do mês, sem as horas da gerente
+  "infraExpenses": 300,     // snapshot vigente naquele mês
+  "monthly": 2700,          // receita − despesas
+  "activeStudents": 20,
+  "currency": "BRL"
+}
+```
+
+> **A gerente não recebe valor-hora** — é a mesma regra que já mantém as horas dela fora da
+> folha (RF11). O que ela ganha é o resultado: receita menos o custo com professoras e com
+> infraestrutura. A conta **não é reescrita aqui**; vem do `ManagerFinanceService`, que já a
+> faz para o painel. Prejuízo é devolvido negativo, sem piso em zero.
+>
+> Não há `weekly`: lucro é apuração mensal, e dividir por 4,33 daria um número que não
+> corresponde a nada.
+>
+> `GET /finance/teacher/:teacherId` usa o papel do **alvo**: a gerente consultando uma
+> professora vê a projeção de horas dela; só ao consultar a si mesma é que vem o lucro.
 
 > O pagamento é **PIX manual** (`ManualPixProvider`). A porta `PayoutProvider` existe para
 > trocar por AbacatePay sem tocar em controller nem em regra de negócio.
