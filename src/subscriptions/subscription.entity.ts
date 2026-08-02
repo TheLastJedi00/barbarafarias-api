@@ -133,8 +133,9 @@ export class Subscription {
   /** Desconto em R$ por parcela, já validado contra o valor da parcela. */
   couponDiscount?: number;
   /**
-   * Parcelas que ainda recebem o desconto. `null` = vitalício (vale enquanto a
-   * assinatura durar). Ausente quando não há cupom.
+   * Por quantas parcelas o desconto vale, contadas do começo do plano.
+   * `null` = vitalício (vale enquanto a assinatura durar). Ausente quando não
+   * há cupom. É o que decide o valor das renovações projetadas depois.
    */
   couponRemainingCharges?: number | null;
 
