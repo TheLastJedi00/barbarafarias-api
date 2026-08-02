@@ -124,6 +124,39 @@ describe('UserService', () => {
 
       expect(userRepository.update).toHaveBeenCalledTimes(1);
     });
+
+    // spec 012 Task 18 — isPaying derivado da assinatura, com retrocompat.
+    it('aluno sem assinatura continua com o isPaying manual', async () => {
+      userRepository.findById.mockResolvedValue(
+        new User({ id: 'a1', fullName: 'Ana', isPaying: false }),
+      );
+
+      const result = await service.updateUser(manager, 'a1', {
+        isPaying: true,
+      } as any);
+
+      expect(result.isPaying).toBe(true);
+    });
+
+    it('aluno com assinatura ignora o isPaying enviado à mão', async () => {
+      userRepository.findById.mockResolvedValue(
+        new User({
+          id: 'a1',
+          fullName: 'Ana',
+          isPaying: true,
+          subscriptionStatus: 'ACTIVE',
+        }),
+      );
+
+      const result = await service.updateUser(manager, 'a1', {
+        isPaying: false,
+        fullName: 'Ana Paula',
+      } as any);
+
+      expect(result.isPaying).toBe(true);
+      // os demais campos do mesmo PATCH continuam valendo
+      expect(result.fullName).toBe('Ana Paula');
+    });
   });
 
   describe('findByIdForRequester (spec 011 RF2.1)', () => {
