@@ -538,7 +538,15 @@ Materiais didáticos personalizados gerados por **IA (Google Gemini)** para cada
 > Isso elimina timeouts, isola falhas por tópico (uma falha não afeta as demais) e
 > permite retry granular + feedback em tempo real na tela de monitoramento do FE.
 > O cliente busca a "planta baixa", dispara um `POST /supplies/topic` por tópico em
-> paralelo e, ao concluir todos, chama `POST /supplies/consolidate` para persistir.
+> paralelo e, ao concluir todos, consolida.
+>
+> **Consolidação por módulo (spec 011/B1.8):** consolidar o material inteiro numa
+> única requisição estourava o limite de corpo do servidor, e o teto seguinte era o
+> de **1 MiB por documento** do Firestore. A persistência passou a ser **um
+> documento por módulo** (`supply_modules`), com o cabeçalho em `student_supplies`.
+> O cliente envia `POST /supplies/consolidate/module` por módulo e fecha com
+> `POST /supplies/consolidate/finish`. O `POST /supplies/consolidate` de uma tacada
+> segue existindo para materiais pequenos.
 
 #### `POST /supplies/skeleton`
 
@@ -602,8 +610,13 @@ retry = refazer a chamada). O FE dispara N destas requisições em paralelo.
 #### `POST /supplies/consolidate`
 
 Etapa 3 — recebe o material inteiro já montado pelo cliente, **valida em
-profundidade com Zod** (`SupplyModulesSchema`) e persiste uma única vez no
-Firestore (coleção `student_supplies`, doc ID: `{studentId}_{level}`).
+profundidade com Zod** (`SupplyModulesSchema`) e persiste numa escrita atômica:
+cabeçalho em `student_supplies` (`{studentId}_{level}`) e um documento por módulo
+em `supply_modules` (`{studentId}_{level}_m{index}`).
+
+> Serve materiais pequenos e clientes anteriores ao caminho granular. Material
+> grande deve usar `consolidate/module` + `consolidate/finish`, que não dependem de
+> tudo caber num único corpo de requisição.
 
 | Propriedade | Valor |
 |---|---|
@@ -622,7 +635,8 @@ Firestore (coleção `student_supplies`, doc ID: `{studentId}_{level}`).
 
 **Response (201) — `Supply`:** `{ "studentId", "level", "modules" }`
 
-**Erros:** `500` material inválido/incompleto na validação
+**Erros:** `400` material inválido/incompleto (o corpo traz `issues[]` com o
+caminho de cada campo que falhou); `413` corpo acima do limite de 1 MB
 
 **Estrutura do material persistido (Modules → Topics):**
 
@@ -666,9 +680,73 @@ Firestore (coleção `student_supplies`, doc ID: `{studentId}_{level}`).
 
 ---
 
+#### `POST /supplies/consolidate/module`
+
+Etapa 3a — consolida **um módulo**. Valida o módulo com Zod (`ModuleSchema`), grava
+`supply_modules/{studentId}_{level}_m{index}` e mantém o cabeçalho em `draft`.
+
+**Idempotente:** o documento é endereçado por (aluno, nível, índice), então reenviar
+o mesmo módulo sobrescreve em vez de duplicar — o que torna o retry seguro.
+
+| Propriedade | Valor |
+|---|---|
+| **Autenticação** | 🔒 Requerida |
+| **Roles** | `teacher` |
+
+**Request Body (`ConsolidateModuleDto`):**
+
+```json
+{
+  "studentId": "550e8400-...",
+  "level": "A1",
+  "index": 0,
+  "moduleCount": 6,
+  "module": { "title": "...", "text": "...", "topics": [ /* Topic[] */ ] }
+}
+```
+
+**Response (201) — `SupplyHeader`:** `{ "studentId", "level", "moduleCount", "status": "draft" }`
+
+**Erros:**
+
+| Status | Descrição |
+|---|---|
+| `400` | Módulo malformado (com `issues[]`) ou `index` fora de `moduleCount` |
+
+---
+
+#### `POST /supplies/consolidate/finish`
+
+Etapa 3b — confere se todos os módulos anunciados em `moduleCount` chegaram, apaga
+módulos excedentes de uma versão anterior mais longa e marca o material como
+`complete`. **Só depois disto** o material fica legível pelo aluno.
+
+| Propriedade | Valor |
+|---|---|
+| **Autenticação** | 🔒 Requerida |
+| **Roles** | `teacher` |
+
+**Request Body (`FinishConsolidationDto`):** `{ "studentId", "level" }`
+
+**Response (201) — `Supply`:** `{ "studentId", "level", "modules" }`
+
+**Erros:**
+
+| Status | Descrição |
+|---|---|
+| `404` | Nenhuma consolidação em andamento para esse par aluno/nível |
+| `409` | Faltam módulos — o corpo traz `missing: number[]` com os índices, para o cliente reenviar só o que falhou |
+
+---
+
 #### `GET /supplies/:studentId`
 
-Retorna todos os materiais didáticos de um aluno.
+Retorna os **níveis com material pronto** de um aluno — só os cabeçalhos, sem o
+conteúdo. Material a meio caminho da consolidação (`draft`) não aparece.
+
+> Antes esta rota devolvia o material inteiro dos quatro níveis. As telas que a
+> consomem usam apenas o `level` (seletor de nível), então o conteúdo era baixado
+> para desenhar rótulos.
 
 | Propriedade | Valor |
 |---|---|
@@ -681,14 +759,15 @@ Retorna todos os materiais didáticos de um aluno.
 |---|---|---|
 | `studentId` | `string` | UUID do aluno |
 
-**Response (200) — `Supply[]`:**
+**Response (200) — `SupplyHeader[]`:**
 
 ```json
 [
   {
     "studentId": "550e8400-...",
     "level": "A1",
-    "modules": [...]
+    "moduleCount": 6,
+    "status": "complete"
   }
 ]
 ```
@@ -1213,38 +1292,56 @@ Armazena os dados pessoais e de perfil dos usuários (alunos e professores).
 > upload (256×256 para avatar) — o Firestore guarda apenas a URL.
 
 ### 3. `student_supplies`
-Armazena os materiais didáticos personalizados gerados pela IA (Google Gemini).
+**Cabeçalho** do material didático personalizado gerado pela IA (Google Gemini).
 - **Doc ID:** `{studentId}_{level}`
 ```json
 {
   "studentId": "string (UUID)",
   "level": "string",
-  "modules": [
+  "moduleCount": "number — quantos módulos o material tem",
+  "status": "'draft' | 'complete' — só 'complete' é legível pelo aluno",
+  "updatedAt": "string (ISO)"
+}
+```
+
+> **Documentos anteriores à spec 011/B1.8** têm o material inteiro embutido num
+> campo `modules` e **não** têm `status`. O repositório os lê desse campo mesmo e
+> trata a ausência de `status` como `complete` — sem isso, todo material já gravado
+> sumiria da tela. Regravar o material pelo layout novo derruba o campo antigo.
+
+### 3.1. `supply_modules`
+Um documento **por módulo** do material. A divisão existe porque o material inteiro
+num único documento esbarrava no teto de **1 MiB por documento** do Firestore, e
+trafegava numa requisição só.
+- **Doc ID:** `{studentId}_{level}_m{index}` — o prefixo do dono torna o docId
+  determinístico, e é isso que faz o retry sobrescrever em vez de duplicar.
+```json
+{
+  "studentId": "string (UUID)",
+  "level": "string",
+  "index": "number — posição do módulo, define a ordem de leitura",
+  "title": "string",
+  "text": "string",
+  "topics": [
     {
-      "title": "string",
-      "text": "string",
-      "topics": [
+      "topic": "string",
+      "description": "string",
+      "examples": ["string"],
+      "curiosity": "string",
+      "roleplayInstruction": "string",
+      "roleplayDialog": ["string"],
+      "words": [
         {
-          "topic": "string",
-          "description": "string",
-          "examples": ["string"],
-          "curiosity": "string",
-          "roleplayInstruction": "string",
-          "roleplayDialog": ["string"],
-          "words": [
-            {
-              "english": "string",
-              "portuguese": "string",
-              "pronounce": "string"
-            }
-          ],
-          "music": {
-            "title": "string",
-            "artist": "string",
-            "youtube": "string"
-          }
+          "english": "string",
+          "portuguese": "string",
+          "pronounce": "string"
         }
-      ]
+      ],
+      "music": {
+        "title": "string",
+        "artist": "string",
+        "youtube": "string"
+      }
     }
   ]
 }
