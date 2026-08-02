@@ -108,3 +108,218 @@
 
 - **Task 42** — PR `release/012-painel-financeiro` → `dev`.
   `chore: open BE PR for Spec 012 (Task 42)`
+
+---
+
+## Decisões tomadas durante a execução
+
+Registro obrigatório do §5.2.1.1 do `github-flow.md`: o que a spec não definia, o que foi
+decidido e por quê. Estas decisões também abrem o corpo dos PRs.
+
+### Backend
+
+1. **Pacote do AbacatePay: `abacatepay-nodejs-sdk`, não `abacatepay`.**
+   *A spec não definia:* o nome exato do pacote (a Task 1.5 dizia `npm install abacatepay`).
+   *Decidido:* instalar `abacatepay-nodejs-sdk@1.6.0`. O pacote `abacatepay` no npm é uma CLI
+   de terceiros para registrar um servidor MCP em IDEs — não tem nada da API de cobrança.
+   O `abacatepay-nodejs-sdk` é o SDK oficial (MIT, org `abacatepay`) e traz `pixQrCode.create`,
+   `pixQrCode.simulatePayment`, `billing.create` e `customer`.
+
+2. **Gateway atrás de uma porta abstrata (`PaymentGateway`).**
+   *A spec não definia:* como isolar o SDK do resto.
+   *Decidido:* espelhar o `PayoutProvider` que o fechamento das professoras já usa — classe
+   abstrata + implementação `AbacatePayGateway` registrada no módulo. Mantém o padrão vigente,
+   deixa a regra de negócio testável sem rede e torna a troca de adquirente uma linha de módulo.
+
+3. **Valores em reais internamente; centavos só na fronteira do gateway.**
+   *A spec não definia:* a unidade monetária persistida.
+   *Decidido:* reais, como o resto do sistema (`hourlyRate`, `total` do fechamento). A conversão
+   para centavos (exigência da API do AbacatePay) acontece dentro do `PaymentGateway`.
+
+4. **Cupons são nossos, não os do AbacatePay.**
+   *A spec não definia:* se o cupom usaria o recurso de cupom do gateway.
+   *Decidido:* coleção própria `coupons`. O cupom do AbacatePay modela percentual/fixo com
+   limite de resgates — não tem noção de "vale por N parcelas desta assinatura", que é o
+   requisito do RF15. Calcular no nosso lado também deixa o valor certo na tela antes de a
+   cobrança existir (RF16).
+
+5. **Cartão de crédito usa `methods: ['PIX']` na criação do checkout.**
+   *A spec não definia:* como pedir cartão ao gateway.
+   *Decidido:* a API do AbacatePay aceita hoje apenas `PIX` nesse campo (a própria SDK
+   documenta). O checkout hospedado é quem oferece ao aluno as formas habilitadas na loja.
+   Quando a API liberar `'CARD'`, é somar o valor no array — nada mais muda.
+
+6. **Número de parcelas fixo no máximo do plano.**
+   *A spec não definia:* se "até 6x / até 12x" permitiria o aluno escolher menos parcelas.
+   *Decidido:* fixo no máximo (6x e 12x). O seletor de planos do RF2/Task 27 mostra três cards
+   sem campo de parcelamento, e permitir a escolha dobraria a matemática do cupom sem pedido
+   explícito. Abrir depois é aditivo.
+
+7. **Plano mensal: 1 parcela conceitual, 6 renovações projetadas.**
+   *A spec não definia:* como conciliar `installments` com um plano sem fim.
+   *Decidido:* `installments: 1` (o que a Task 7 pede) e `charges` com 6 renovações à frente
+   (§2). Cada renovação paga empurra mais uma no fim da fila, mantendo a janela cheia.
+
+8. **Trocar de plano exige cancelar o atual antes.**
+   *A spec não definia:* o que acontece ao escolher outro plano com assinatura ativa.
+   *Decidido:* `400` pedindo o cancelamento. Trocar no meio exigiria pró-rata e estorno da
+   parcela em curso — regra ausente da spec e a única alternativa que arrisca cobrar duas vezes
+   o mesmo mês.
+
+9. **Parcela zerada por cupom não vai ao gateway.**
+   *A spec não definia:* o piso de valor.
+   *Decidido:* o AbacatePay exige mínimo de R$ 1. Parcela que o cupom zera é confirmada
+   localmente — não há o que cobrar, e o aluno não pode ficar travado num QR Code inválido.
+
+10. **Falha do gateway não derruba a contratação.**
+    *A spec não definia:* o comportamento quando o AbacatePay recusa ou está sem chave.
+    *Decidido:* a assinatura é gravada e a resposta traz um campo `warning`. Mesma postura à
+    prova de falha do `ResendService` (spec 010 RNF7): o plano registrado é a fonte da verdade,
+    a cobrança é reemitida pela própria tela.
+
+11. **Webhook autenticado pelo segredo na query string.**
+    *A spec não definia:* o mecanismo (só citava `ABACATEPAY_WEBHOOK_SECRET`).
+    *Decidido:* `?webhookSecret=` comparado ao env, como o AbacatePay entrega. Rota `@Public()`
+    — é a única barreira entre um POST anônimo e uma assinatura ativa. O processamento é
+    idempotente: o gateway reenvia até receber 200 e reprocessar não pode contar a parcela duas
+    vezes.
+
+12. **Rota de simulação: `POST /subscriptions/dev/mock-pay`, barrada no service.**
+    *A spec não definia:* onde travar o `DEV_MODE`.
+    *Decidido:* o `@Roles(STUDENT)` sozinho não impediria o uso em produção, então a checagem de
+    `DEV_MODE=true` mora no service e devolve `403`. Quando há cobrança no gateway, a simulação
+    passa por `pixQrCode.simulatePayment` — assim o caminho testado é o mesmo da produção.
+
+13. **Receita do mês conta parcela já paga.**
+    *A spec não definia:* se a parcela quitada sai da projeção.
+    *Decidido:* continua contando. Ela é receita **daquele** mês; removê-la faria o faturamento
+    passado encolher conforme o tempo passa, quebrando a comparação anual do RF7.
+
+14. **Bloqueio de inadimplência: guard global anotado + serviço para o lado da professora.**
+    *A spec não definia:* o mecanismo.
+    *Decidido:* dois caminhos, porque são dois problemas. `ActivePlanGuard` (terceiro `APP_GUARD`,
+    depois de auth e papel) roda nas rotas marcadas com `@RequiresActivePlan()` e só para alunos —
+    resolve o RF13, em que o próprio aluno é quem pede. Para o RF14 o alvo é outro aluno, que só
+    aparece no meio da regra (no corpo do pedido, na aula referenciada), então a checagem é o
+    `PaymentAccessService`, chamado pelos services de agenda, reagendamento e avaliação.
+    Rotas bloqueadas para o aluno: artigos (listagem e detalhe), material personalizado
+    (`/supplies/*`), horário (`/agenda/student/:id`) e aulas (`/lessons/student/:id`,
+    `:id/access`, `:id/student-cancel`, `:id/rating`). Perfil e `/subscriptions/*` seguem livres.
+
+15. **Marcar presença continua liberado mesmo com aluno inadimplente.**
+    *A spec não definia:* se "avaliar" incluía o registro de presença.
+    *Decidido:* `POST /lessons/:id/attendance` fica livre. Presença é escrituração que alimenta o
+    fechamento da professora (spec 010); travá-la puniria quem já deu a aula. O que bloqueia é a
+    avaliação de evolução (`POST /students/:id/feedbacks`), que é serviço novo.
+
+16. **`isPaying` enviado à mão é descartado quando o aluno tem assinatura.**
+    *A spec não definia:* o que fazer com o `isPaying` do `UpdateUserDto` depois da Task 18.
+    *Decidido:* `PATCH /users/:id` ignora o campo se o aluno tiver `subscriptionStatus`; os
+    demais campos do mesmo PATCH continuam valendo. A edição manual seria desfeita na próxima
+    cobrança de qualquer forma, e descartá-la evita que painel e barreira de acesso discordem.
+    Aluno **sem** assinatura segue 100% no interruptor manual — a retrocompatibilidade do §3.
+
+17. **Módulo `finance/` novo, `/finance/teacher/*` intocado.**
+    *A spec não definia:* onde o painel da gerente moraria.
+    *Decidido:* `src/finance/` com o `ManagerFinanceModule`, sob o prefixo `/finance/manager`.
+    O `FinanceController` da professora continua no `BillingModule`. Separar por prefixo evita
+    que uma rota nova aqui herde por engano a audiência de lá — os dados da gerente incluem PIX
+    e a folha inteira.
+
+18. **`BillingSummaryService` passou a ser exportado pelo `BillingModule`.**
+    *A spec não definia:* como o painel da gerente leria a folha.
+    *Decidido:* exportar o serviço existente em vez de recalcular. É a única alteração feita em
+    código da spec 010, e é aditiva.
+
+19. **`GET /finance/manager/infra` devolve `{ current, breakdown, history }`.**
+    *A spec não definia:* o formato da resposta.
+    *Decidido:* os três de uma vez, que é exatamente o que o `infra-expense-manager` (Task 37)
+    precisa desenhar — valor vigente, os doze meses do ano e o histórico de reajustes — sem três
+    requisições.
+
+20. **`GET /subscriptions/plans` foi adicionado.**
+    *A spec não definia:* de onde o seletor de planos leria os valores.
+    *Decidido:* expor o catálogo pela API, para que preço e parcelas tenham uma fonte única.
+    O frontend mantém uma cópia em `PLAN_OPTIONS` (Task 21) apenas como fallback de renderização.
+
+21. **README do backend fica na branch de release, não na Fase 5.**
+    *A spec não definia:* como conciliar a Task 20 com o §5.2.1 do `github-flow.md`.
+    *Decidido:* seguir o fluxo do projeto, que é explícito — "toda branch de release atualiza o
+    `README.md`… é o único ponto que toca o README — as fases não mexem nele". O conteúdo da
+    Task 20 foi entregue na release, com a mensagem de commit da Task 20.
+
+### Frontend
+
+22. **Endpoint de validação de cupom criado para o RF16.**
+    *A spec não definia:* de onde o seletor tiraria o valor do desconto para "recalcular
+    instantaneamente" (a Task 27 dizia "chama API/Service (opcional) para validar").
+    *Decidido:* criar `GET /subscriptions/coupons/:code` (papel `student`) devolvendo código,
+    desconto e duração. Sem ele o valor só apareceria depois de contratar — tarde demais para
+    decidir. A rota é autenticada e exige o código exato, então não expõe a tabela de
+    descontos. Commit no backend: `feat: validate coupon endpoint…`.
+
+23. **O seletor de planos também escolhe a forma de pagamento.**
+    *A spec não definia:* de onde viria o `paymentMethod` do `choosePlan` (a Task 27 só emitia
+    `{ plan, couponCode }`).
+    *Decidido:* o `plan-selector` emite `{ plan, paymentMethod, couponCode }` num **segundo
+    passo**, que abre depois de o plano ser escolhido. Sem isso o fluxo ficava incompleto; num
+    passo só, cada card teria seis controles e no mobile a vitrine viraria formulário.
+
+24. **`GET /subscriptions/plans` é a fonte; `PLAN_OPTIONS` é fallback.**
+    *A spec não definia:* como conciliar a constante da Task 21 com os valores do backend.
+    *Decidido:* a página busca o catálogo e cai na constante local se a chamada falhar. Preço e
+    parcelas passam a ter uma fonte só; os bullets de venda e o destaque de "mais escolhido"
+    continuam no frontend, que é onde texto de produto pertence.
+
+25. **`shared/format/money.ts` compartilhado.**
+    *A spec não definia:* onde ficaria a formatação monetária dos novos componentes.
+    *Decidido:* um utilitário compartilhado, em vez de seis cópias de `toLocaleString` com risco
+    de divergir. As páginas antigas mantêm as suas — migrá-las não é escopo desta spec.
+
+26. **Paleta própria para os gráficos, validada para daltonismo.**
+    *A spec não definia:* quais variações exatas de `--bf-primary`/`--bf-accent` usar.
+    *Decidido:* três tokens novos (`--bf-chart-teachers`, `--bf-chart-infra`,
+    `--bf-chart-revenue`) com passos próprios por tema. `--bf-primary` é quase preto no tema
+    claro e viraria uma barra sem cor. A paleta foi validada (separação ΔE 11.5 no claro, 8.1 no
+    escuro); o dourado fica abaixo de 3:1 contra a superfície clara, então **todo gráfico traz
+    um "Ver como tabela"** — o alívio que a validação exige, e que também serve de fallback
+    tabular no mobile (Task 39).
+
+27. **Backend manda `colorToken` semântico, não cor literal.**
+    *A spec não definia:* o formato de cor em `/finance/manager/chart`.
+    *Decidido:* `primary`/`accent`/`success`, resolvidos para a variável CSS pelo componente —
+    só o cliente sabe se está no tema claro ou escuro.
+
+28. **Um eixo só no gráfico de Lucro × Despesas.**
+    *A spec não definia:* como acomodar receita e despesa juntas.
+    *Decidido:* eixo único. As duas são reais; um segundo eixo tornaria qualquer relação visual
+    entre elas arbitrária. O lucro é o vão entre a linha da receita e o topo da pilha, sem uma
+    quarta série.
+
+29. **Ano dos gráficos separado do mês do fechamento.**
+    *A spec não definia:* se o alternador de ano afetaria o fechamento das professoras.
+    *Decidido:* dois seletores independentes — `year()` para gráficos/metas/infra e `month()`
+    para o fechamento. Trocar de mês recarrega também a visão consolidada, para as duas leituras
+    de "o mês" não discordarem na mesma tela.
+
+30. **`GET /users/:id` resolve a inadimplência no detalhe da aula.**
+    *A spec não definia:* de onde a professora leria o `isPaying` do aluno da aula.
+    *Decidido:* buscar a ficha ao abrir o modal, em vez de desnormalizar o campo na aula. A aula
+    é materializada a partir da grade e carregaria um retrato velho do pagamento. Se a busca
+    falhar, os botões ficam **ativos** e o backend recusa — melhor do que travar quem está em dia.
+
+31. **"Meu Plano" só aparece para o dono da conta.**
+    *A spec não definia:* o comportamento do painel do aluno aberto por professora/gerente.
+    *Decidido:* o botão é condicionado ao `sub` do token (o `studentGuard` barraria a professora
+    de qualquer forma). O **aviso de inadimplência aparece para os dois**, com textos diferentes:
+    para o aluno é o bloqueio, para a professora é o alerta do RF14.
+
+32. **Botão de simulação do PIX sai do bundle de produção.**
+    *A spec não definia:* como garantir que ele "nunca vá para produção".
+    *Decidido:* `!environment.production`, resolvido em tempo de build pelo `fileReplacements` do
+    Angular — o bloco é eliminado do bundle, não apenas escondido. O backend ainda barra a rota
+    com `403` fora do `DEV_MODE`: duas travas independentes.
+
+33. **README do frontend na branch de release.**
+    Mesma razão da decisão 21: o §5.2.1 do `github-flow.md` reserva o README à release. O
+    conteúdo da Task 41.5 foi entregue lá, com a mensagem de commit da Task 41.5.
