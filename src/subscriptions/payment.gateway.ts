@@ -88,14 +88,18 @@ export class AbacatePayGateway extends PaymentGateway {
       customer: request.customer,
     });
 
-    if (response.error || !('data' in response) || !response.data) {
-      throw new Error(response.error ?? 'AbacatePay não devolveu o QR Code');
+    const isError = response.error || (response as any).error || (response as any).message;
+    const data = (response as any).data || response;
+
+    if (isError || !data || !data.id || !data.brCode) {
+      const err = isError || JSON.stringify(response);
+      throw new Error(`AbacatePay não devolveu o QR Code: ${err}`);
     }
 
     return {
-      id: response.data.id,
-      brCode: response.data.brCode,
-      brCodeBase64: response.data.brCodeBase64,
+      id: data.id,
+      brCode: data.brCode,
+      brCodeBase64: data.brCodeBase64,
     };
   }
 
@@ -121,11 +125,15 @@ export class AbacatePayGateway extends PaymentGateway {
       customer: request.customer,
     });
 
-    if (response.error || !response.data) {
-      throw new Error(response.error ?? 'AbacatePay não devolveu o checkout');
+    const isError = response.error || (response as any).error || (response as any).message;
+    const data = (response as any).data || response;
+
+    if (isError || !data || !data.id || !data.url) {
+      const err = isError || JSON.stringify(response);
+      throw new Error(`AbacatePay não devolveu o checkout: ${err}`);
     }
 
-    return { id: response.data.id, url: response.data.url };
+    return { id: data.id, url: data.url };
   }
 
   async simulatePayment(chargeId: string): Promise<boolean> {
