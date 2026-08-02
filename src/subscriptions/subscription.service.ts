@@ -265,6 +265,27 @@ export class SubscriptionService {
     return this.coupons.findAll();
   }
 
+  /**
+   * Valida um código para o aluno e devolve só o desconto e a duração (RF16).
+   *
+   * Sem isto o seletor de planos não teria como recalcular a parcela na hora —
+   * o valor só apareceria depois de contratar, que é tarde demais para decidir.
+   * A rota é autenticada e exige o código exato: quem chama já digitou o cupom,
+   * então não há tabela de descontos sendo exposta.
+   */
+  async validateCoupon(code: string): Promise<{
+    code: string;
+    discountAmount: number;
+    durationMonths: number | null;
+  }> {
+    const resolved = await this.resolveCoupon(code);
+    return {
+      code: resolved.code,
+      discountAmount: resolved.discount,
+      durationMonths: resolved.remaining,
+    };
+  }
+
   async createCoupon(dto: CreateCouponDto, userId: string): Promise<Coupon> {
     const code = normalizeCouponCode(dto.code);
     if (await this.coupons.findByCode(code)) {

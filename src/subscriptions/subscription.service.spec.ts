@@ -405,3 +405,31 @@ describe('SubscriptionService — simulação de pagamento', () => {
     expect(subscriptions.store.get('aluno-1')!.paidInstallments).toBe(1);
   });
 });
+
+describe('SubscriptionService — validação de cupom (RF16)', () => {
+  it('devolve desconto e duração de um cupom ativo', async () => {
+    const { service, coupons } = build();
+    coupons.findByCode.mockResolvedValue(
+      new Coupon({
+        id: 'c1',
+        code: 'BEMVINDA',
+        discountAmount: 50,
+        durationMonths: 3,
+        active: true,
+        createdAt: '',
+        createdBy: '',
+      }),
+    );
+
+    await expect(service.validateCoupon('bemvinda')).resolves.toEqual({
+      code: 'BEMVINDA',
+      discountAmount: 50,
+      durationMonths: 3,
+    });
+  });
+
+  it('recusa código inexistente', async () => {
+    const { service } = build();
+    await expect(service.validateCoupon('NADA')).rejects.toThrow();
+  });
+});

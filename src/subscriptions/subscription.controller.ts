@@ -39,6 +39,16 @@ export class SubscriptionController {
     return Object.values(PLAN_CONFIGS);
   }
 
+  /**
+   * Confere um cupom antes de contratar (RF16). Fica antes das paramétricas e
+   * devolve 400 quando o código não existe ou está desativado.
+   */
+  @Get('coupons/:code')
+  @Roles(ROLES.STUDENT)
+  validateCoupon(@Param('code') code: string) {
+    return this.service.validateCoupon(code);
+  }
+
   @Get('me')
   @Roles(ROLES.STUDENT)
   mine(@CurrentUser() user: AuthenticatedUser): Promise<SubscriptionDto | null> {
