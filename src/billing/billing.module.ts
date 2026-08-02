@@ -29,6 +29,8 @@ import { ManualPixProvider, PayoutProvider } from './payout.provider';
     TeacherRepository,
     { provide: PayoutProvider, useClass: ManualPixProvider },
   ],
-  exports: [BillingService],
+  // `BillingSummaryService` sai daqui para o painel da gerente (spec 012
+  // RF11) reaproveitar o fechamento aula a aula em vez de recalcular a folha.
+  exports: [BillingService, BillingSummaryService],
 })
 export class BillingModule {}

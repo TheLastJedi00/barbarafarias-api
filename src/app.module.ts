@@ -17,6 +17,7 @@ import { LessonModule } from './lessons/lesson.module';
 import { RescheduleModule } from './reschedules/reschedule.module';
 import { BillingModule } from './billing/billing.module';
 import { SubscriptionModule } from './subscriptions/subscription.module';
+import { ManagerFinanceModule } from './finance/manager-finance.module';
 import { FeedbackModule } from './feedbacks/feedback.module';
 import { AuthGuard } from './guards/auth.guard';
 import { RolesGuard } from './guards/roles.guard';
@@ -43,6 +44,7 @@ import { FirestoreModule } from './firestore/firestore.module';
     RescheduleModule,
     BillingModule,
     SubscriptionModule,
+    ManagerFinanceModule,
     FeedbackModule,
   ],
   providers: [
