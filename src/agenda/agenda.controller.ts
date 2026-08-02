@@ -16,6 +16,7 @@ import { Roles } from '../decorators/roles.decorator';
 import { CurrentUser } from '../decorators/current-user.decorator';
 import type { AuthenticatedUser } from '../decorators/current-user.decorator';
 import { ROLES } from '../types/role';
+import { RequiresActivePlan } from '../guards/active-plan.guard';
 
 @Controller('agenda')
 export class AgendaController {
@@ -34,6 +35,7 @@ export class AgendaController {
 
   // Sem @Roles: acessível a qualquer usuário autenticado (o aluno vê o próprio horário).
   @Get('student/:studentId')
+  @RequiresActivePlan()
   getStudentSchedule(
     @CurrentUser() user: AuthenticatedUser,
     @Param('studentId') studentId: string,

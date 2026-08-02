@@ -16,12 +16,14 @@ import {
   slotsOf,
 } from '../common/slot-time';
 import type { AuthenticatedUser } from '../decorators/current-user.decorator';
+import { PaymentAccessService } from '../subscriptions/payment-access.service';
 
 @Injectable()
 export class AgendaService {
   constructor(
     private readonly agendaRepository: AgendaRepository,
     private readonly turmaRepository: TurmaRepository,
+    private readonly paymentAccess: PaymentAccessService,
   ) {}
 
   /**
@@ -60,6 +62,12 @@ export class AgendaService {
   async assign(dto: AssignSlotDto): Promise<void> {
     if (!dto.teacherId) {
       throw new BadRequestException('teacherId é obrigatório');
+    }
+
+    // Aluno em atraso não ganha horário novo na grade (spec 012 RF14). Turma
+    // não passa por aqui: ela não tem um único pagador para consultar.
+    if (dto.occupantType === 'student') {
+      await this.paymentAccess.assertStudentIsPaying(dto.studentId);
     }
 
     const slotCount = dto.slotCount ?? DEFAULT_SLOT_COUNT;

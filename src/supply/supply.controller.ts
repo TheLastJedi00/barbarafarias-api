@@ -8,6 +8,7 @@ import { FinishConsolidationDto } from './dtos/FinishConsolidation.dto';
 import type { Level } from '../types/student.level';
 import { Roles } from '../decorators/roles.decorator';
 import { ROLES } from '../types/role';
+import { RequiresActivePlan } from '../guards/active-plan.guard';
 import { Supply } from './supply.model';
 import { SupplyHeader } from './supply.repository';
 import { SkeletonModuleWithId, type Topic } from '../types/student.supply';
@@ -63,6 +64,7 @@ export class SupplyController {
 
   /** Níveis com material pronto — só os cabeçalhos, sem o conteúdo. */
   @Get(':studentId')
+  @RequiresActivePlan()
   async getSupplies(
     @Param('studentId') studentId: string,
   ): Promise<SupplyHeader[]> {
@@ -70,6 +72,7 @@ export class SupplyController {
   }
 
   @Get(':studentId/:level')
+  @RequiresActivePlan()
   async getSupplyByLevel(
     @Param('studentId') studentId: string,
     @Param('level') level: Level,

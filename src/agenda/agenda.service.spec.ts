@@ -38,6 +38,7 @@ describe('AgendaService', () => {
     service = new AgendaService(
       agendaRepository as any,
       turmaRepository as any,
+      { assertStudentIsPaying: jest.fn().mockResolvedValue(undefined) } as any,
     );
   });
 

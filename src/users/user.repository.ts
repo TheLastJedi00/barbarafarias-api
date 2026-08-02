@@ -80,6 +80,33 @@ export class UserRepository {
       .set(userObject, { merge: true });
   }
 
+  /**
+   * Grava só o espelho da assinatura (spec 012 Task 17/18). É um `merge`
+   * cirúrgico em vez de um `update(user)` completo porque o webhook do gateway
+   * chega em paralelo com edições de perfil — reescrever o documento inteiro a
+   * partir de uma cópia lida antes desfaria o que a outra gravação salvou.
+   */
+  async updateSubscriptionState(
+    id: string,
+    state: {
+      subscriptionPlan?: string;
+      subscriptionStatus?: string;
+      isPaying: boolean;
+    },
+  ): Promise<void> {
+    await this.db
+      .collection('users')
+      .doc(id)
+      .set(
+        {
+          subscriptionPlan: state.subscriptionPlan ?? null,
+          subscriptionStatus: state.subscriptionStatus ?? null,
+          isPaying: state.isPaying,
+        },
+        { merge: true },
+      );
+  }
+
   async delete(id: string): Promise<void> {
     await this.db.collection('users').doc(id).delete();
   }
