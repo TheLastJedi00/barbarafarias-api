@@ -3,10 +3,13 @@ import { SupplyService } from './supply.service';
 import { SupplyInfoDto } from './dtos/SupplyInfo.dto';
 import { TopicRequestDto } from './dtos/TopicRequest.dto';
 import { ConsolidateDto } from './dtos/Consolidate.dto';
+import { ConsolidateModuleDto } from './dtos/ConsolidateModule.dto';
+import { FinishConsolidationDto } from './dtos/FinishConsolidation.dto';
 import type { Level } from '../types/student.level';
 import { Roles } from '../decorators/roles.decorator';
 import { ROLES } from '../types/role';
 import { Supply } from './supply.model';
+import { SupplyHeader } from './supply.repository';
 import { SkeletonModuleWithId, type Topic } from '../types/student.supply';
 
 @Controller('/supplies')
@@ -29,15 +32,40 @@ export class SupplyController {
     return this.supplyService.generateTopic(data);
   }
 
-  /** Etapa 3 — consolida o material completo e persiste. */
+  /**
+   * Etapa 3 — consolida o material completo numa tacada e persiste.
+   * Mantida para materiais pequenos; grandes usam o par granular abaixo, que
+   * não depende de o material inteiro caber num único corpo de requisição.
+   */
   @Post('consolidate')
   @Roles(ROLES.TEACHER)
   async consolidate(@Body() data: ConsolidateDto): Promise<Supply> {
     return this.supplyService.consolidate(data);
   }
 
+  /** Etapa 3a — consolidação granular: um módulo por requisição. */
+  @Post('consolidate/module')
+  @Roles(ROLES.TEACHER)
+  async consolidateModule(
+    @Body() data: ConsolidateModuleDto,
+  ): Promise<SupplyHeader> {
+    return this.supplyService.consolidateModule(data);
+  }
+
+  /** Etapa 3b — confere a completude e libera o material para o aluno. */
+  @Post('consolidate/finish')
+  @Roles(ROLES.TEACHER)
+  async finishConsolidation(
+    @Body() data: FinishConsolidationDto,
+  ): Promise<Supply> {
+    return this.supplyService.finishConsolidation(data);
+  }
+
+  /** Níveis com material pronto — só os cabeçalhos, sem o conteúdo. */
   @Get(':studentId')
-  async getSupplies(@Param('studentId') studentId: string): Promise<Supply[]> {
+  async getSupplies(
+    @Param('studentId') studentId: string,
+  ): Promise<SupplyHeader[]> {
     return this.supplyService.findSuppliesByStudentId(studentId);
   }
 
