@@ -1,4 +1,8 @@
 import { Role } from '../types/role';
+import type {
+  SubscriptionPlan,
+  SubscriptionStatus,
+} from '../subscriptions/subscription.entity';
 
 /** Slot recorrente (dia da semana + hora), usado como reposição pré-combinada. */
 export interface WeeklySlot {
@@ -32,6 +36,14 @@ export class User {
   active?: boolean;
 
   // --- aluno (role student) ---
+  /**
+   * Espelho do plano contratado (spec 012 Task 17). É desnormalização pura: a
+   * verdade mora na coleção `subscriptions`, mas a listagem de alunos da
+   * gerente precisa mostrar plano e situação sem uma leitura extra por linha.
+   * Quem mantém sincronizado é o `SubscriptionService`.
+   */
+  subscriptionPlan?: SubscriptionPlan;
+  subscriptionStatus?: SubscriptionStatus;
   teacherId?: string;
   teacherName?: string;
   pendingTeacher?: boolean; // professora responsável foi desativada

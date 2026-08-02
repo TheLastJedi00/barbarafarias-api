@@ -18,6 +18,7 @@ import {
   RECURRING_SCHEDULE_MONTHS,
   SUBSCRIPTION_STATUS,
   Subscription,
+  grantsAccess,
   planConfig,
 } from './subscription.entity';
 import type { PaymentMethod, SubscriptionPlan } from './subscription.entity';
@@ -89,6 +90,7 @@ export class SubscriptionService {
       coupon,
     );
     await this.subscriptions.save(subscription);
+    await this.syncUser(subscription);
 
     const payment = await this.issueCharge(subscription, student.email, {
       name: student.fullName,
@@ -171,6 +173,7 @@ export class SubscriptionService {
     );
 
     await this.subscriptions.save(subscription);
+    await this.syncUser(subscription);
     return new SubscriptionDto(subscription);
   }
 
@@ -291,6 +294,30 @@ export class SubscriptionService {
   }
 
   // ------------------------------------------------------------ internos
+
+  /**
+   * Espelha plano e situação no documento do aluno (Task 17) e deriva o
+   * `isPaying` do status da assinatura (Task 18).
+   *
+   * **Retrocompatibilidade:** só mexemos no `isPaying` de quem tem assinatura.
+   * Aluno que nunca contratou um plano segue com o booleano que a gerente
+   * marca à mão, exatamente como antes — não há migração forçada (§3).
+   */
+  private async syncUser(subscription: Subscription): Promise<void> {
+    try {
+      await this.users.updateSubscriptionState(subscription.studentId, {
+        subscriptionPlan: subscription.plan,
+        subscriptionStatus: subscription.status,
+        isPaying: grantsAccess(subscription.status),
+      });
+    } catch (error) {
+      // O espelho é conveniência de listagem; a assinatura já está gravada.
+      // Falhar aqui não pode derrubar a contratação nem o webhook.
+      this.logger.error(
+        `Falha ao espelhar assinatura de ${subscription.studentId}: ${String(error)}`,
+      );
+    }
+  }
 
   private async requireSubscription(studentId: string): Promise<Subscription> {
     const subscription = await this.subscriptions.findByStudent(studentId);
@@ -471,6 +498,7 @@ export class SubscriptionService {
     subscription.nextChargeDate = next?.dueDate;
 
     await this.subscriptions.save(subscription);
+    await this.syncUser(subscription);
   }
 
   /**

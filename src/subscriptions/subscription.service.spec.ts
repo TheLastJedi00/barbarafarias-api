@@ -49,6 +49,7 @@ function build(overrides: Record<string, any> = {}) {
       email: 'ana@example.com',
       phone: '11999999999',
     }),
+    updateSubscriptionState: jest.fn().mockResolvedValue(undefined),
   };
   const gateway = {
     isEnabled: jest.fn().mockReturnValue(true),
