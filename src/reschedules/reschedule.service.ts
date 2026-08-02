@@ -26,6 +26,7 @@ import { ROLES } from '../types/role';
 import type { AuthenticatedUser } from '../decorators/current-user.decorator';
 import { nextDateForDayOfWeek, zonedDateTimeToUtc } from '../common/time';
 import { NotificationService } from '../notifications/notification.service';
+import { PaymentAccessService } from '../subscriptions/payment-access.service';
 
 @Injectable()
 export class RescheduleService {
@@ -36,6 +37,7 @@ export class RescheduleService {
     private readonly lessonRepository: LessonRepository,
     private readonly access: LessonAccessService,
     private readonly notifications: NotificationService,
+    private readonly paymentAccess: PaymentAccessService,
   ) {}
 
   /**
@@ -51,6 +53,8 @@ export class RescheduleService {
   ): Promise<RescheduleRequest> {
     const lesson = await this.getLesson(lessonId);
     this.assertOwnership(user, lesson);
+    // Reagendar é serviço prestado: só para quem está em dia (spec 012 RF14).
+    await this.paymentAccess.assertStudentIsPaying(lesson.studentId);
 
     const kind = this.resolveKind(lesson, now);
 

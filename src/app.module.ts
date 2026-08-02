@@ -20,6 +20,7 @@ import { SubscriptionModule } from './subscriptions/subscription.module';
 import { FeedbackModule } from './feedbacks/feedback.module';
 import { AuthGuard } from './guards/auth.guard';
 import { RolesGuard } from './guards/roles.guard';
+import { ActivePlanGuard } from './guards/active-plan.guard';
 import { FirestoreModule } from './firestore/firestore.module';
 
 @Module({
@@ -52,6 +53,12 @@ import { FirestoreModule } from './firestore/firestore.module';
     {
       provide: APP_GUARD,
       useClass: RolesGuard,
+    },
+    {
+      // Depois do papel: só faz sentido perguntar se o aluno está em dia
+      // quando já sabemos que ele é aluno e que a rota é dele (spec 012 RF13).
+      provide: APP_GUARD,
+      useClass: ActivePlanGuard,
     },
   ],
 })

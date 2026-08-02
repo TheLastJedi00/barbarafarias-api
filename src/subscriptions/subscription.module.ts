@@ -8,6 +8,7 @@ import { SubscriptionService } from './subscription.service';
 import { SubscriptionRepository } from './subscription.repository';
 import { CouponRepository } from './coupon.repository';
 import { AbacatePayGateway, PaymentGateway } from './payment.gateway';
+import { PaymentAccessService } from './payment-access.service';
 import { UserModule } from '../users/user.module';
 
 /**
@@ -22,8 +23,9 @@ import { UserModule } from '../users/user.module';
     SubscriptionService,
     SubscriptionRepository,
     CouponRepository,
+    PaymentAccessService,
     { provide: PaymentGateway, useClass: AbacatePayGateway },
   ],
-  exports: [SubscriptionService, SubscriptionRepository],
+  exports: [SubscriptionService, SubscriptionRepository, PaymentAccessService],
 })
 export class SubscriptionModule {}

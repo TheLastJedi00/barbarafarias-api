@@ -21,6 +21,7 @@ import { Roles } from '../decorators/roles.decorator';
 import { CurrentUser } from '../decorators/current-user.decorator';
 import type { AuthenticatedUser } from '../decorators/current-user.decorator';
 import { ROLES } from '../types/role';
+import { RequiresActivePlan } from '../guards/active-plan.guard';
 
 /**
  * Material de apoio no lugar da antiga página do IPA (spec 011 RF7/RF10).
@@ -36,6 +37,7 @@ export class ArticleController {
 
   @Get()
   @Roles(ROLES.MANAGER, ROLES.TEACHER, ROLES.STUDENT)
+  @RequiresActivePlan()
   async findAll(
     @CurrentUser() user: AuthenticatedUser,
     @Query() query: ListArticlesQueryDto,
@@ -45,6 +47,7 @@ export class ArticleController {
 
   @Get(':id')
   @Roles(ROLES.MANAGER, ROLES.TEACHER, ROLES.STUDENT)
+  @RequiresActivePlan()
   findById(
     @CurrentUser() user: AuthenticatedUser,
     @Param('id') id: string,
