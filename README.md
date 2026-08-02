@@ -1245,6 +1245,18 @@ Status da assinatura: `PENDING` (aguardando o primeiro pagamento) → `ACTIVE` �
 > **Webhook.** Autenticado pelo `?webhookSecret=` que o AbacatePay devolve, comparado com
 > `ABACATEPAY_WEBHOOK_SECRET`. O processamento é **idempotente** — o gateway reenvia até
 > receber 200, e reprocessar não conta a mesma parcela duas vezes.
+>
+> A URL a cadastrar no painel do AbacatePay (Configurações → Webhooks) leva o segredo na
+> query, porque a rota é pública e é ele quem autentica a chamada:
+>
+> ```
+> produção  https://api.barbarafarias.com.br/webhooks/abacatepay?webhookSecret=SEU_SEGREDO
+> staging   https://dev-api.barbarafarias.com.br/webhooks/abacatepay?webhookSecret=SEU_SEGREDO
+> ```
+>
+> O gateway não alcança `localhost`: para exercitar o webhook na máquina, exponha a porta com
+> um túnel (`ngrok http 3000`) e cadastre a URL pública dele. Para o desenvolvimento normal
+> não é preciso — `DEV_MODE=true` libera `POST /subscriptions/dev/mock-pay`.
 
 > **Trocar de plano** exige cancelar o atual antes (`400` caso contrário): trocar no meio
 > exigiria pró-rata e estorno da parcela em curso, e arriscaria cobrar o mesmo mês duas vezes.
