@@ -81,35 +81,31 @@ export class AbacatePayGateway extends PaymentGateway {
   }
 
   async createPixCharge(request: ChargeRequest): Promise<PixChargeResult> {
-    const response = await this.requireClient().pixQrCode.create({
+    const payload = {
       amount: toCents(request.amount),
       description: request.description,
       expiresIn: PIX_EXPIRATION_SECONDS,
       customer: request.customer,
-    });
-
-    const isError = response.error || (response as any).error || (response as any).message;
-    const data = (response as any).data || response;
-
-    if (isError || !data || !data.id || !data.brCode) {
-      const err = isError || JSON.stringify(response);
-      throw new Error(`AbacatePay não devolveu o QR Code: ${err}`);
-    }
-
-    return {
-      id: data.id,
-      brCode: data.brCode,
-      brCodeBase64: data.brCodeBase64,
     };
+
+    try {
+      const data = await this.abacateFetch('/pixQrCode/create', payload);
+      if (!data || !data.id || !data.brCode) {
+        throw new Error(`Resposta incompleta: ${JSON.stringify(data)}`);
+      }
+      return {
+        id: data.id,
+        brCode: data.brCode,
+        brCodeBase64: data.brCodeBase64,
+      };
+    } catch (error: any) {
+      throw new Error(`AbacatePay não devolveu o QR Code: ${error.message}`);
+    }
   }
 
   async createCheckout(request: ChargeRequest): Promise<CheckoutResult> {
     const returnUrl = `${this.appBaseUrl}/meu-plano`;
-    // `methods` fica em PIX porque é o único valor que a API aceita hoje
-    // ("Atualmente, apenas PIX é suportado", diz a própria SDK). A página de
-    // checkout do AbacatePay é quem oferece ao aluno as formas habilitadas na
-    // loja — inclusive cartão. Quando a API liberar 'CARD', é só somar aqui.
-    const response = await this.requireClient().billing.create({
+    const payload = {
       frequency: 'ONE_TIME',
       methods: ['PIX'],
       products: [
@@ -123,17 +119,17 @@ export class AbacatePayGateway extends PaymentGateway {
       returnUrl,
       completionUrl: `${returnUrl}?pagamento=concluido`,
       customer: request.customer,
-    });
+    };
 
-    const isError = response.error || (response as any).error || (response as any).message;
-    const data = (response as any).data || response;
-
-    if (isError || !data || !data.id || !data.url) {
-      const err = isError || JSON.stringify(response);
-      throw new Error(`AbacatePay não devolveu o checkout: ${err}`);
+    try {
+      const data = await this.abacateFetch('/billing/create', payload);
+      if (!data || !data.id || !data.url) {
+        throw new Error(`Resposta incompleta: ${JSON.stringify(data)}`);
+      }
+      return { id: data.id, url: data.url };
+    } catch (error: any) {
+      throw new Error(`AbacatePay não devolveu o checkout: ${error.message}`);
     }
-
-    return { id: data.id, url: data.url };
   }
 
   async simulatePayment(chargeId: string): Promise<boolean> {
@@ -149,6 +145,30 @@ export class AbacatePayGateway extends PaymentGateway {
       );
       return false;
     }
+  }
+
+  private async abacateFetch(path: string, body: any): Promise<any> {
+    const apiKey = this.configService.get<string>('ABACATEPAY_API_KEY');
+    if (!apiKey) throw new Error('AbacatePay não configurado');
+
+    const res = await fetch(`https://api.abacatepay.com/v1${path}`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+        'User-Agent': 'fariasbarbara-api',
+      },
+      body: JSON.stringify(body),
+    });
+
+    const data = await res.json().catch(() => null);
+
+    if (!res.ok) {
+      const errorMsg = data?.error || data?.message || JSON.stringify(data) || res.statusText;
+      throw new Error(errorMsg);
+    }
+
+    return data?.data || data;
   }
 
   private requireClient(): ReturnType<typeof AbacatePay> {
