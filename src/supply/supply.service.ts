@@ -1,21 +1,27 @@
 import {
+  BadRequestException,
+  ConflictException,
   HttpException,
   Injectable,
   InternalServerErrorException,
   Logger,
   NotFoundException,
 } from '@nestjs/common';
+import { ZodError } from 'zod';
 import { SupplyInfoDto } from './dtos/SupplyInfo.dto';
 import { TopicRequestDto } from './dtos/TopicRequest.dto';
 import { ConsolidateDto } from './dtos/Consolidate.dto';
+import { ConsolidateModuleDto } from './dtos/ConsolidateModule.dto';
+import { FinishConsolidationDto } from './dtos/FinishConsolidation.dto';
 import { StudentInfo } from '../types/student.info';
 import { Level } from '../types/student.level';
 import { UserService } from '../users/user.service';
-import { SupplyRepository } from './supply.repository';
+import { SupplyHeader, SupplyRepository } from './supply.repository';
 import { PromptService } from '../prompts/prompt.service';
 import { GeminiProvider } from './gemini/gemini.service';
 import { Supply } from './supply.model';
 import {
+  ModuleSchema,
   SkeletonModuleWithId,
   SkeletonSchema,
   SupplyModulesSchema,
@@ -112,23 +118,117 @@ export class SupplyService {
   }
 
   /**
-   * Etapa 3 — Consolidação: valida o material inteiro (Zod, fonte de verdade)
-   * e persiste uma única vez. Rejeita material incompleto/malformado.
+   * Etapa 3 — Consolidação atômica: valida o material inteiro (Zod, fonte de
+   * verdade) e persiste de uma vez. Continua servindo materiais pequenos e
+   * clientes anteriores ao caminho granular; materiais grandes devem usar
+   * `consolidateModule` + `finishConsolidation`, que não trafegam tudo junto.
    */
   async consolidate(dto: ConsolidateDto): Promise<Supply> {
-    try {
-      const modules = SupplyModulesSchema.parse(dto.modules);
-      const supply = new Supply(dto.studentId, dto.level, modules);
-      await this.supplyRepository.save(supply);
-      return supply;
-    } catch (error) {
-      if (error instanceof HttpException) {
-        throw error;
-      }
-      this.logger.error('Material inválido na consolidação', error?.stack);
-      throw new InternalServerErrorException(
-        'Material inválido ou incompleto para consolidação.',
+    const modules = this.parseOrThrow(() =>
+      SupplyModulesSchema.parse(dto.modules),
+    );
+    const supply = new Supply(dto.studentId, dto.level, modules);
+    await this.supplyRepository.saveAll(supply);
+    return supply;
+  }
+
+  /**
+   * Consolidação granular — um módulo por requisição (spec 011/B1.8).
+   * Idempotente: o docId deriva de (aluno, nível, índice), então reenviar o
+   * mesmo módulo sobrescreve em vez de duplicar. O material só volta a ser
+   * legível pelo aluno depois do `finishConsolidation`.
+   */
+  async consolidateModule(dto: ConsolidateModuleDto): Promise<SupplyHeader> {
+    if (dto.index >= dto.moduleCount) {
+      throw new BadRequestException(
+        `Índice ${dto.index} fora do material anunciado (${dto.moduleCount} módulos).`,
       );
+    }
+    const module = this.parseOrThrow(() => ModuleSchema.parse(dto.module));
+
+    await this.supplyRepository.saveModule(
+      dto.studentId,
+      dto.level,
+      dto.index,
+      dto.moduleCount,
+      module,
+    );
+    return {
+      studentId: dto.studentId,
+      level: dto.level,
+      moduleCount: dto.moduleCount,
+      status: 'draft',
+    };
+  }
+
+  /**
+   * Fecha a consolidação granular. Confere se todos os módulos anunciados
+   * chegaram; faltando algum, devolve 409 com os índices em falta para o
+   * cliente reenviar só o que falhou, em vez de refazer o material inteiro.
+   */
+  async finishConsolidation(dto: FinishConsolidationDto): Promise<Supply> {
+    const header = await this.supplyRepository.findHeader(
+      dto.studentId,
+      dto.level,
+    );
+    if (!header) {
+      throw new NotFoundException('Nenhuma consolidação em andamento.');
+    }
+
+    const present = new Set(
+      await this.supplyRepository.findModuleIndices(dto.studentId, dto.level),
+    );
+    const missing = Array.from(
+      { length: header.moduleCount },
+      (_, index) => index,
+    ).filter((index) => !present.has(index));
+
+    if (missing.length > 0) {
+      throw new ConflictException({
+        message: 'Material incompleto: faltam módulos.',
+        missing,
+      });
+    }
+
+    await this.supplyRepository.markComplete(
+      dto.studentId,
+      dto.level,
+      header.moduleCount,
+    );
+
+    const supply = await this.supplyRepository.findByStudentAndLevel(
+      dto.studentId,
+      dto.level,
+    );
+    if (!supply) {
+      throw new InternalServerErrorException(
+        'Material consolidado não pôde ser lido de volta.',
+      );
+    }
+    return supply;
+  }
+
+  /**
+   * Roda uma validação Zod distinguindo os dois tipos de falha que o `catch`
+   * único anterior misturava: material malformado (culpa do cliente, 400, com
+   * os caminhos exatos que falharam) e erro de gravação (culpa do servidor,
+   * 500 com stack). Antes, uma recusa do Firestore era reportada como
+   * "material inválido" — diagnóstico errado no lugar errado.
+   */
+  private parseOrThrow<T>(parse: () => T): T {
+    try {
+      return parse();
+    } catch (error) {
+      if (error instanceof ZodError) {
+        throw new BadRequestException({
+          message: 'Material inválido ou incompleto para consolidação.',
+          issues: error.issues.map((issue) => ({
+            path: issue.path.join('.'),
+            message: issue.message,
+          })),
+        });
+      }
+      throw error;
     }
   }
 
@@ -143,8 +243,13 @@ export class SupplyService {
     return new InternalServerErrorException(`Failed to ${action}: ${error}`);
   }
 
-  async findSuppliesByStudentId(studentId: string): Promise<Supply[]> {
-    return this.supplyRepository.findByStudentId(studentId);
+  /**
+   * Níveis com material pronto. Devolve só os cabeçalhos: as telas que
+   * consomem isto usam apenas o nível, e hidratar os módulos significaria
+   * baixar o material inteiro dos quatro níveis para desenhar quatro rótulos.
+   */
+  async findSuppliesByStudentId(studentId: string): Promise<SupplyHeader[]> {
+    return this.supplyRepository.findHeadersByStudentId(studentId);
   }
 
   async findSupplyByStudentAndLevel(
