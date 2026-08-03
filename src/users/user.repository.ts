@@ -47,12 +47,17 @@ export class UserRepository {
     return [...byId.values()].filter((user) => resolveRole(user) === role);
   }
 
+  /**
+   * O id da entidade é o do documento. Depender do campo `id` gravado dentro
+   * do corpo funciona para quem foi criado pela API, mas documentos feitos à
+   * mão no console do Firestore não o têm — e saíam daqui com `id:
+   * undefined`, levando junto o `PublicTeacherDto.id` (spec 013 Task 46.2).
+   */
   async findById(id: string): Promise<User | null> {
     const doc = await this.db.collection('users').doc(id).get();
     if (doc.exists) {
       const data = doc.data();
-      const user = plainToInstance(User, data);
-      return user;
+      return plainToInstance(User, { ...data, id: data?.id ?? doc.id });
     }
     return null;
   }
