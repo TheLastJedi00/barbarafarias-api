@@ -10,6 +10,7 @@ import { ConfigService } from '@nestjs/config';
 import { SubscriptionRepository } from './subscription.repository';
 import { CouponRepository } from './coupon.repository';
 import { UserRepository } from '../users/user.repository';
+import type { User } from '../users/user.entity';
 import { PaymentGateway } from './payment.gateway';
 import {
   CHARGE_STATUS,
@@ -68,6 +69,7 @@ export class SubscriptionService {
     if (!student) {
       throw new NotFoundException('Aluno não encontrado');
     }
+    this.assertPayableProfile(student);
 
     const existing = await this.subscriptions.findByStudent(studentId);
     if (existing && existing.status === SUBSCRIPTION_STATUS.ACTIVE) {
@@ -95,6 +97,7 @@ export class SubscriptionService {
     const payment = await this.issueCharge(subscription, student.email, {
       name: student.fullName,
       cellphone: student.phone,
+      taxId: student.cpf,
     });
 
     return {
@@ -132,6 +135,13 @@ export class SubscriptionService {
     subscription.updatedAt = new Date().toISOString();
 
     const student = await this.users.findById(studentId);
+    if (!student) {
+      throw new NotFoundException('Aluno não encontrado');
+    }
+    // A reemissão passa pelo gateway igual à contratação: sem CPF e celular
+    // ela falharia lá dentro, agora com uma parcela já desvinculada.
+    this.assertPayableProfile(student);
+
     // A cobrança em aberto perde o vínculo com o gateway antigo antes de ser
     // reemitida — sem isso o webhook do PIX abandonado ainda a marcaria paga.
     const pending = this.nextPendingCharge(subscription);
@@ -140,9 +150,10 @@ export class SubscriptionService {
     }
 
     await this.subscriptions.save(subscription);
-    const payment = await this.issueCharge(subscription, student?.email ?? '', {
-      name: student?.fullName,
-      cellphone: student?.phone,
+    const payment = await this.issueCharge(subscription, student.email, {
+      name: student.fullName,
+      cellphone: student.phone,
+      taxId: student.cpf,
     });
 
     return {
@@ -426,6 +437,26 @@ export class SubscriptionService {
   }
 
   /**
+   * O AbacatePay cria o cliente junto da cobrança e exige CPF e celular do
+   * pagador. Sem eles a chamada morre lá dentro e volta como falha genérica de
+   * checkout, longe do campo que a causou — o aluno via "erro ao contratar" e
+   * não tinha como saber o que fazer (spec 013 Task 45.3).
+   *
+   * A checagem fica antes de qualquer gravação: barrar depois de salvar a
+   * assinatura deixaria um plano `PENDING` sem cobrança emitida.
+   */
+  private assertPayableProfile(student: User): void {
+    const missing: string[] = [];
+    if (!student.cpf) missing.push('CPF');
+    if (!student.phone) missing.push('celular');
+    if (missing.length === 0) return;
+
+    throw new BadRequestException(
+      `Complete seu perfil com ${missing.join(' e ')} em Meu Perfil antes de contratar um plano.`,
+    );
+  }
+
+  /**
    * Emite a próxima cobrança pendente no gateway. Parcela zerada por cupom não
    * vai ao gateway (ele exige valor mínimo de R$ 1) — é confirmada na hora,
    * porque não há o que cobrar.
@@ -433,7 +464,7 @@ export class SubscriptionService {
   private async issueCharge(
     subscription: Subscription,
     email: string,
-    customer: { name?: string; cellphone?: string },
+    customer: { name?: string; cellphone?: string; taxId?: string },
   ): Promise<Partial<ChoosePlanResponseDto>> {
     const charge = this.nextPendingCharge(subscription);
     if (!charge) return {};
