@@ -1,13 +1,28 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import AbacatePay from 'abacatepay-nodejs-sdk';
 
-/** Quem vai pagar. Só o e-mail é exigido pelo gateway. */
+/**
+ * Quem vai pagar. Na v2 do AbacatePay o bloco é **tudo ou nada** no PIX: se
+ * `customer` for enviado, os quatro campos passam a ser obrigatórios. Por isso
+ * `assertPayableProfile` (spec 013 Task 45.3) roda antes de chegar aqui.
+ */
 export interface GatewayCustomer {
   name?: string;
   email: string;
   cellphone?: string;
   taxId?: string;
+}
+
+/**
+ * Identifica a linha do catálogo que o checkout hospedado vai cobrar. A v2 não
+ * aceita mais produto inline: `checkouts/create` só recebe `id` de produto já
+ * cadastrado, então o gateway mantém um catálogo derivado de (plano, valor).
+ */
+export interface ChargeProduct {
+  /** Chave estável do plano (`MONTHLY`, `ANNUAL`, …). */
+  key: string;
+  /** Rótulo legível, usado no nome do produto no painel do gateway. */
+  label: string;
 }
 
 export interface ChargeRequest {
@@ -17,6 +32,8 @@ export interface ChargeRequest {
   /** Id da cobrança no nosso lado, para reconciliar depois. */
   externalId: string;
   customer: GatewayCustomer;
+  /** Só o checkout usa; o PIX transparente cobra valor avulso. */
+  product?: ChargeProduct;
 }
 
 export interface PixChargeResult {
@@ -52,21 +69,59 @@ export function toCents(amount: number): number {
   return Math.round(amount * 100);
 }
 
+/** Uma hora para pagar o PIX antes de o QR Code expirar. */
+export const PIX_EXPIRATION_SECONDS = 3600;
+
+/** Raiz da API. A v1 foi desligada para chaves novas — ver nota da classe. */
+const ABACATEPAY_BASE_URL = 'https://api.abacatepay.com/v2';
+
+/**
+ * Formas de pagamento pedidas no checkout hospedado. Fica só `PIX` porque a
+ * loja não tem cartão habilitado: pedir `CARD` faz a v2 **recusar a criação
+ * inteira** com "CARD is not available for this store", derrubando também o
+ * PIX. Quando o cartão for liberado no painel, é aqui que ele entra.
+ */
+const CHECKOUT_METHODS = ['PIX'];
+
+/**
+ * AbacatePay na **API v2**.
+ *
+ * A migração não foi cosmética: as chaves emitidas hoje são v2 e a v1 responde
+ * `API key version mismatch` para elas, o que deixava toda cobrança presa no
+ * `warning` genérico de `issueCharge` (spec 013, teste contra a dev remota).
+ *
+ * Três diferenças de contrato moldam esta classe:
+ *
+ * 1. `pixQrCode/create` virou `transparents/create`, com o corpo envelopado em
+ *    `{ method, data }`.
+ * 2. `billing/create` virou `checkouts/create` e **não aceita mais produto
+ *    inline** — só `id` de produto do catálogo. Daí `resolveProductId`.
+ * 3. O checkout ignora `customer` inline (devolve `customerId: null`); o
+ *    pagador precisa estar cadastrado. Daí `resolveCustomerId`.
+ *
+ * O SDK `abacatepay-nodejs-sdk` saiu do caminho: a versão 1.6.0 só conhece as
+ * rotas v1 (`billing`, `pixQrCode`).
+ */
 @Injectable()
 export class AbacatePayGateway extends PaymentGateway {
   private readonly logger = new Logger(AbacatePayGateway.name);
-  private readonly client?: ReturnType<typeof AbacatePay>;
+  private readonly apiKey?: string;
   private readonly appBaseUrl: string;
+
+  /**
+   * `externalId` do produto → `id` no gateway. O catálogo é pequeno e estável
+   * (uma linha por plano e valor), então basta memória: o custo de errar é uma
+   * consulta a mais depois de um restart, não uma cobrança errada.
+   */
+  private readonly productIds = new Map<string, string>();
 
   constructor(private readonly configService: ConfigService) {
     super();
-    const apiKey = this.configService.get<string>('ABACATEPAY_API_KEY');
+    this.apiKey = this.configService.get<string>('ABACATEPAY_API_KEY');
     this.appBaseUrl =
       this.configService.get<string>('APP_BASE_URL') ?? 'http://localhost:4200';
 
-    if (apiKey) {
-      this.client = AbacatePay(apiKey);
-    } else {
+    if (!this.apiKey) {
       // Mesma postura do ResendService: a ausência da chave não derruba a
       // aplicação. O aluno vê o plano escolhido e um aviso de que a cobrança
       // não pôde ser emitida, em vez de um 500 sem explicação.
@@ -77,20 +132,27 @@ export class AbacatePayGateway extends PaymentGateway {
   }
 
   isEnabled(): boolean {
-    return !!this.client;
+    return !!this.apiKey;
   }
 
   async createPixCharge(request: ChargeRequest): Promise<PixChargeResult> {
     const payload = {
-      amount: toCents(request.amount),
-      description: request.description,
-      expiresIn: PIX_EXPIRATION_SECONDS,
-      customer: request.customer,
+      method: 'PIX',
+      data: {
+        amount: toCents(request.amount),
+        expiresIn: PIX_EXPIRATION_SECONDS,
+        description: request.description,
+        externalId: request.externalId,
+        customer: request.customer,
+      },
     };
 
     try {
-      const data = await this.abacateFetch('/pixQrCode/create', payload);
-      if (!data || !data.id || !data.brCode) {
+      const data = await this.abacateFetch('/transparents/create', {
+        method: 'POST',
+        body: payload,
+      });
+      if (!data?.id || !data.brCode) {
         throw new Error(`Resposta incompleta: ${JSON.stringify(data)}`);
       }
       return {
@@ -105,25 +167,28 @@ export class AbacatePayGateway extends PaymentGateway {
 
   async createCheckout(request: ChargeRequest): Promise<CheckoutResult> {
     const returnUrl = `${this.appBaseUrl}/meu-plano`;
-    const payload = {
-      frequency: 'ONE_TIME',
-      methods: ['PIX'],
-      products: [
-        {
-          externalId: request.externalId,
-          name: request.description,
-          quantity: 1,
-          price: toCents(request.amount),
-        },
-      ],
-      returnUrl,
-      completionUrl: `${returnUrl}?pagamento=concluido`,
-      customer: request.customer,
-    };
 
     try {
-      const data = await this.abacateFetch('/billing/create', payload);
-      if (!data || !data.id || !data.url) {
+      const productId = await this.resolveProductId(request);
+      const customerId = await this.resolveCustomerId(request.customer);
+
+      const payload: Record<string, unknown> = {
+        items: [{ id: productId, quantity: 1 }],
+        externalId: request.externalId,
+        methods: CHECKOUT_METHODS,
+        returnUrl,
+        completionUrl: `${returnUrl}?pagamento=concluido`,
+      };
+      // Sem cadastro, o próprio checkout hospedado colhe os dados do pagador —
+      // é degradação de conveniência, não de correção, então não vale derrubar
+      // a cobrança por causa dela.
+      if (customerId) payload.customerId = customerId;
+
+      const data = await this.abacateFetch('/checkouts/create', {
+        method: 'POST',
+        body: payload,
+      });
+      if (!data?.id || !data.url) {
         throw new Error(`Resposta incompleta: ${JSON.stringify(data)}`);
       }
       return { id: data.id, url: data.url };
@@ -133,12 +198,13 @@ export class AbacatePayGateway extends PaymentGateway {
   }
 
   async simulatePayment(chargeId: string): Promise<boolean> {
-    if (!this.client) return false;
+    if (!this.apiKey) return false;
     try {
-      const response = await this.client.pixQrCode.simulatePayment({
-        id: chargeId,
-      });
-      return !response.error;
+      await this.abacateFetch(
+        `/transparents/simulate-payment?id=${encodeURIComponent(chargeId)}`,
+        { method: 'POST', body: {} },
+      );
+      return true;
     } catch (error) {
       this.logger.warn(
         `Falha ao simular pagamento de ${chargeId}: ${String(error)}`,
@@ -147,37 +213,144 @@ export class AbacatePayGateway extends PaymentGateway {
     }
   }
 
-  private async abacateFetch(path: string, body: any): Promise<any> {
-    const apiKey = this.configService.get<string>('ABACATEPAY_API_KEY');
-    if (!apiKey) throw new Error('AbacatePay não configurado');
+  // ------------------------------------------------------------- catálogo
 
-    const res = await fetch(`https://api.abacatepay.com/v1${path}`, {
-      method: 'POST',
+  /**
+   * Devolve o produto do catálogo que representa (plano, valor), criando-o na
+   * primeira vez. A chave carrega o valor em centavos porque cupom e parcela
+   * mudam o preço, e produto do gateway tem preço fixo: sem o valor na chave,
+   * um desconto sairia cobrando o preço cheio.
+   */
+  private async resolveProductId(request: ChargeRequest): Promise<string> {
+    const cents = toCents(request.amount);
+    const key = request.product?.key ?? 'AVULSO';
+    const label = request.product?.label ?? 'Cobrança';
+    const externalId = `bf-${key}-${cents}`;
+
+    const cached = this.productIds.get(externalId);
+    if (cached) return cached;
+
+    const existing = await this.findProductByExternalId(externalId);
+    if (existing) {
+      this.productIds.set(externalId, existing);
+      return existing;
+    }
+
+    try {
+      const data = await this.abacateFetch('/products/create', {
+        method: 'POST',
+        body: {
+          externalId,
+          name: `${label} — ${formatBRL(cents)}`,
+          price: cents,
+          currency: 'BRL',
+        },
+      });
+      if (!data?.id) {
+        throw new Error(`Resposta incompleta: ${JSON.stringify(data)}`);
+      }
+      this.productIds.set(externalId, data.id);
+      return data.id;
+    } catch (error: any) {
+      // `products/create` não é idempotente: repetir o `externalId` responde
+      // 400 "Product with externalId already exists". Duas instâncias criando
+      // a mesma parcela ao mesmo tempo caem aqui — a segunda relê a lista em
+      // vez de estourar.
+      const recovered = await this.findProductByExternalId(externalId);
+      if (recovered) {
+        this.productIds.set(externalId, recovered);
+        return recovered;
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * `products/get` e **não** `products/list?externalId=`: a listagem, mesmo
+   * filtrada, omite produtos que existem de fato — comprovado contra a API,
+   * criando um produto que a `list` nunca devolvia e cuja recriação era
+   * recusada com "already exists". Confiar nela travava toda cobrança por
+   * checkout em processo novo, que é o caso normal em produção.
+   *
+   * Ausência chega como erro (400 "Product not found"), não como resposta
+   * vazia; por isso o catch devolve `undefined` em vez de propagar. Um erro
+   * real (chave inválida, rede) reaparece na criação logo em seguida, com a
+   * mensagem do gateway.
+   */
+  private async findProductByExternalId(
+    externalId: string,
+  ): Promise<string | undefined> {
+    try {
+      const data = await this.abacateFetch(
+        `/products/get?externalId=${encodeURIComponent(externalId)}`,
+        { method: 'GET' },
+      );
+      return data?.id;
+    } catch {
+      return undefined;
+    }
+  }
+
+  /**
+   * `customers/create` **é** idempotente pelo e-mail: repetir a chamada devolve
+   * o mesmo `cust_…`. Por isso não há busca antes — a criação já é a busca.
+   *
+   * Falhar aqui não pode derrubar a cobrança: o checkout hospedado funciona sem
+   * `customerId`, só sem os campos preenchidos de antemão.
+   */
+  private async resolveCustomerId(
+    customer: GatewayCustomer,
+  ): Promise<string | undefined> {
+    try {
+      const data = await this.abacateFetch('/customers/create', {
+        method: 'POST',
+        body: customer,
+      });
+      return data?.id;
+    } catch (error) {
+      this.logger.warn(
+        `Não foi possível cadastrar o pagador no gateway: ${String(error)}`,
+      );
+      return undefined;
+    }
+  }
+
+  // ---------------------------------------------------------------- HTTP
+
+  private async abacateFetch(
+    path: string,
+    init: { method: 'GET' | 'POST'; body?: unknown },
+  ): Promise<any> {
+    if (!this.apiKey) throw new Error('AbacatePay não configurado');
+
+    const res = await fetch(`${ABACATEPAY_BASE_URL}${path}`, {
+      method: init.method,
       headers: {
-        'Authorization': `Bearer ${apiKey}`,
+        Authorization: `Bearer ${this.apiKey}`,
         'Content-Type': 'application/json',
         'User-Agent': 'fariasbarbara-api',
       },
-      body: JSON.stringify(body),
+      body: init.body === undefined ? undefined : JSON.stringify(init.body),
     });
 
     const data = await res.json().catch(() => null);
 
-    if (!res.ok) {
-      const errorMsg = data?.error || data?.message || JSON.stringify(data) || res.statusText;
+    // A v2 responde 4xx de verdade nos erros (400 para regra de negócio, 422
+    // para payload inválido) e põe a mensagem em `error`, string.
+    if (!res.ok || data?.success === false) {
+      const errorMsg =
+        data?.error || data?.message || JSON.stringify(data) || res.statusText;
       throw new Error(errorMsg);
     }
 
-    return data?.data || data;
-  }
-
-  private requireClient(): ReturnType<typeof AbacatePay> {
-    if (!this.client) {
-      throw new Error('AbacatePay não configurado');
-    }
-    return this.client;
+    return data?.data ?? data;
   }
 }
 
-/** Uma hora para pagar o PIX antes de o QR Code expirar. */
-export const PIX_EXPIRATION_SECONDS = 3600;
+/** `24000` → `R$ 240,00`. Só para nomear o produto no painel do gateway. */
+function formatBRL(cents: number): string {
+  return (cents / 100).toLocaleString('pt-BR', {
+    style: 'currency',
+    currency: 'BRL',
+  });
+}

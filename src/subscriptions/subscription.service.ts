@@ -11,7 +11,7 @@ import { SubscriptionRepository } from './subscription.repository';
 import { CouponRepository } from './coupon.repository';
 import { UserRepository } from '../users/user.repository';
 import type { User } from '../users/user.entity';
-import { PaymentGateway } from './payment.gateway';
+import { PaymentGateway, toCents } from './payment.gateway';
 import {
   CHARGE_STATUS,
   Charge,
@@ -481,11 +481,21 @@ export class SubscriptionService {
       };
     }
 
+    const config = planConfig(subscription.plan);
     const request = {
       amount: charge.amount,
-      description: `${planConfig(subscription.plan).label} — parcela ${charge.index}`,
-      externalId: `${subscription.studentId}-${charge.index}`,
+      description: `${config.label} — parcela ${charge.index}`,
+      // O valor entra na chave de propósito. `checkouts/create` é idempotente
+      // por `externalId` e devolve a cobrança antiga **com o valor antigo**: um
+      // aluno que cancela um plano e contrata outro reusaria `aluno-1` e seria
+      // cobrado pelo preço do plano anterior. Com os centavos na chave, reusar
+      // só acontece quando cobrar de novo é exatamente o mesmo que cobrar —
+      // e aí a idempotência vira proteção contra cobrança dobrada.
+      externalId: `${subscription.studentId}-${charge.index}-${toCents(charge.amount)}`,
       customer: { email, ...customer },
+      // O checkout da v2 cobra por produto de catálogo, não por valor avulso:
+      // o gateway deriva a linha de (plano, valor) a partir daqui.
+      product: { key: subscription.plan, label: `Plano ${config.label}` },
     };
 
     try {
