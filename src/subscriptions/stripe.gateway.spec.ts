@@ -245,3 +245,89 @@ describe('StripeGateway — cupons (Task 55)', () => {
     );
   });
 });
+
+describe('StripeGateway — checkout incorporado (Task 56)', () => {
+  /** Payload da única chamada a `checkout.sessions.create`. */
+  async function checkout(request: Record<string, any> = {}) {
+    const { gateway, stripe } = build();
+    const result = await gateway.createCheckout({
+      ...PEDIDO,
+      ...request,
+    } as any);
+    return { result, payload: stripe.checkout.sessions.create.mock.calls[0][0] };
+  }
+
+  it('devolve o segredo da sessão, não uma URL para redirecionar', async () => {
+    const { result, payload } = await checkout();
+
+    expect(result).toEqual({
+      id: 'cs_test_1',
+      clientSecret: 'cs_test_1_secret',
+      provider: 'STRIPE',
+    });
+    expect(payload.ui_mode).toBe('embedded_page');
+    expect(payload.mode).toBe('subscription');
+  });
+
+  it('NUNCA manda `payment_method_types` — quem decide os métodos é o painel', async () => {
+    const { payload } = await checkout();
+
+    expect(payload).not.toHaveProperty('payment_method_types');
+  });
+
+  it('cobra o Price do plano no cliente cadastrado', async () => {
+    const { payload } = await checkout();
+
+    expect(payload.customer).toBe('cus_1');
+    expect(payload.line_items).toEqual([{ price: 'price_1', quantity: 1 }]);
+  });
+
+  it('volta para "Meu Plano" com o id da sessão, para a tela reconsultar', async () => {
+    const { payload } = await checkout();
+
+    expect(payload.return_url).toBe(
+      'https://app.example/meu-plano?pagamento=concluido&session_id={CHECKOUT_SESSION_ID}',
+    );
+  });
+
+  it('carrega no metadata o que o webhook precisa para achar a parcela', async () => {
+    const { payload } = await checkout({ chargeIndex: 3 });
+
+    expect(payload.subscription_data.metadata).toMatchObject({
+      studentId: 'aluno-1',
+      plan: 'MONTHLY',
+      chargeIndex: '3',
+    });
+  });
+
+  it('plano sem fim não anuncia ciclos; plano finito anuncia quantos são', async () => {
+    const semFim = await checkout({ recurring: { cycles: null } });
+    expect(semFim.payload.subscription_data.metadata.cycles).toBeUndefined();
+
+    const semestral = await checkout({
+      plan: 'SEMIANNUAL',
+      recurring: { cycles: 6 },
+    });
+    expect(semestral.payload.subscription_data.metadata.cycles).toBe('6');
+  });
+
+  it('aplica o cupom como desconto do Stripe, não como valor já abatido', async () => {
+    const { payload } = await checkout({
+      coupon: { code: 'BEMVINDA', amountOff: 50, durationMonths: 3 },
+    });
+
+    expect(payload.discounts).toEqual([{ coupon: 'bf-BEMVINDA-5000' }]);
+  });
+
+  it('sem cupom não manda `discounts` vazio, que o Stripe recusaria', async () => {
+    const { payload } = await checkout();
+
+    expect(payload).not.toHaveProperty('discounts');
+  });
+
+  it('identifica a integração para o painel comparar os fluxos', async () => {
+    const { payload } = await checkout();
+
+    expect(payload.integration_identifier).toMatch(/^bf-assinatura-[a-z]{8}$/);
+  });
+});

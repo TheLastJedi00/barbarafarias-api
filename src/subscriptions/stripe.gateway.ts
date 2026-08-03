@@ -6,6 +6,7 @@ import {
   CardGateway,
   CheckoutRequest,
   CheckoutResult,
+  GATEWAY_PROVIDERS,
   GatewayCustomer,
   toCents,
 } from './payment.gateway';
@@ -73,10 +74,69 @@ export class StripeGateway extends CardGateway {
     return !!this.stripe;
   }
 
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  async createCheckout(_request: CheckoutRequest): Promise<CheckoutResult> {
-    this.require();
-    throw new Error('createCheckout chega na Task 56');
+  /**
+   * Abre uma sessão de checkout **incorporada**: o formulário do cartão é
+   * montado na nossa página (`ui_mode: 'embedded_page'`), não numa aba do
+   * Stripe, e o que volta é o `client_secret` — nunca dado de cartão.
+   *
+   * `mode: 'subscription'` nos três planos. O mensal não tem fim; o semestral e
+   * o anual são a mesma assinatura mensal com um teto de ciclos, que é como o
+   * nosso cronograma já os modela (uma cobrança por mês, não um parcelamento
+   * de cartão dividido no emissor). O teto **não** é aplicado aqui porque
+   * `subscription_data` não aceita `cancel_at`: quem o aplica é o webhook, no
+   * `checkout.session.completed`, e o `metadata.cycles` é o que carrega a
+   * informação até lá.
+   */
+  async createCheckout(request: CheckoutRequest): Promise<CheckoutResult> {
+    const stripe = this.require();
+    const returnUrl = `${this.appBaseUrl}/meu-plano?pagamento=concluido&session_id={CHECKOUT_SESSION_ID}`;
+
+    const [customer, price] = await Promise.all([
+      this.resolveCustomerId(request.studentId, request.customer),
+      this.resolvePriceId(
+        request.plan,
+        request.planLabel ?? request.plan,
+        request.amount,
+      ),
+    ]);
+
+    const cycles = request.recurring?.cycles ?? null;
+    const params: Stripe.Checkout.SessionCreateParams = {
+      ui_mode: 'embedded_page',
+      mode: 'subscription',
+      customer,
+      line_items: [{ price, quantity: 1 }],
+      return_url: returnUrl,
+      // Rótulo do fluxo no painel, para comparar integrações. O sufixo
+      // aleatório é exigência do formato.
+      integration_identifier: `bf-assinatura-${randomLetters(8)}`,
+      subscription_data: {
+        metadata: {
+          studentId: request.studentId,
+          plan: request.plan,
+          chargeIndex: String(request.chargeIndex ?? 1),
+          ...(cycles === null ? {} : { cycles: String(cycles) }),
+        },
+      },
+      metadata: { studentId: request.studentId, externalId: request.externalId },
+    };
+
+    if (request.coupon) {
+      params.discounts = [{ coupon: await this.resolveCouponId(request.coupon) }];
+    }
+    // `payment_method_types` não aparece aqui de propósito: fixá-lo congelaria
+    // o cartão e desligaria os métodos que o painel habilitar depois.
+
+    const session = await stripe.checkout.sessions.create(params);
+    if (!session.client_secret) {
+      throw new Error('Stripe não devolveu o client_secret da sessão');
+    }
+
+    return {
+      id: session.id,
+      clientSecret: session.client_secret,
+      provider: GATEWAY_PROVIDERS.STRIPE,
+    };
   }
 
   // ------------------------------------------------------------- pagador
@@ -247,6 +307,15 @@ export class StripeGateway extends CardGateway {
     if (!this.stripe) throw new Error('Stripe não configurado');
     return this.stripe;
   }
+}
+
+/** Sufixo aleatório do `integration_identifier`, que o formato exige. */
+function randomLetters(length: number): string {
+  const alphabet = 'abcdefghijklmnopqrstuvwxyz';
+  return Array.from(
+    { length },
+    () => alphabet[Math.floor(Math.random() * alphabet.length)],
+  ).join('');
 }
 
 /** Constrói o cliente do Stripe, ou `null` quando não há chave. */

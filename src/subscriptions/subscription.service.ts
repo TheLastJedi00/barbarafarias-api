@@ -522,6 +522,9 @@ export class SubscriptionService {
       const checkout = await this.card.createCheckout({
         ...request,
         plan: subscription.plan,
+        planLabel: `Plano ${config.label}`,
+        studentId: subscription.studentId,
+        chargeIndex: charge.index,
       });
       charge.gatewayChargeId = checkout.id;
       charge.gatewayProvider = checkout.provider;

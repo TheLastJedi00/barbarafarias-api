@@ -56,6 +56,12 @@ export type GatewayProvider =
 export interface CheckoutRequest extends ChargeRequest {
   /** Plano do aluno, para o gateway resolver o produto/preço do catálogo. */
   plan: string;
+  /** Rótulo legível do plano, usado para nomear o produto no painel. */
+  planLabel?: string;
+  /** Dono da assinatura. É por ele que o gateway acha (ou grava) o pagador. */
+  studentId: string;
+  /** Parcela sendo cobrada, para o webhook saber qual confirmar. */
+  chargeIndex?: number;
   /**
    * Quantos ciclos mensais a assinatura tem. `null` = sem fim (plano mensal);
    * `6`/`12` fecham o semestral e o anual no fim do período.
