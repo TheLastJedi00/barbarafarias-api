@@ -1,5 +1,5 @@
 import { Module } from '@nestjs/common';
-import { ConfigModule } from '@nestjs/config';
+import { ConfigModule, ConfigService } from '@nestjs/config';
 import {
   SubscriptionController,
   SubscriptionWebhookController,
@@ -13,6 +13,11 @@ import {
   CardGateway,
   PixGateway,
 } from './payment.gateway';
+import {
+  STRIPE_CLIENT,
+  StripeGateway,
+  createStripeClient,
+} from './stripe.gateway';
 import { PaymentAccessService } from './payment-access.service';
 import { UserModule } from '../users/user.module';
 
@@ -32,6 +37,14 @@ import { UserModule } from '../users/user.module';
     PaymentAccessService,
     AbacatePayGateway,
     { provide: PixGateway, useExisting: AbacatePayGateway },
+    // O cliente do Stripe é construído aqui, e não dentro do gateway, para os
+    // testes poderem injetar um dublê sem tocar a rede.
+    {
+      provide: STRIPE_CLIENT,
+      useFactory: createStripeClient,
+      inject: [ConfigService],
+    },
+    StripeGateway,
     { provide: CardGateway, useClass: AbacatePayCardGateway },
   ],
   exports: [SubscriptionService, SubscriptionRepository, PaymentAccessService],
