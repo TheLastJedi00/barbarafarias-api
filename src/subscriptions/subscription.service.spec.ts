@@ -490,6 +490,66 @@ describe('SubscriptionService — cancelamento e cobranças', () => {
   });
 });
 
+describe('SubscriptionService — ciclo de vida no Stripe (Task 59)', () => {
+  const CARTAO = {
+    plan: SUBSCRIPTION_PLANS.MONTHLY,
+    paymentMethod: PAYMENT_METHODS.CREDIT_CARD,
+  };
+
+  /** Assinatura de cartão já paga, como o webhook a deixaria. */
+  async function comAssinaturaAtiva() {
+    const context = build();
+    await context.service.choosePlan('aluno-1', CARTAO as any);
+    const saved = context.subscriptions.store.get('aluno-1')!;
+    saved.stripeSubscriptionId = 'sub_1';
+    saved.status = SUBSCRIPTION_STATUS.ACTIVE;
+    return context;
+  }
+
+  it('cancelar o plano encerra a assinatura no Stripe', async () => {
+    const { service, card } = await comAssinaturaAtiva();
+
+    await service.cancelSubscription('aluno-1');
+
+    expect(card.cancelSubscription).toHaveBeenCalledWith('sub_1');
+  });
+
+  it('falhar no Stripe não prende o aluno no plano', async () => {
+    const { service, card, subscriptions } = await comAssinaturaAtiva();
+    card.cancelSubscription.mockRejectedValue(new Error('rede'));
+
+    const cancelled = await service.cancelSubscription('aluno-1');
+
+    expect(cancelled.status).toBe(SUBSCRIPTION_STATUS.CANCELLED);
+    expect(subscriptions.store.get('aluno-1')!.status).toBe(
+      SUBSCRIPTION_STATUS.CANCELLED,
+    );
+  });
+
+  it('plano de PIX não tenta cancelar nada lá fora', async () => {
+    const { service, card } = build();
+    await service.choosePlan('aluno-1', PIX as any);
+
+    await service.cancelSubscription('aluno-1');
+
+    expect(card.cancelSubscription).not.toHaveBeenCalled();
+  });
+
+  it('trocar cartão por PIX encerra a assinatura recorrente', async () => {
+    const { service, card, subscriptions } = await comAssinaturaAtiva();
+
+    await service.changePaymentMethod('aluno-1', {
+      paymentMethod: PAYMENT_METHODS.PIX_RECURRING,
+    });
+
+    expect(card.cancelSubscription).toHaveBeenCalledWith('sub_1');
+    // Sem isto o aluno pagaria nos dois trilhos no mês seguinte.
+    expect(
+      subscriptions.store.get('aluno-1')!.stripeSubscriptionId,
+    ).toBeUndefined();
+  });
+});
+
 describe('SubscriptionService — simulação de pagamento', () => {
   it('fica trancada fora do DEV_MODE', async () => {
     const { service } = build();

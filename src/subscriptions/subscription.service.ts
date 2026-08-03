@@ -148,6 +148,10 @@ export class SubscriptionService {
     // ela falharia lá dentro, agora com uma parcela já desvinculada.
     this.assertPayableProfile(student);
 
+    // Sair do cartão encerra a recorrência: mantê-la faria o aluno pagar nos
+    // dois trilhos no mês seguinte.
+    await this.releaseStripeSubscription(subscription);
+
     // A cobrança em aberto perde o vínculo com o gateway antigo antes de ser
     // reemitida — sem isso o webhook do PIX abandonado ainda a marcaria paga.
     const pending = this.nextPendingCharge(subscription);
@@ -181,6 +185,8 @@ export class SubscriptionService {
     if (subscription.status === SUBSCRIPTION_STATUS.CANCELLED) {
       return new SubscriptionDto(subscription);
     }
+
+    await this.releaseStripeSubscription(subscription);
 
     const now = new Date().toISOString();
     subscription.status = SUBSCRIPTION_STATUS.CANCELLED;
@@ -549,6 +555,29 @@ export class SubscriptionService {
           'Não foi possível gerar a cobrança agora. Tente novamente em instantes.',
       };
     }
+  }
+
+  /**
+   * Encerra a assinatura recorrente no gateway e solta o vínculo do nosso lado.
+   *
+   * Falhar lá fora **não** impede o cancelamento aqui: deixar o aluno preso
+   * num plano por causa de um erro de rede é pior que uma assinatura órfã no
+   * painel, que a gerente resolve à mão. O log é o que torna a órfã visível.
+   */
+  private async releaseStripeSubscription(
+    subscription: Subscription,
+  ): Promise<void> {
+    const stripeId = subscription.stripeSubscriptionId;
+    if (!stripeId) return;
+
+    try {
+      await this.card.cancelSubscription(stripeId);
+    } catch (error) {
+      this.logger.error(
+        `Assinatura ${stripeId} de ${subscription.studentId} não pôde ser cancelada no gateway: ${String(error)}`,
+      );
+    }
+    subscription.stripeSubscriptionId = undefined;
   }
 
   /**

@@ -140,6 +140,13 @@ export class Subscription {
   nextChargeDate?: string;
   cancelledAt?: string;
 
+  /**
+   * Assinatura recorrente no Stripe (`sub_…`), quando o plano é de cartão
+   * (spec 014). É o elo com quem emite as renovações: sem ele, cancelar aqui
+   * deixaria o cartão sendo debitado todo mês lá fora.
+   */
+  stripeSubscriptionId?: string;
+
   // --- cupom aplicado (RF15/RF16) ---
   couponCode?: string;
   /** Desconto em R$ por parcela, já validado contra o valor da parcela. */
