@@ -48,20 +48,28 @@ function build(overrides: Record<string, any> = {}) {
       fullName: 'Ana Aluna',
       email: 'ana@example.com',
       phone: '11999999999',
+      // `assertPayableProfile` (spec 013 Task 45.3) barra o checkout sem CPF.
+      cpf: '39053344705',
     }),
     updateSubscriptionState: jest.fn().mockResolvedValue(undefined),
   };
-  const gateway = {
+  const pix = {
     isEnabled: jest.fn().mockReturnValue(true),
     createPixCharge: jest.fn().mockResolvedValue({
       id: 'pix_1',
       brCode: '000201...',
       brCodeBase64: 'data:image/png;base64,AAA',
     }),
-    createCheckout: jest
-      .fn()
-      .mockResolvedValue({ id: 'bill_1', url: 'https://pay.example/1' }),
     simulatePayment: jest.fn().mockResolvedValue(true),
+  };
+  const card = {
+    isEnabled: jest.fn().mockReturnValue(true),
+    createCheckout: jest.fn().mockResolvedValue({
+      id: 'bill_1',
+      url: 'https://pay.example/1',
+      provider: 'ABACATEPAY',
+    }),
+    cancelSubscription: jest.fn().mockResolvedValue(undefined),
   };
   const config = {
     get: jest.fn((key: string) =>
@@ -74,10 +82,11 @@ function build(overrides: Record<string, any> = {}) {
     subscriptions as any,
     coupons as any,
     users as any,
-    gateway as any,
+    pix as any,
+    card as any,
     config as any,
   );
-  return { service, subscriptions, coupons, users, gateway, config };
+  return { service, subscriptions, coupons, users, pix, card, config };
 }
 
 const PIX = { plan: SUBSCRIPTION_PLANS.MONTHLY, paymentMethod: PAYMENT_METHODS.PIX_RECURRING };
@@ -192,8 +201,8 @@ describe('SubscriptionService — pagamento', () => {
     expect(response.checkoutUrl).toBeUndefined();
   });
 
-  it('cartão devolve a URL do checkout do AbacatePay', async () => {
-    const { service } = build();
+  it('cartão vai para a porta de cartão e devolve o checkout', async () => {
+    const { service, pix, card } = build();
 
     const response = await service.choosePlan('aluno-1', {
       plan: SUBSCRIPTION_PLANS.ANNUAL,
@@ -202,11 +211,34 @@ describe('SubscriptionService — pagamento', () => {
 
     expect(response.checkoutUrl).toBe('https://pay.example/1');
     expect(response.pixCopyPaste).toBeUndefined();
+    expect(card.createCheckout).toHaveBeenCalledTimes(1);
+    expect(pix.createPixCharge).not.toHaveBeenCalled();
+  });
+
+  it('PIX não toca a porta de cartão', async () => {
+    const { service, card } = build();
+
+    await service.choosePlan('aluno-1', PIX as any);
+
+    expect(card.createCheckout).not.toHaveBeenCalled();
+  });
+
+  it('o plano recebe o cartão mesmo com o PIX fora do ar', async () => {
+    const { service, pix } = build();
+    pix.isEnabled.mockReturnValue(false);
+
+    const response = await service.choosePlan('aluno-1', {
+      plan: SUBSCRIPTION_PLANS.ANNUAL,
+      paymentMethod: PAYMENT_METHODS.CREDIT_CARD,
+    } as any);
+
+    expect(response.checkoutUrl).toBe('https://pay.example/1');
+    expect(response.warning).toBeUndefined();
   });
 
   it('sem gateway configurado o plano é gravado com aviso, não com erro', async () => {
-    const { service, gateway, subscriptions } = build();
-    gateway.isEnabled.mockReturnValue(false);
+    const { service, pix, subscriptions } = build();
+    pix.isEnabled.mockReturnValue(false);
 
     const response = await service.choosePlan('aluno-1', PIX as any);
 
@@ -215,7 +247,7 @@ describe('SubscriptionService — pagamento', () => {
   });
 
   it('trocar o método reemite a parcela em aberto e solta a cobrança antiga', async () => {
-    const { service, subscriptions, gateway } = build();
+    const { service, subscriptions, card } = build();
     await service.choosePlan('aluno-1', PIX as any);
 
     const response = await service.changePaymentMethod('aluno-1', {
@@ -223,7 +255,7 @@ describe('SubscriptionService — pagamento', () => {
     });
 
     expect(response.checkoutUrl).toBe('https://pay.example/1');
-    expect(gateway.createCheckout).toHaveBeenCalledTimes(1);
+    expect(card.createCheckout).toHaveBeenCalledTimes(1);
     expect(subscriptions.store.get('aluno-1')!.charges[0].abacatePayId).toBe(
       'bill_1',
     );
@@ -314,7 +346,7 @@ describe('SubscriptionService — cupons', () => {
   });
 
   it('parcela zerada pelo cupom é confirmada sem ir ao gateway', async () => {
-    const { service, subscriptions, gateway, coupons } = build();
+    const { service, subscriptions, pix, coupons } = build();
     coupons.findByCode.mockResolvedValue(
       new Coupon({ ...cupom, discountAmount: 999, durationMonths: null }),
     );
@@ -324,7 +356,7 @@ describe('SubscriptionService — cupons', () => {
       couponCode: 'BEMVINDA',
     } as any);
 
-    expect(gateway.createPixCharge).not.toHaveBeenCalled();
+    expect(pix.createPixCharge).not.toHaveBeenCalled();
     const saved = subscriptions.store.get('aluno-1')!;
     expect(saved.charges[0].amount).toBe(0);
     expect(saved.charges[0].status).toBe(CHARGE_STATUS.PAID);
@@ -389,7 +421,7 @@ describe('SubscriptionService — simulação de pagamento', () => {
   });
 
   it('com DEV_MODE confirma a parcela e ativa o plano', async () => {
-    const { service, gateway, subscriptions } = build({
+    const { service, pix, subscriptions } = build({
       config: {
         get: jest.fn((key: string) =>
           key === 'DEV_MODE' ? 'true' : 'segredo',
@@ -400,7 +432,7 @@ describe('SubscriptionService — simulação de pagamento', () => {
 
     const result = await service.mockPay('aluno-1');
 
-    expect(gateway.simulatePayment).toHaveBeenCalledWith('pix_1');
+    expect(pix.simulatePayment).toHaveBeenCalledWith('pix_1');
     expect(result.status).toBe(SUBSCRIPTION_STATUS.ACTIVE);
     expect(subscriptions.store.get('aluno-1')!.paidInstallments).toBe(1);
   });

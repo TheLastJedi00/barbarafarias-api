@@ -11,7 +11,7 @@ import { SubscriptionRepository } from './subscription.repository';
 import { CouponRepository } from './coupon.repository';
 import { UserRepository } from '../users/user.repository';
 import type { User } from '../users/user.entity';
-import { PaymentGateway, toCents } from './payment.gateway';
+import { CardGateway, PixGateway, toCents } from './payment.gateway';
 import {
   CHARGE_STATUS,
   Charge,
@@ -50,7 +50,8 @@ export class SubscriptionService {
     private readonly subscriptions: SubscriptionRepository,
     private readonly coupons: CouponRepository,
     private readonly users: UserRepository,
-    private readonly gateway: PaymentGateway,
+    private readonly pix: PixGateway,
+    private readonly card: CardGateway,
     private readonly configService: ConfigService,
   ) {}
 
@@ -256,8 +257,8 @@ export class SubscriptionService {
 
     // Quando a cobrança existe no gateway, simulamos por lá: assim o webhook
     // também dispara e o caminho testado é o mesmo da produção.
-    if (pending.abacatePayId && this.gateway.isEnabled()) {
-      await this.gateway.simulatePayment(pending.abacatePayId);
+    if (pending.abacatePayId && this.pix.isEnabled()) {
+      await this.pix.simulatePayment(pending.abacatePayId);
     }
 
     await this.confirmCharge(subscription, pending.abacatePayId, pending.index);
@@ -474,7 +475,8 @@ export class SubscriptionService {
       return {};
     }
 
-    if (!this.gateway.isEnabled()) {
+    const isPix = subscription.paymentMethod === PAYMENT_METHODS.PIX_RECURRING;
+    if (!(isPix ? this.pix : this.card).isEnabled()) {
       return {
         warning:
           'Pagamento indisponível no momento. O plano foi registrado e a cobrança será emitida em breve.',
@@ -499,14 +501,20 @@ export class SubscriptionService {
     };
 
     try {
-      if (subscription.paymentMethod === PAYMENT_METHODS.PIX_RECURRING) {
-        const pix = await this.gateway.createPixCharge(request);
-        charge.abacatePayId = pix.id;
+      if (isPix) {
+        const charged = await this.pix.createPixCharge(request);
+        charge.abacatePayId = charged.id;
         await this.subscriptions.save(subscription);
-        return { pixQrCodeUrl: pix.brCodeBase64, pixCopyPaste: pix.brCode };
+        return {
+          pixQrCodeUrl: charged.brCodeBase64,
+          pixCopyPaste: charged.brCode,
+        };
       }
 
-      const checkout = await this.gateway.createCheckout(request);
+      const checkout = await this.card.createCheckout({
+        ...request,
+        plan: subscription.plan,
+      });
       charge.abacatePayId = checkout.id;
       await this.subscriptions.save(subscription);
       return { checkoutUrl: checkout.url };

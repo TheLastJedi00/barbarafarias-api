@@ -7,14 +7,20 @@ import {
 import { SubscriptionService } from './subscription.service';
 import { SubscriptionRepository } from './subscription.repository';
 import { CouponRepository } from './coupon.repository';
-import { AbacatePayGateway, PaymentGateway } from './payment.gateway';
+import {
+  AbacatePayCardGateway,
+  AbacatePayGateway,
+  CardGateway,
+  PixGateway,
+} from './payment.gateway';
 import { PaymentAccessService } from './payment-access.service';
 import { UserModule } from '../users/user.module';
 
 /**
- * O gateway entra pela porta abstrata (`PaymentGateway`), como o
+ * Cada método de pagamento entra pela sua porta abstrata, como o
  * `PayoutProvider` do fechamento das professoras: trocar de adquirente é
- * registrar outra classe aqui, sem tocar em service nem em controller.
+ * registrar outra classe aqui, sem tocar em service nem em controller. Desde a
+ * spec 014 são duas portas — PIX no AbacatePay, cartão no Stripe.
  */
 @Module({
   imports: [ConfigModule, UserModule],
@@ -24,7 +30,9 @@ import { UserModule } from '../users/user.module';
     SubscriptionRepository,
     CouponRepository,
     PaymentAccessService,
-    { provide: PaymentGateway, useClass: AbacatePayGateway },
+    AbacatePayGateway,
+    { provide: PixGateway, useExisting: AbacatePayGateway },
+    { provide: CardGateway, useClass: AbacatePayCardGateway },
   ],
   exports: [SubscriptionService, SubscriptionRepository, PaymentAccessService],
 })
