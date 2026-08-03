@@ -59,6 +59,23 @@ export class SubscriptionRepository {
     );
   }
 
+  /**
+   * Localiza a assinatura pelo `sub_…` do Stripe. As renovações chegam sem
+   * nenhum id nosso — a fatura só aponta para a assinatura —, então este é o
+   * caminho de volta das cobranças que nós não emitimos.
+   */
+  async findByStripeSubscriptionId(
+    stripeSubscriptionId: string,
+  ): Promise<Subscription | null> {
+    const all = await this.findAll();
+    return (
+      all.find(
+        (subscription) =>
+          subscription.stripeSubscriptionId === stripeSubscriptionId,
+      ) ?? null
+    );
+  }
+
   async save(subscription: Subscription): Promise<Subscription> {
     await this.subscriptions
       .doc(subscription.studentId)

@@ -29,6 +29,12 @@ function fakeSubscriptionRepository() {
           ),
         ) ?? null,
     ),
+    findByStripeSubscriptionId: jest.fn(
+      async (id: string) =>
+        [...store.values()].find(
+          (item) => item.stripeSubscriptionId === id,
+        ) ?? null,
+    ),
     save: jest.fn(async (subscription: Subscription) => {
       store.set(subscription.studentId, subscription);
       return subscription;
@@ -533,6 +539,128 @@ describe('SubscriptionService — ciclo de vida no Stripe (Task 59)', () => {
     await service.cancelSubscription('aluno-1');
 
     expect(card.cancelSubscription).not.toHaveBeenCalled();
+  });
+
+  it('a sessão concluída guarda a assinatura, confirma a parcela e ativa o plano', async () => {
+    const { service, subscriptions, card } = build();
+    await service.choosePlan('aluno-1', CARTAO as any);
+
+    await service.handleStripeEvent({
+      id: 'evt_1',
+      type: 'checkout.session.completed',
+      object: {
+        id: 'cs_test_1',
+        subscription: 'sub_1',
+        metadata: { studentId: 'aluno-1', chargeIndex: '1' },
+      },
+    });
+
+    const saved = subscriptions.store.get('aluno-1')!;
+    expect(saved.stripeSubscriptionId).toBe('sub_1');
+    expect(saved.status).toBe(SUBSCRIPTION_STATUS.ACTIVE);
+    expect(saved.paidInstallments).toBe(1);
+    // Mensal não tem fim: nada de teto de ciclos.
+    expect(card.capSubscriptionCycles).not.toHaveBeenCalled();
+  });
+
+  it('plano finito ganha o teto de ciclos assim que a assinatura existe', async () => {
+    const { service, card } = build();
+    await service.choosePlan('aluno-1', {
+      plan: SUBSCRIPTION_PLANS.SEMIANNUAL,
+      paymentMethod: PAYMENT_METHODS.CREDIT_CARD,
+    } as any);
+
+    await service.handleStripeEvent({
+      id: 'evt_1',
+      type: 'checkout.session.completed',
+      object: {
+        id: 'cs_test_1',
+        subscription: 'sub_1',
+        metadata: { studentId: 'aluno-1', chargeIndex: '1', cycles: '6' },
+      },
+    });
+
+    expect(card.capSubscriptionCycles).toHaveBeenCalledWith('sub_1', 6);
+  });
+
+  it('o evento do Stripe é idempotente, como o do AbacatePay', async () => {
+    const { service, subscriptions } = build();
+    await service.choosePlan('aluno-1', CARTAO as any);
+    const evento = {
+      id: 'evt_1',
+      type: 'checkout.session.completed',
+      object: {
+        id: 'cs_test_1',
+        subscription: 'sub_1',
+        metadata: { studentId: 'aluno-1', chargeIndex: '1' },
+      },
+    };
+
+    await service.handleStripeEvent(evento);
+    await service.handleStripeEvent(evento);
+
+    expect(subscriptions.store.get('aluno-1')!.paidInstallments).toBe(1);
+  });
+
+  it('a renovação paga confirma a próxima parcela e projeta mais uma', async () => {
+    const { service, subscriptions } = await comAssinaturaAtiva();
+
+    await service.handleStripeEvent({
+      id: 'evt_2',
+      type: 'invoice.paid',
+      object: { id: 'in_1', subscription: 'sub_1' },
+    });
+
+    const saved = subscriptions.store.get('aluno-1')!;
+    expect(saved.paidInstallments).toBe(1);
+    expect(
+      saved.charges.filter((charge) => charge.status !== CHARGE_STATUS.PAID),
+    ).toHaveLength(6);
+  });
+
+  it('pagamento recusado derruba o acesso ao conteúdo', async () => {
+    const { service, subscriptions, users } = await comAssinaturaAtiva();
+
+    await service.handleStripeEvent({
+      id: 'evt_3',
+      type: 'invoice.payment_failed',
+      object: { id: 'in_1', subscription: 'sub_1' },
+    });
+
+    expect(subscriptions.store.get('aluno-1')!.status).toBe(
+      SUBSCRIPTION_STATUS.PAST_DUE,
+    );
+    expect(users.updateSubscriptionState).toHaveBeenCalledWith(
+      'aluno-1',
+      expect.objectContaining({ isPaying: false }),
+    );
+  });
+
+  it('assinatura encerrada no Stripe cancela o plano sem tentar cancelar de volta', async () => {
+    const { service, subscriptions, card } = await comAssinaturaAtiva();
+
+    await service.handleStripeEvent({
+      id: 'evt_4',
+      type: 'customer.subscription.deleted',
+      object: { id: 'sub_1' },
+    });
+
+    expect(subscriptions.store.get('aluno-1')!.status).toBe(
+      SUBSCRIPTION_STATUS.CANCELLED,
+    );
+    expect(card.cancelSubscription).not.toHaveBeenCalled();
+  });
+
+  it('evento que não nos interessa não é erro', async () => {
+    const { service } = build();
+
+    await expect(
+      service.handleStripeEvent({
+        id: 'evt_5',
+        type: 'payment_intent.created',
+        object: { id: 'pi_1' },
+      }),
+    ).resolves.toBeUndefined();
   });
 
   it('trocar cartão por PIX encerra a assinatura recorrente', async () => {

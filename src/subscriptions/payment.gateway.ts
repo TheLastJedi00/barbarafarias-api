@@ -131,6 +131,15 @@ export abstract class CardGateway extends PaymentGateway {
    * qualquer ordem.
    */
   abstract cancelSubscription(subscriptionId: string): Promise<void>;
+  /**
+   * Fecha uma assinatura recorrente no fim do ciclo `cycles`, para os planos
+   * que têm fim (semestral, anual). Fica fora do `createCheckout` porque a
+   * assinatura só passa a existir depois do primeiro pagamento.
+   */
+  abstract capSubscriptionCycles(
+    subscriptionId: string,
+    cycles: number,
+  ): Promise<void>;
 }
 
 /** R$ → centavos, que é a unidade da API do AbacatePay. */
@@ -453,6 +462,11 @@ export class AbacatePayCardGateway extends CardGateway {
    * desfazer lá fora.
    */
   cancelSubscription(): Promise<void> {
+    return Promise.resolve();
+  }
+
+  /** Sem assinatura recorrente, não há ciclo para limitar. */
+  capSubscriptionCycles(): Promise<void> {
     return Promise.resolve();
   }
 }

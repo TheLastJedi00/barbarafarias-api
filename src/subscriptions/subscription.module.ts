@@ -18,6 +18,7 @@ import {
   StripeGateway,
   createStripeClient,
 } from './stripe.gateway';
+import { StripeWebhookController } from './stripe-webhook.controller';
 import { PaymentAccessService } from './payment-access.service';
 import { UserModule } from '../users/user.module';
 
@@ -29,7 +30,11 @@ import { UserModule } from '../users/user.module';
  */
 @Module({
   imports: [ConfigModule, UserModule],
-  controllers: [SubscriptionController, SubscriptionWebhookController],
+  controllers: [
+    SubscriptionController,
+    SubscriptionWebhookController,
+    StripeWebhookController,
+  ],
   providers: [
     SubscriptionService,
     SubscriptionRepository,
@@ -44,11 +49,15 @@ import { UserModule } from '../users/user.module';
       useFactory: createStripeClient,
       inject: [ConfigService],
     },
+    StripeGateway,
     // O cartão é do Stripe desde a spec 014. O `AbacatePayCardGateway` fica
     // registrado e sem uso: é o caminho de volta se a conta do Stripe ficar
-    // indisponível, e trocar de volta é editar esta linha.
+    // indisponível, e trocar de volta é editar a linha abaixo.
     AbacatePayCardGateway,
-    { provide: CardGateway, useClass: StripeGateway },
+    // `useExisting`, e não `useClass`: o webhook injeta o `StripeGateway` pelo
+    // nome da classe para verificar assinaturas, e duas instâncias teriam dois
+    // caches de catálogo — o dobro de chamadas à API por processo.
+    { provide: CardGateway, useExisting: StripeGateway },
   ],
   exports: [SubscriptionService, SubscriptionRepository, PaymentAccessService],
 })

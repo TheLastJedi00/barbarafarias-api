@@ -17,6 +17,7 @@ import {
   PixGateway,
   toCents,
 } from './payment.gateway';
+import type { StripeDomainEvent } from './stripe.gateway';
 import {
   CHARGE_STATUS,
   Charge,
@@ -251,6 +252,175 @@ export class SubscriptionService {
 
     await this.confirmCharge(subscription, chargeId);
     return { received: true };
+  }
+
+  /**
+   * Regra de domínio dos eventos do Stripe (spec 014).
+   *
+   * Recebe o evento **já verificado e normalizado**, venha ele do endpoint de
+   * conteúdo instantâneo ou do de conteúdo mínimo. Os dois desembocam aqui de
+   * propósito: separar o processamento por endpoint deixaria o pagamento
+   * dependendo de qual estilo de payload o painel está configurado a enviar, e
+   * uma troca de configuração pararia de ativar planos em silêncio.
+   *
+   * Idempotente do começo ao fim — o Stripe reenvia até receber 2xx.
+   */
+  async handleStripeEvent(event: StripeDomainEvent): Promise<void> {
+    switch (event.type) {
+      case 'checkout.session.completed':
+        return this.onCheckoutCompleted(event.object);
+      case 'invoice.paid':
+        return this.onInvoicePaid(event.object);
+      case 'invoice.payment_failed':
+        return this.onInvoiceFailed(event.object);
+      case 'customer.subscription.deleted':
+        return this.onStripeSubscriptionDeleted(event.object);
+      default:
+        // Estorno e disputa ficam para a dívida técnica D1, como no PIX.
+        return;
+    }
+  }
+
+  /**
+   * Primeira cobrança paga: a assinatura recorrente passa a existir, e é aqui
+   * que ela é amarrada ao plano e ganha o teto de ciclos dos planos finitos.
+   */
+  private async onCheckoutCompleted(session: Record<string, any>) {
+    const studentId = session?.metadata?.studentId;
+    if (!studentId) {
+      this.logger.warn(
+        `Sessão ${session?.id} sem studentId no metadata; nada a fazer.`,
+      );
+      return;
+    }
+
+    const subscription = await this.subscriptions.findByStudent(studentId);
+    if (!subscription) {
+      this.logger.warn(`Sessão ${session?.id} sem assinatura correspondente`);
+      return;
+    }
+
+    const stripeSubscriptionId = idOf(session.subscription);
+    if (stripeSubscriptionId) {
+      subscription.stripeSubscriptionId = stripeSubscriptionId;
+      await this.subscriptions.save(subscription);
+      await this.capCycles(subscription, Number(session.metadata?.cycles));
+    }
+
+    await this.confirmCharge(
+      subscription,
+      session.id,
+      Number(session.metadata?.chargeIndex) || undefined,
+    );
+  }
+
+  /**
+   * Renovação paga pelo Stripe. Confirma a próxima parcela em aberto: a fatura
+   * não sabe o índice dela, e a ordem do cronograma é a nossa verdade.
+   */
+  private async onInvoicePaid(invoice: Record<string, any>) {
+    const subscription = await this.fromInvoice(invoice);
+    if (!subscription) return;
+
+    const pending = this.nextPendingCharge(subscription);
+    if (!pending) return;
+
+    await this.confirmCharge(subscription, undefined, pending.index);
+
+    // Rede de segurança do teto de ciclos: se o `cancel_at` não tiver sido
+    // aplicado, o plano finito pararia de renovar só aqui. É o único ponto
+    // desta integração onde uma falha silenciosa cobraria dinheiro a mais.
+    const config = planConfig(subscription.plan);
+    if (
+      !config.recurring &&
+      subscription.paidInstallments >= config.installments &&
+      subscription.stripeSubscriptionId
+    ) {
+      await this.releaseStripeSubscription(subscription);
+      await this.subscriptions.save(subscription);
+    }
+  }
+
+  /** Parcela recusada: o aluno perde o acesso até regularizar (RF13). */
+  private async onInvoiceFailed(invoice: Record<string, any>) {
+    const subscription = await this.fromInvoice(invoice);
+    if (!subscription) return;
+    if (subscription.status === SUBSCRIPTION_STATUS.PAST_DUE) return;
+
+    subscription.status = SUBSCRIPTION_STATUS.PAST_DUE;
+    subscription.updatedAt = new Date().toISOString();
+    await this.subscriptions.save(subscription);
+    await this.syncUser(subscription);
+  }
+
+  /**
+   * A assinatura acabou no Stripe — por cancelamento no painel, pelo
+   * `cancel_at` do plano finito ou por inadimplência. Não tenta cancelar de
+   * volta: o outro lado já fez isso.
+   */
+  private async onStripeSubscriptionDeleted(stripeSubscription: {
+    id?: string;
+  }) {
+    if (!stripeSubscription?.id) return;
+    const subscription = await this.subscriptions.findByStripeSubscriptionId(
+      stripeSubscription.id,
+    );
+    if (!subscription) return;
+    if (subscription.status === SUBSCRIPTION_STATUS.CANCELLED) return;
+
+    const now = new Date().toISOString();
+    subscription.status = SUBSCRIPTION_STATUS.CANCELLED;
+    subscription.cancelledAt = now;
+    subscription.updatedAt = now;
+    subscription.nextChargeDate = undefined;
+    subscription.stripeSubscriptionId = undefined;
+    subscription.charges = subscription.charges.filter(
+      (charge) => charge.status === CHARGE_STATUS.PAID,
+    );
+
+    await this.subscriptions.save(subscription);
+    await this.syncUser(subscription);
+  }
+
+  /** Assinatura dona de uma fatura, pela assinatura que a fatura aponta. */
+  private async fromInvoice(
+    invoice: Record<string, any>,
+  ): Promise<Subscription | null> {
+    // A partir das versões recentes da API a fatura aninha a assinatura em
+    // `parent.subscription_details`; o campo raso continua vindo nas antigas.
+    const stripeSubscriptionId =
+      idOf(invoice?.subscription) ??
+      idOf(invoice?.parent?.subscription_details?.subscription);
+    if (!stripeSubscriptionId) return null;
+
+    const subscription = await this.subscriptions.findByStripeSubscriptionId(
+      stripeSubscriptionId,
+    );
+    if (!subscription) {
+      this.logger.warn(
+        `Fatura de ${stripeSubscriptionId} sem assinatura correspondente`,
+      );
+    }
+    return subscription;
+  }
+
+  /** Fecha o plano finito no fim do último ciclo, quando o evento diz quantos. */
+  private async capCycles(
+    subscription: Subscription,
+    cycles: number,
+  ): Promise<void> {
+    if (!cycles || !subscription.stripeSubscriptionId) return;
+    try {
+      await this.card.capSubscriptionCycles(
+        subscription.stripeSubscriptionId,
+        cycles,
+      );
+    } catch (error) {
+      // A rede de segurança de `onInvoicePaid` ainda pega este caso.
+      this.logger.error(
+        `Não foi possível limitar a assinatura ${subscription.stripeSubscriptionId} a ${cycles} ciclos: ${String(error)}`,
+      );
+    }
   }
 
   /**
@@ -688,6 +858,20 @@ export function addMonths(date: string, months: number): string {
   ).getUTCDate();
   target.setUTCDate(Math.min(day, lastDay));
   return target.toISOString().slice(0, 10);
+}
+
+/**
+ * O Stripe manda ora o id, ora o objeto expandido, no mesmo campo. Isso
+ * depende de configuração do endpoint, não do nosso código, então tratar os
+ * dois é mais barato que garantir um.
+ */
+function idOf(value: unknown): string | undefined {
+  if (typeof value === 'string') return value;
+  if (value && typeof value === 'object') {
+    const id = (value as { id?: unknown }).id;
+    if (typeof id === 'string') return id;
+  }
+  return undefined;
 }
 
 /** O AbacatePay aninha o id em lugares diferentes conforme o tipo da cobrança. */
