@@ -542,6 +542,7 @@ Perfil do **aluno logado** e a edição que ele mesmo faz dele (spec 011 RF14).
 {
   "fullName": "João Silva",
   "phone": "11999999999",
+  "cpf": "12345678909",
   "profileImageUrl": "https://firebasestorage.../avatars/uid.jpg"
 }
 ```
@@ -549,6 +550,15 @@ Perfil do **aluno logado** e a edição que ele mesmo faz dele (spec 011 RF14).
 > A whitelist é intencional e **não** é a mesma do `PUT /users/:id`. Papel, professora
 > responsável, nível e situação de pagamento continuam exclusivos da gerente — sem esse
 > recorte, um aluno poderia se promover ou trocar de professora pelo próprio painel.
+
+> **CPF e telefone (spec 013).** Ambos chegam **só com dígitos** — a máscara é assunto da
+> tela, e o `@Transform` do DTO limpa o que vier formatado. O CPF é validado pelos dois
+> dígitos verificadores (`IsCpfConstraint`), não só pelo tamanho: o gateway valida o
+> número de verdade e recusaria a cobrança lá na frente. Os dois são opcionais neste
+> `PATCH` — ele é parcial e serve também ao upload de avatar — mas **obrigatórios para
+> contratar um plano**: `POST /subscriptions` responde `400` sem eles.
+> `GET /users/:id` omite o `cpf` do aluno para a professora vinculada; a gerente e o
+> próprio dono continuam recebendo.
 
 ---
 
@@ -1024,6 +1034,7 @@ o DTO público entrega apenas nome e, se a professora permitir, telefone.
 | `PATCH` | `/teachers/me` | `manager`, `teacher` | **Edição do próprio perfil**: `{ fullName?, phone?, profileImageUrl?, bio? }` |
 | `PATCH` | `/teachers/me/phone-visibility` | `manager`, `teacher` | Body `{ visible }` |
 | `GET` | `/teachers/mine` | `student` | Professora responsável (DTO público: nome, foto, bio e — se permitido — telefone) |
+| `GET` | `/teachers/:id/public` | `manager`, `teacher`, `student` | Mesmo DTO público, por id. Serve a quem abre o painel de um aluno que não é ele mesmo (spec 013) |
 
 > `PATCH /teachers/me` é deliberadamente separado de `PUT /teachers/:id`: a professora
 > edita nome, telefone, foto e bio; **dados fiscais e valor-hora continuam saindo só pelo
