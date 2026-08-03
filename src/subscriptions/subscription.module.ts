@@ -44,8 +44,11 @@ import { UserModule } from '../users/user.module';
       useFactory: createStripeClient,
       inject: [ConfigService],
     },
-    StripeGateway,
-    { provide: CardGateway, useClass: AbacatePayCardGateway },
+    // O cartão é do Stripe desde a spec 014. O `AbacatePayCardGateway` fica
+    // registrado e sem uso: é o caminho de volta se a conta do Stripe ficar
+    // indisponível, e trocar de volta é editar esta linha.
+    AbacatePayCardGateway,
+    { provide: CardGateway, useClass: StripeGateway },
   ],
   exports: [SubscriptionService, SubscriptionRepository, PaymentAccessService],
 })

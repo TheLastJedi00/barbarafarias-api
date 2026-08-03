@@ -69,11 +69,12 @@ function build(overrides: Record<string, any> = {}) {
   const card = {
     isEnabled: jest.fn().mockReturnValue(true),
     createCheckout: jest.fn().mockResolvedValue({
-      id: 'bill_1',
-      url: 'https://pay.example/1',
-      provider: 'ABACATEPAY',
+      id: 'cs_test_1',
+      clientSecret: 'cs_test_1_secret',
+      provider: 'STRIPE',
     }),
     cancelSubscription: jest.fn().mockResolvedValue(undefined),
+    capSubscriptionCycles: jest.fn().mockResolvedValue(undefined),
   };
   const config = {
     get: jest.fn((key: string) =>
@@ -205,7 +206,7 @@ describe('SubscriptionService — pagamento', () => {
     expect(response.checkoutUrl).toBeUndefined();
   });
 
-  it('cartão vai para a porta de cartão e devolve o checkout', async () => {
+  it('cartão devolve o segredo da sessão para o formulário na própria página', async () => {
     const { service, pix, card } = build();
 
     const response = await service.choosePlan('aluno-1', {
@@ -213,10 +214,83 @@ describe('SubscriptionService — pagamento', () => {
       paymentMethod: PAYMENT_METHODS.CREDIT_CARD,
     } as any);
 
-    expect(response.checkoutUrl).toBe('https://pay.example/1');
+    expect(response.clientSecret).toBe('cs_test_1_secret');
+    expect(response.checkoutUrl).toBeUndefined();
     expect(response.pixCopyPaste).toBeUndefined();
     expect(card.createCheckout).toHaveBeenCalledTimes(1);
     expect(pix.createPixCharge).not.toHaveBeenCalled();
+  });
+
+  it('o gateway que devolve URL (AbacatePay) continua sendo redirecionamento', async () => {
+    const { service, card } = build();
+    card.createCheckout.mockResolvedValue({
+      id: 'bill_1',
+      url: 'https://pay.example/1',
+      provider: 'ABACATEPAY',
+    });
+
+    const response = await service.choosePlan('aluno-1', {
+      plan: SUBSCRIPTION_PLANS.ANNUAL,
+      paymentMethod: PAYMENT_METHODS.CREDIT_CARD,
+    } as any);
+
+    expect(response.checkoutUrl).toBe('https://pay.example/1');
+    expect(response.clientSecret).toBeUndefined();
+  });
+
+  it('o plano finito informa quantos ciclos tem; o mensal, que não tem fim', async () => {
+    const { service, card } = build();
+
+    await service.choosePlan('aluno-1', {
+      plan: SUBSCRIPTION_PLANS.SEMIANNUAL,
+      paymentMethod: PAYMENT_METHODS.CREDIT_CARD,
+    } as any);
+    expect(card.createCheckout).toHaveBeenCalledWith(
+      expect.objectContaining({
+        plan: 'SEMIANNUAL',
+        studentId: 'aluno-1',
+        chargeIndex: 1,
+        recurring: { cycles: 6 },
+      }),
+    );
+
+    const mensal = build();
+    await mensal.service.choosePlan('aluno-2', {
+      plan: SUBSCRIPTION_PLANS.MONTHLY,
+      paymentMethod: PAYMENT_METHODS.CREDIT_CARD,
+    } as any);
+    expect(mensal.card.createCheckout).toHaveBeenCalledWith(
+      expect.objectContaining({ recurring: { cycles: null } }),
+    );
+  });
+
+  it('o cupom vai inteiro para o gateway, não como valor já abatido', async () => {
+    const { service, card, coupons } = build();
+    coupons.findByCode.mockResolvedValue(
+      new Coupon({
+        id: 'c1',
+        code: 'BEMVINDA',
+        discountAmount: 50,
+        durationMonths: 3,
+        active: true,
+        createdAt: '',
+        createdBy: '',
+      }),
+    );
+
+    await service.choosePlan('aluno-1', {
+      plan: SUBSCRIPTION_PLANS.SEMIANNUAL,
+      paymentMethod: PAYMENT_METHODS.CREDIT_CARD,
+      couponCode: 'BEMVINDA',
+    } as any);
+
+    expect(card.createCheckout).toHaveBeenCalledWith(
+      expect.objectContaining({
+        coupon: { code: 'BEMVINDA', amountOff: 50, durationMonths: 3 },
+        // O valor cheio: quem abate as renovações é o Stripe.
+        amount: 200,
+      }),
+    );
   });
 
   it('PIX não toca a porta de cartão', async () => {
@@ -236,7 +310,7 @@ describe('SubscriptionService — pagamento', () => {
       paymentMethod: PAYMENT_METHODS.CREDIT_CARD,
     } as any);
 
-    expect(response.checkoutUrl).toBe('https://pay.example/1');
+    expect(response.clientSecret).toBe('cs_test_1_secret');
     expect(response.warning).toBeUndefined();
   });
 
@@ -258,10 +332,10 @@ describe('SubscriptionService — pagamento', () => {
       paymentMethod: PAYMENT_METHODS.CREDIT_CARD,
     });
 
-    expect(response.checkoutUrl).toBe('https://pay.example/1');
+    expect(response.clientSecret).toBe('cs_test_1_secret');
     expect(card.createCheckout).toHaveBeenCalledTimes(1);
     expect(subscriptions.store.get('aluno-1')!.charges[0].gatewayChargeId).toBe(
-      'bill_1',
+      'cs_test_1',
     );
   });
 

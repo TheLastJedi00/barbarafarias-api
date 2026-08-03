@@ -521,15 +521,23 @@ export class SubscriptionService {
 
       const checkout = await this.card.createCheckout({
         ...request,
+        // Valor **cheio** da parcela, com o cupom ao lado em vez de já
+        // abatido: no cartão a cobrança é recorrente e quem aplica o desconto
+        // às renovações é o gateway. Mandar o valor pronto acertaria a
+        // primeira parcela e cobraria o preço cheio em todas as seguintes.
+        amount: config.installmentAmount,
+        coupon: this.couponFor(subscription),
         plan: subscription.plan,
         planLabel: `Plano ${config.label}`,
         studentId: subscription.studentId,
         chargeIndex: charge.index,
+        // Plano recorrente não tem fim; os finitos fecham no último ciclo.
+        recurring: { cycles: config.recurring ? null : config.installments },
       });
       charge.gatewayChargeId = checkout.id;
       charge.gatewayProvider = checkout.provider;
       await this.subscriptions.save(subscription);
-      return { checkoutUrl: checkout.url };
+      return { checkoutUrl: checkout.url, clientSecret: checkout.clientSecret };
     } catch (error) {
       // O plano já está gravado: falhar aqui derrubaria a contratação inteira
       // por um problema do gateway. O aluno reemite pela própria tela.
@@ -541,6 +549,21 @@ export class SubscriptionService {
           'Não foi possível gerar a cobrança agora. Tente novamente em instantes.',
       };
     }
+  }
+
+  /**
+   * O cupom gravado na assinatura, no formato que o gateway de cartão espera.
+   * `undefined` quando não há cupom — mandar um `discounts` vazio é recusado.
+   */
+  private couponFor(subscription: Subscription) {
+    if (!subscription.couponCode || !subscription.couponDiscount) {
+      return undefined;
+    }
+    return {
+      code: subscription.couponCode,
+      amountOff: subscription.couponDiscount,
+      durationMonths: subscription.couponRemainingCharges ?? null,
+    };
   }
 
   private nextPendingCharge(subscription: Subscription): Charge | undefined {
