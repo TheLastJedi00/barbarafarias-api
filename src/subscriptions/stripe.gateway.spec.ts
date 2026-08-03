@@ -77,8 +77,8 @@ export function build(overrides: Record<string, any> = {}) {
     ),
   };
   const gateway = new StripeGateway(
-    (overrides.client === null ? null : stripe) as any,
-    users as any,
+    overrides.client === null ? null : stripe,
+    users,
     config as any,
   );
   return { gateway, stripe, users, config };
@@ -268,7 +268,10 @@ describe('StripeGateway — checkout incorporado (Task 56)', () => {
       ...PEDIDO,
       ...request,
     } as any);
-    return { result, payload: stripe.checkout.sessions.create.mock.calls[0][0] };
+    return {
+      result,
+      payload: stripe.checkout.sessions.create.mock.calls[0][0],
+    };
   }
 
   it('devolve o segredo da sessão, não uma URL para redirecionar', async () => {
@@ -358,10 +361,14 @@ describe('StripeGateway — ciclo de vida (Task 57)', () => {
   it('assinatura já cancelada não é erro: tela e webhook chegam fora de ordem', async () => {
     const { gateway, stripe } = build();
     stripe.subscriptions.cancel.mockRejectedValue(
-      Object.assign(new Error('No such subscription'), { code: 'resource_missing' }),
+      Object.assign(new Error('No such subscription'), {
+        code: 'resource_missing',
+      }),
     );
 
-    await expect(gateway.cancelSubscription('sub_sumiu')).resolves.toBeUndefined();
+    await expect(
+      gateway.cancelSubscription('sub_sumiu'),
+    ).resolves.toBeUndefined();
   });
 
   it('um erro de verdade continua estourando', async () => {
@@ -425,7 +432,7 @@ describe('StripeGateway — verificação de eventos (Task 57)', () => {
     const parse = jest
       .fn()
       .mockReturnValue({ id: 'evt_thin_1', type: 'v1.invoice.paid' });
-    (stripe as any).parseEventNotification = parse;
+    stripe.parseEventNotification = parse;
     stripe.v2.core.events.retrieve.mockResolvedValue({
       id: 'evt_thin_1',
       type: 'v1.invoice.paid',

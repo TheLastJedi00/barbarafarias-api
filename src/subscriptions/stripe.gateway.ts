@@ -133,11 +133,16 @@ export class StripeGateway extends CardGateway {
           ...(cycles === null ? {} : { cycles: String(cycles) }),
         },
       },
-      metadata: { studentId: request.studentId, externalId: request.externalId },
+      metadata: {
+        studentId: request.studentId,
+        externalId: request.externalId,
+      },
     };
 
     if (request.coupon) {
-      params.discounts = [{ coupon: await this.resolveCouponId(request.coupon) }];
+      params.discounts = [
+        { coupon: await this.resolveCouponId(request.coupon) },
+      ];
     }
     // `payment_method_types` não aparece aqui de propósito: fixá-lo congelaria
     // o cartão e desligaria os métodos que o painel habilitar depois.

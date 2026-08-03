@@ -13,10 +13,7 @@ function build() {
     verifySnapshotEvent: jest.fn().mockResolvedValue(EVENTO),
     verifyThinEvent: jest.fn().mockResolvedValue(EVENTO),
   };
-  const controller = new StripeWebhookController(
-    service as any,
-    stripe as any,
-  );
+  const controller = new StripeWebhookController(service as any, stripe as any);
   const request = { rawBody: Buffer.from('{"id":"evt_1"}') } as any;
   return { controller, service, stripe, request };
 }
@@ -74,9 +71,9 @@ describe('StripeWebhookController — recusa e retentativa', () => {
   it('sem corpo cru não há o que verificar', async () => {
     const { controller } = build();
 
-    await expect(
-      controller.snapshot({} as any, 'assinatura'),
-    ).rejects.toThrow(BadRequestException);
+    await expect(controller.snapshot({} as any, 'assinatura')).rejects.toThrow(
+      BadRequestException,
+    );
   });
 
   it('falha ao processar propaga: a cobrança foi paga e o plano não ativou', async () => {

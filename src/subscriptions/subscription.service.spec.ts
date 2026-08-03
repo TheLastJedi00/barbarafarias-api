@@ -31,9 +31,8 @@ function fakeSubscriptionRepository() {
     ),
     findByStripeSubscriptionId: jest.fn(
       async (id: string) =>
-        [...store.values()].find(
-          (item) => item.stripeSubscriptionId === id,
-        ) ?? null,
+        [...store.values()].find((item) => item.stripeSubscriptionId === id) ??
+        null,
     ),
     save: jest.fn(async (subscription: Subscription) => {
       store.set(subscription.studentId, subscription);
@@ -100,7 +99,10 @@ function build(overrides: Record<string, any> = {}) {
   return { service, subscriptions, coupons, users, pix, card, config };
 }
 
-const PIX = { plan: SUBSCRIPTION_PLANS.MONTHLY, paymentMethod: PAYMENT_METHODS.PIX_RECURRING };
+const PIX = {
+  plan: SUBSCRIPTION_PLANS.MONTHLY,
+  paymentMethod: PAYMENT_METHODS.PIX_RECURRING,
+};
 
 describe('addMonths', () => {
   it('preserva o dia do mês', () => {
@@ -348,7 +350,10 @@ describe('SubscriptionService — pagamento', () => {
   it('o webhook é idempotente: reprocessar não conta a parcela duas vezes', async () => {
     const { service, subscriptions } = build();
     await service.choosePlan('aluno-1', PIX as any);
-    const paid = { event: 'billing.paid', data: { pixQrCode: { id: 'pix_1' } } };
+    const paid = {
+      event: 'billing.paid',
+      data: { pixQrCode: { id: 'pix_1' } },
+    };
 
     await service.handleWebhook(paid, 'segredo');
     await service.handleWebhook(paid, 'segredo');
@@ -449,7 +454,9 @@ describe('SubscriptionService — cupons', () => {
 
   it('recusa cupom inexistente ou desativado', async () => {
     const { service, coupons } = build();
-    coupons.findByCode.mockResolvedValue(new Coupon({ ...cupom, active: false }));
+    coupons.findByCode.mockResolvedValue(
+      new Coupon({ ...cupom, active: false }),
+    );
 
     await expect(
       service.choosePlan('aluno-1', { ...PIX, couponCode: 'X' } as any),
@@ -683,7 +690,9 @@ describe('SubscriptionService — simulação de pagamento', () => {
     const { service } = build();
     await service.choosePlan('aluno-1', PIX as any);
 
-    await expect(service.mockPay('aluno-1')).rejects.toThrow(ForbiddenException);
+    await expect(service.mockPay('aluno-1')).rejects.toThrow(
+      ForbiddenException,
+    );
   });
 
   it('com DEV_MODE confirma a parcela e ativa o plano', async () => {

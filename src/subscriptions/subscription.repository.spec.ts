@@ -175,12 +175,12 @@ describe('SubscriptionRepository — id de cobrança neutro (Task 51)', () => {
       }),
     );
 
-    await expect(repository.findByChargeId('pix_legado')).resolves.toMatchObject(
-      { studentId: 'aluno-antigo' },
-    );
-    await expect(repository.findByChargeId('cs_test_123')).resolves.toMatchObject(
-      { studentId: 'aluno-1' },
-    );
+    await expect(
+      repository.findByChargeId('pix_legado'),
+    ).resolves.toMatchObject({ studentId: 'aluno-antigo' });
+    await expect(
+      repository.findByChargeId('cs_test_123'),
+    ).resolves.toMatchObject({ studentId: 'aluno-1' });
     await expect(repository.findByChargeId('nao_existe')).resolves.toBeNull();
   });
 });

@@ -128,7 +128,8 @@ export class SubscriptionRepository {
         // Assinatura anterior à spec 014 só tem o campo antigo, e ele só podia
         // ser do AbacatePay — normalizar na leitura evita espalhar o `??` por
         // todo o service.
-        gatewayChargeId: charge.gatewayChargeId ?? charge.abacatePayId ?? undefined,
+        gatewayChargeId:
+          charge.gatewayChargeId ?? charge.abacatePayId ?? undefined,
         gatewayProvider:
           charge.gatewayProvider ??
           (charge.abacatePayId ? GATEWAY_PROVIDERS.ABACATEPAY : undefined),

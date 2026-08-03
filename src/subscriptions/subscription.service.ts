@@ -29,7 +29,12 @@ import {
   planConfig,
 } from './subscription.entity';
 import type { PaymentMethod, SubscriptionPlan } from './subscription.entity';
-import { Coupon, applyDiscount, normalizeCouponCode, round2 } from './coupon.entity';
+import {
+  Coupon,
+  applyDiscount,
+  normalizeCouponCode,
+  round2,
+} from './coupon.entity';
 import {
   ChangePaymentMethodDto,
   ChoosePlanDto,
@@ -393,9 +398,8 @@ export class SubscriptionService {
       idOf(invoice?.parent?.subscription_details?.subscription);
     if (!stripeSubscriptionId) return null;
 
-    const subscription = await this.subscriptions.findByStripeSubscriptionId(
-      stripeSubscriptionId,
-    );
+    const subscription =
+      await this.subscriptions.findByStripeSubscriptionId(stripeSubscriptionId);
     if (!subscription) {
       this.logger.warn(
         `Fatura de ${stripeSubscriptionId} sem assinatura correspondente`,
@@ -444,7 +448,11 @@ export class SubscriptionService {
       await this.pix.simulatePayment(pending.gatewayChargeId);
     }
 
-    await this.confirmCharge(subscription, pending.gatewayChargeId, pending.index);
+    await this.confirmCharge(
+      subscription,
+      pending.gatewayChargeId,
+      pending.index,
+    );
     return new SubscriptionDto(
       (await this.subscriptions.findByStudent(studentId))!,
     );
@@ -574,7 +582,11 @@ export class SubscriptionService {
 
     const charges: Charge[] = [];
     for (let index = 1; index <= scheduled; index++) {
-      const discounted = this.amountFor(config.installmentAmount, coupon, index);
+      const discounted = this.amountFor(
+        config.installmentAmount,
+        coupon,
+        index,
+      );
       charges.push({
         index,
         dueDate: addMonths(today, index - 1),
@@ -592,9 +604,7 @@ export class SubscriptionService {
       paymentMethod,
       totalAmount: config.recurring
         ? config.totalAmount
-        : round2(
-            charges.reduce((sum, charge) => sum + charge.amount, 0),
-          ),
+        : round2(charges.reduce((sum, charge) => sum + charge.amount, 0)),
       installments: config.installments,
       installmentAmount: charges[0].amount,
       paidInstallments: 0,
