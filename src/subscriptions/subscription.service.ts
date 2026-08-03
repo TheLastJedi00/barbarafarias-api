@@ -11,7 +11,12 @@ import { SubscriptionRepository } from './subscription.repository';
 import { CouponRepository } from './coupon.repository';
 import { UserRepository } from '../users/user.repository';
 import type { User } from '../users/user.entity';
-import { CardGateway, PixGateway, toCents } from './payment.gateway';
+import {
+  CardGateway,
+  GATEWAY_PROVIDERS,
+  PixGateway,
+  toCents,
+} from './payment.gateway';
 import {
   CHARGE_STATUS,
   Charge,
@@ -147,6 +152,8 @@ export class SubscriptionService {
     // reemitida — sem isso o webhook do PIX abandonado ainda a marcaria paga.
     const pending = this.nextPendingCharge(subscription);
     if (pending) {
+      pending.gatewayChargeId = undefined;
+      pending.gatewayProvider = undefined;
       pending.abacatePayId = undefined;
     }
 
@@ -257,11 +264,11 @@ export class SubscriptionService {
 
     // Quando a cobrança existe no gateway, simulamos por lá: assim o webhook
     // também dispara e o caminho testado é o mesmo da produção.
-    if (pending.abacatePayId && this.pix.isEnabled()) {
-      await this.pix.simulatePayment(pending.abacatePayId);
+    if (pending.gatewayChargeId && this.pix.isEnabled()) {
+      await this.pix.simulatePayment(pending.gatewayChargeId);
     }
 
-    await this.confirmCharge(subscription, pending.abacatePayId, pending.index);
+    await this.confirmCharge(subscription, pending.gatewayChargeId, pending.index);
     return new SubscriptionDto(
       (await this.subscriptions.findByStudent(studentId))!,
     );
@@ -503,7 +510,8 @@ export class SubscriptionService {
     try {
       if (isPix) {
         const charged = await this.pix.createPixCharge(request);
-        charge.abacatePayId = charged.id;
+        charge.gatewayChargeId = charged.id;
+        charge.gatewayProvider = GATEWAY_PROVIDERS.ABACATEPAY;
         await this.subscriptions.save(subscription);
         return {
           pixQrCodeUrl: charged.brCodeBase64,
@@ -515,7 +523,8 @@ export class SubscriptionService {
         ...request,
         plan: subscription.plan,
       });
-      charge.abacatePayId = checkout.id;
+      charge.gatewayChargeId = checkout.id;
+      charge.gatewayProvider = checkout.provider;
       await this.subscriptions.save(subscription);
       return { checkoutUrl: checkout.url };
     } catch (error) {
@@ -544,11 +553,13 @@ export class SubscriptionService {
    */
   private async confirmCharge(
     subscription: Subscription,
-    abacatePayId?: string,
+    gatewayChargeId?: string,
     index?: number,
   ): Promise<void> {
     const charge = subscription.charges.find((item) =>
-      abacatePayId ? item.abacatePayId === abacatePayId : item.index === index,
+      gatewayChargeId
+        ? item.gatewayChargeId === gatewayChargeId
+        : item.index === index,
     );
     if (!charge || charge.status === CHARGE_STATUS.PAID) return;
 

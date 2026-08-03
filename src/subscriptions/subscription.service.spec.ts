@@ -22,7 +22,11 @@ function fakeSubscriptionRepository() {
     findByChargeId: jest.fn(
       async (chargeId: string) =>
         [...store.values()].find((item) =>
-          item.charges.some((charge) => charge.abacatePayId === chargeId),
+          item.charges.some(
+            (charge) =>
+              charge.gatewayChargeId === chargeId ||
+              charge.abacatePayId === chargeId,
+          ),
         ) ?? null,
     ),
     save: jest.fn(async (subscription: Subscription) => {
@@ -256,7 +260,7 @@ describe('SubscriptionService — pagamento', () => {
 
     expect(response.checkoutUrl).toBe('https://pay.example/1');
     expect(card.createCheckout).toHaveBeenCalledTimes(1);
-    expect(subscriptions.store.get('aluno-1')!.charges[0].abacatePayId).toBe(
+    expect(subscriptions.store.get('aluno-1')!.charges[0].gatewayChargeId).toBe(
       'bill_1',
     );
   });
