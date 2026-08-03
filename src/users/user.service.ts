@@ -107,7 +107,26 @@ export class UserService {
   ): Promise<User> {
     const user = await this.findById(id);
     this.assertCanReach(requester, id, user);
-    return user;
+    return this.withoutForeignCpf(requester, id, user);
+  }
+
+  /**
+   * O CPF do aluno passou a existir com a spec 013 (é o `taxId` do pagador no
+   * gateway). Esta rota devolve o documento inteiro, e a professora vinculada
+   * a ele alcança a ficha de cada aluno — ela precisa de nível, objetivo e
+   * sala, não do documento fiscal de quem paga. A gerente continua vendo tudo,
+   * porque é ela quem responde pela cobrança.
+   */
+  private withoutForeignCpf(
+    requester: AuthenticatedUser,
+    id: string,
+    user: User,
+  ): User {
+    if (requester.role === ROLES.MANAGER || requester.sub === id) {
+      return user;
+    }
+    const { cpf, ...rest } = user;
+    return new User(rest);
   }
 
   /**
