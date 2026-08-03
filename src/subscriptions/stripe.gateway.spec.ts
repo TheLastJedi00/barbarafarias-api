@@ -190,3 +190,58 @@ describe('StripeGateway — catálogo (Task 54)', () => {
     expect(stripe.prices.list).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('StripeGateway — cupons (Task 55)', () => {
+  const TRES_MESES = {
+    code: 'BEMVINDA',
+    amountOff: 50,
+    durationMonths: 3,
+  };
+
+  it('cupom com duração vira `repeating` com os mesmos meses', async () => {
+    const { gateway, stripe } = build();
+
+    const id = await gateway.resolveCouponId(TRES_MESES);
+
+    expect(id).toBe('bf-BEMVINDA-5000');
+    expect(stripe.coupons.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: 'bf-BEMVINDA-5000',
+        amount_off: 5000,
+        currency: 'brl',
+        duration: 'repeating',
+        duration_in_months: 3,
+      }),
+    );
+  });
+
+  it('cupom vitalício vira `forever`, sem contagem de meses', async () => {
+    const { gateway, stripe } = build();
+
+    await gateway.resolveCouponId({ ...TRES_MESES, durationMonths: null });
+
+    const [payload] = stripe.coupons.create.mock.calls[0];
+    expect(payload.duration).toBe('forever');
+    expect(payload.duration_in_months).toBeUndefined();
+  });
+
+  it('reusa o cupom que já existe em vez de recriar', async () => {
+    const { gateway, stripe } = build();
+    stripe.coupons.retrieve.mockResolvedValue({ id: 'bf-BEMVINDA-5000' });
+
+    const id = await gateway.resolveCouponId(TRES_MESES);
+
+    expect(id).toBe('bf-BEMVINDA-5000');
+    expect(stripe.coupons.create).not.toHaveBeenCalled();
+  });
+
+  it('o desconto entra no id: mudar o valor do cupom não reusa o antigo', async () => {
+    const { gateway, stripe } = build();
+
+    await gateway.resolveCouponId({ ...TRES_MESES, amountOff: 80 });
+
+    expect(stripe.coupons.create).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'bf-BEMVINDA-8000', amount_off: 8000 }),
+    );
+  });
+});

@@ -50,6 +50,8 @@ export class StripeGateway extends CardGateway {
   private readonly productIds = new Map<string, string>();
   /** `bf-<PLANO>-<centavos>` → `price_…`. Ver `resolvePriceId`. */
   private readonly priceIds = new Map<string, string>();
+  /** `bf-<CODIGO>-<centavos>` → `coupon`. Ver `resolveCouponId`. */
+  private readonly couponIds = new Map<string, string>();
 
   constructor(
     @Inject(STRIPE_CLIENT) private readonly stripe: Stripe | null,
@@ -156,6 +158,53 @@ export class StripeGateway extends CardGateway {
     });
     this.priceIds.set(lookupKey, price.id);
     return price.id;
+  }
+
+  /**
+   * Traduz o nosso cupom para um `Coupon` do Stripe, criando-o na primeira vez.
+   *
+   * O mapeamento é exato — `durationMonths: null` (vitalício) é `forever`, e um
+   * número é `repeating` com os mesmos meses —, e é por isso que passamos o
+   * cupom inteiro em vez do valor já abatido: quem aplica o desconto às
+   * renovações passa a ser o Stripe. Abater aqui acertaria a primeira parcela
+   * e cobraria o preço cheio em todas as seguintes.
+   *
+   * O desconto entra no id porque a gerente pode editar o valor de um cupom; se
+   * o id fosse só o código, o cupom novo reusaria o desconto antigo para
+   * sempre.
+   */
+  async resolveCouponId(coupon: {
+    code: string;
+    amountOff: number;
+    durationMonths: number | null;
+  }): Promise<string> {
+    const id = `bf-${coupon.code}-${toCents(coupon.amountOff)}`;
+    const cached = this.couponIds.get(id);
+    if (cached) return cached;
+
+    const stripe = this.require();
+    try {
+      const found = await stripe.coupons.retrieve(id);
+      this.couponIds.set(id, found.id);
+      return found.id;
+    } catch {
+      // Ausência chega como erro, igual ao Product acima.
+    }
+
+    const created = await stripe.coupons.create({
+      id,
+      amount_off: toCents(coupon.amountOff),
+      currency: 'brl',
+      name: coupon.code,
+      ...(coupon.durationMonths === null
+        ? { duration: 'forever' as const }
+        : {
+            duration: 'repeating' as const,
+            duration_in_months: coupon.durationMonths,
+          }),
+    });
+    this.couponIds.set(id, created.id);
+    return created.id;
   }
 
   /**
