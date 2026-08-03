@@ -24,12 +24,17 @@ export class User {
   prognosis!: string;
   /** URL pública no Firebase Storage; o arquivo é comprimido no cliente. */
   profileImageUrl?: string;
+  /**
+   * Só dígitos. Identifica as duas pontas do dinheiro: é dado fiscal da
+   * professora (cadastrado pela gerente) e, desde a spec 013, o `taxId` do
+   * aluno pagador no gateway — sem ele o AbacatePay recusa a cobrança.
+   */
+  cpf?: string;
 
   // --- professora (role manager/teacher) ---
   createdAt?: string; // ISO — data de cadastro
   bio?: string; // texto de apresentação exibido ao aluno
   pixKey?: string;
-  cpf?: string;
   cnpj?: string;
   hourlyRate?: number; // sobrepõe o valor-hora global
   phoneVisibleToStudent?: boolean;
