@@ -32,11 +32,25 @@ function fakeStripe() {
     },
     subscriptions: {
       cancel: jest.fn().mockResolvedValue({ id: 'sub_1' }),
+      update: jest.fn().mockResolvedValue({ id: 'sub_1' }),
+      retrieve: jest
+        .fn()
+        .mockResolvedValue({ id: 'sub_1', current_period_end: 1_780_000_000 }),
     },
     webhooks: {
       constructEvent: jest
         .fn()
         .mockReturnValue({ id: 'evt_1', type: 'checkout.session.completed' }),
+    },
+    v2: {
+      core: {
+        events: {
+          retrieve: jest.fn().mockResolvedValue({
+            id: 'evt_thin_1',
+            type: 'v1.invoice.paid',
+          }),
+        },
+      },
     },
   };
 }
@@ -58,7 +72,7 @@ export function build(overrides: Record<string, any> = {}) {
   const stripe = overrides.stripe ?? fakeStripe();
   const users = overrides.users ?? fakeUsers();
   const config = {
-    get: jest.fn((key: string) =>
+    get: jest.fn((key: string): string | undefined =>
       key === 'APP_BASE_URL' ? 'https://app.example' : undefined,
     ),
   };
@@ -329,5 +343,112 @@ describe('StripeGateway — checkout incorporado (Task 56)', () => {
     const { payload } = await checkout();
 
     expect(payload.integration_identifier).toMatch(/^bf-assinatura-[a-z]{8}$/);
+  });
+});
+
+describe('StripeGateway — ciclo de vida (Task 57)', () => {
+  it('cancela a assinatura no Stripe', async () => {
+    const { gateway, stripe } = build();
+
+    await gateway.cancelSubscription('sub_1');
+
+    expect(stripe.subscriptions.cancel).toHaveBeenCalledWith('sub_1');
+  });
+
+  it('assinatura já cancelada não é erro: tela e webhook chegam fora de ordem', async () => {
+    const { gateway, stripe } = build();
+    stripe.subscriptions.cancel.mockRejectedValue(
+      Object.assign(new Error('No such subscription'), { code: 'resource_missing' }),
+    );
+
+    await expect(gateway.cancelSubscription('sub_sumiu')).resolves.toBeUndefined();
+  });
+
+  it('um erro de verdade continua estourando', async () => {
+    const { gateway, stripe } = build();
+    stripe.subscriptions.cancel.mockRejectedValue(new Error('Invalid API Key'));
+
+    await expect(gateway.cancelSubscription('sub_1')).rejects.toThrow(
+      /Invalid API Key/,
+    );
+  });
+
+  it('fecha o plano finito no fim do último ciclo contratado', async () => {
+    const { gateway, stripe } = build();
+    // 2026-06-01T00:00:00Z
+    stripe.subscriptions.retrieve.mockResolvedValue({
+      id: 'sub_1',
+      start_date: Date.UTC(2026, 5, 1) / 1000,
+    });
+
+    await gateway.capSubscriptionCycles('sub_1', 6);
+
+    expect(stripe.subscriptions.update).toHaveBeenCalledWith('sub_1', {
+      cancel_at: Date.UTC(2026, 11, 1) / 1000,
+    });
+  });
+});
+
+describe('StripeGateway — verificação de eventos (Task 57)', () => {
+  const CORPO = Buffer.from('{"id":"evt_1"}');
+
+  it('evento instantâneo é verificado com a chave do endpoint instantâneo', async () => {
+    const { gateway, stripe, config } = build();
+    config.get.mockImplementation((key: string) =>
+      key === 'STRIPE_WEBHOOK_SECRET_SNAPSHOT' ? 'whsec_snapshot' : undefined,
+    );
+    stripe.webhooks.constructEvent.mockReturnValue({
+      id: 'evt_1',
+      type: 'checkout.session.completed',
+      data: { object: { id: 'cs_test_1' } },
+    });
+
+    const event = await gateway.verifySnapshotEvent(CORPO, 'assinatura');
+
+    expect(stripe.webhooks.constructEvent).toHaveBeenCalledWith(
+      CORPO,
+      'assinatura',
+      'whsec_snapshot',
+    );
+    expect(event).toEqual({
+      id: 'evt_1',
+      type: 'checkout.session.completed',
+      object: { id: 'cs_test_1' },
+    });
+  });
+
+  it('evento mínimo traz só o id: o objeto é buscado na API', async () => {
+    const { gateway, stripe, config } = build();
+    config.get.mockImplementation((key: string) =>
+      key === 'STRIPE_WEBHOOK_SECRET_THIN' ? 'whsec_thin' : undefined,
+    );
+    const parse = jest
+      .fn()
+      .mockReturnValue({ id: 'evt_thin_1', type: 'v1.invoice.paid' });
+    (stripe as any).parseEventNotification = parse;
+    stripe.v2.core.events.retrieve.mockResolvedValue({
+      id: 'evt_thin_1',
+      type: 'v1.invoice.paid',
+      fetchRelatedObject: jest.fn().mockResolvedValue({ id: 'in_1' }),
+    });
+
+    const event = await gateway.verifyThinEvent(CORPO, 'assinatura');
+
+    expect(parse).toHaveBeenCalledWith(CORPO, 'assinatura', 'whsec_thin');
+    expect(event).toEqual({
+      id: 'evt_thin_1',
+      // O prefixo `v1.` some para o handler de domínio não precisar saber por
+      // qual endpoint o evento entrou.
+      type: 'invoice.paid',
+      object: { id: 'in_1' },
+    });
+  });
+
+  it('sem a chave do endpoint, o evento é recusado em vez de aceito às cegas', async () => {
+    const { gateway } = build();
+
+    await expect(gateway.verifySnapshotEvent(CORPO, 'x')).rejects.toThrow(
+      /STRIPE_WEBHOOK_SECRET_SNAPSHOT/,
+    );
   });
 });

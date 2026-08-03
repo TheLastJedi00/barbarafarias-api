@@ -28,6 +28,21 @@ export const STRIPE_CLIENT = 'STRIPE_CLIENT';
 export const STRIPE_API_VERSION = '2026-07-29.dahlia';
 
 /**
+ * Evento do Stripe já normalizado: o mesmo formato venha ele do endpoint de
+ * conteúdo instantâneo ou do de conteúdo mínimo. É o que permite os dois
+ * webhooks desembocarem num único handler de domínio — separar a regra por
+ * endpoint faria uma troca de configuração no painel parar de ativar planos
+ * em silêncio.
+ */
+export interface StripeDomainEvent {
+  id: string;
+  /** Sem o prefixo `v1.`: `checkout.session.completed`, `invoice.paid`, … */
+  type: string;
+  /** Sessão, fatura ou assinatura — o objeto principal do evento. */
+  object: Record<string, any>;
+}
+
+/**
  * Cartão de crédito pelo Stripe (spec 014).
  *
  * O desenho é o mesmo do `AbacatePayGateway`: a ausência de chave não derruba a
@@ -293,10 +308,109 @@ export class StripeGateway extends CardGateway {
     return created.id;
   }
 
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  async cancelSubscription(_subscriptionId: string): Promise<void> {
-    this.require();
-    throw new Error('cancelSubscription chega na Task 57');
+  /**
+   * Encerra a assinatura no Stripe. Uma assinatura que já não existe **não** é
+   * erro: o cancelamento pela tela e o `customer.subscription.deleted` chegam
+   * em qualquer ordem, e os dois caminham para o mesmo destino. Qualquer outra
+   * falha continua estourando — chave inválida não pode passar por "já estava
+   * cancelada".
+   */
+  async cancelSubscription(subscriptionId: string): Promise<void> {
+    try {
+      await this.require().subscriptions.cancel(subscriptionId);
+    } catch (error: any) {
+      if (error?.code === 'resource_missing') {
+        this.logger.warn(
+          `Assinatura ${subscriptionId} já não existe no Stripe.`,
+        );
+        return;
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * Fecha um plano finito no fim do último ciclo contratado.
+   *
+   * Precisa ser um passo à parte porque `subscription_data` do checkout não
+   * aceita `cancel_at`: a assinatura só existe depois que o aluno paga. Sem
+   * isto, o semestral renovaria para sempre — é o único ponto desta integração
+   * onde uma falha silenciosa cobra dinheiro a mais, e por isso o
+   * `handleStripeEvent` ainda confere as parcelas pagas contra o plano.
+   */
+  async capSubscriptionCycles(
+    subscriptionId: string,
+    cycles: number,
+  ): Promise<void> {
+    const stripe = this.require();
+    const subscription = await stripe.subscriptions.retrieve(subscriptionId);
+    await stripe.subscriptions.update(subscriptionId, {
+      cancel_at: addMonthsToUnix(subscription.start_date, cycles),
+    });
+  }
+
+  // ------------------------------------------------------------- eventos
+
+  /**
+   * Evento do endpoint de **conteúdo instantâneo** (snapshot): o corpo já traz
+   * o objeto inteiro, e a assinatura é conferida sobre os bytes crus.
+   */
+  async verifySnapshotEvent(
+    rawBody: Buffer,
+    signature: string,
+  ): Promise<StripeDomainEvent> {
+    const event = this.require().webhooks.constructEvent(
+      rawBody,
+      signature,
+      this.secret('STRIPE_WEBHOOK_SECRET_SNAPSHOT'),
+    );
+    return {
+      id: event.id,
+      type: event.type,
+      object: event.data.object as Record<string, any>,
+    };
+  }
+
+  /**
+   * Evento do endpoint de **conteúdo mínimo** (thin): o corpo traz só id e
+   * tipo, então o objeto é buscado na API. O prefixo `v1.` cai fora para o
+   * handler de domínio não precisar saber por qual endpoint o evento entrou —
+   * é o que permite os dois webhooks compartilharem a mesma regra.
+   */
+  async verifyThinEvent(
+    rawBody: Buffer,
+    signature: string,
+  ): Promise<StripeDomainEvent> {
+    const stripe = this.require();
+    const notification = stripe.parseEventNotification(
+      rawBody,
+      signature,
+      this.secret('STRIPE_WEBHOOK_SECRET_THIN'),
+    );
+
+    const event = await stripe.v2.core.events.retrieve(notification.id);
+    const related = await (
+      event as unknown as {
+        fetchRelatedObject?: () => Promise<Record<string, any>>;
+      }
+    ).fetchRelatedObject?.();
+
+    return {
+      id: event.id,
+      type: event.type.replace(/^v1\./, ''),
+      object: related ?? {},
+    };
+  }
+
+  /**
+   * O segredo do endpoint, ou um erro nomeado. Faltando a variável, a única
+   * alternativa seria aceitar o evento sem conferir a assinatura — que é
+   * exatamente o que transforma um POST anônimo em assinatura ativa.
+   */
+  private secret(key: string): string {
+    const value = this.configService.get<string>(key);
+    if (!value) throw new Error(`${key} ausente: webhook não verificável`);
+    return value;
   }
 
   /**
@@ -307,6 +421,29 @@ export class StripeGateway extends CardGateway {
     if (!this.stripe) throw new Error('Stripe não configurado');
     return this.stripe;
   }
+}
+
+/**
+ * Soma meses a um instante Unix preservando o dia, como o `addMonths` do
+ * cronograma faz com datas ISO — dia 31 em mês curto cai no último dia.
+ */
+export function addMonthsToUnix(seconds: number, months: number): number {
+  const date = new Date(seconds * 1000);
+  const day = date.getUTCDate();
+  const target = new Date(
+    Date.UTC(date.getUTCFullYear(), date.getUTCMonth() + months, 1),
+  );
+  const lastDay = new Date(
+    Date.UTC(target.getUTCFullYear(), target.getUTCMonth() + 1, 0),
+  ).getUTCDate();
+  target.setUTCDate(Math.min(day, lastDay));
+  target.setUTCHours(
+    date.getUTCHours(),
+    date.getUTCMinutes(),
+    date.getUTCSeconds(),
+    0,
+  );
+  return Math.floor(target.getTime() / 1000);
 }
 
 /** Sufixo aleatório do `integration_identifier`, que o formato exige. */
