@@ -84,7 +84,11 @@ export class UserService {
     this.assertCanReach(requester, id, foundUser);
     // merge over the existing user and pin the id from the route param,
     // so partial updates don't wipe fields nor depend on the request body id
-    const user = new User({ ...foundUser, ...dto, id });
+    const user = new User({
+      ...foundUser,
+      ...this.withDerivedIsPaying(foundUser, dto),
+      id,
+    });
     await this.userRepository.update(user);
     return user;
   }
@@ -103,7 +107,47 @@ export class UserService {
   ): Promise<User> {
     const user = await this.findById(id);
     this.assertCanReach(requester, id, user);
-    return user;
+    return this.withoutForeignCpf(requester, id, user);
+  }
+
+  /**
+   * O CPF do aluno passou a existir com a spec 013 (é o `taxId` do pagador no
+   * gateway). Esta rota devolve o documento inteiro, e a professora vinculada
+   * a ele alcança a ficha de cada aluno — ela precisa de nível, objetivo e
+   * sala, não do documento fiscal de quem paga. A gerente continua vendo tudo,
+   * porque é ela quem responde pela cobrança.
+   */
+  private withoutForeignCpf(
+    requester: AuthenticatedUser,
+    id: string,
+    user: User,
+  ): User {
+    if (requester.role === ROLES.MANAGER || requester.sub === id) {
+      return user;
+    }
+    const { cpf, ...rest } = user;
+    return new User(rest);
+  }
+
+  /**
+   * `isPaying` deixa de ser um interruptor manual assim que o aluno tem uma
+   * assinatura (spec 012 Task 18): quem manda passa a ser o status dela, que o
+   * `SubscriptionService` espelha aqui. Uma edição manual seria desfeita na
+   * próxima cobrança de qualquer jeito — descartá-la já evita que o painel da
+   * gerente e a barreira de acesso discordem no meio do caminho.
+   *
+   * **Retrocompatibilidade:** aluno sem assinatura continua exatamente como
+   * antes, com a gerente marcando o pagamento à mão. Não há migração forçada.
+   */
+  private withDerivedIsPaying(
+    current: User,
+    dto: UpdateUserDto,
+  ): UpdateUserDto {
+    if (!current.subscriptionStatus || dto.isPaying === undefined) {
+      return dto;
+    }
+    const { isPaying, ...rest } = dto;
+    return rest;
   }
 
   private assertCanReach(

@@ -15,6 +15,7 @@ import { CurrentUser } from '../decorators/current-user.decorator';
 import type { AuthenticatedUser } from '../decorators/current-user.decorator';
 import { ROLES } from '../types/role';
 import { todayInAppTimezone } from '../common/time';
+import { RequiresActivePlan } from '../guards/active-plan.guard';
 
 @Controller('lessons')
 export class LessonController {
@@ -39,6 +40,7 @@ export class LessonController {
 
   /** Estado da janela + link do Meet (só quando aberta). */
   @Get(':id/access')
+  @RequiresActivePlan()
   getAccess(
     @CurrentUser() user: AuthenticatedUser,
     @Param('id') id: string,
@@ -60,6 +62,7 @@ export class LessonController {
   /** Aviso prévio de ausência do aluno (mínimo de 4 h). */
   @Post(':id/student-cancel')
   @Roles(ROLES.STUDENT)
+  @RequiresActivePlan()
   studentCancel(
     @CurrentUser() user: AuthenticatedUser,
     @Param('id') id: string,
@@ -69,6 +72,7 @@ export class LessonController {
 
   @Post(':id/rating')
   @Roles(ROLES.STUDENT)
+  @RequiresActivePlan()
   rate(
     @CurrentUser() user: AuthenticatedUser,
     @Param('id') id: string,
@@ -78,6 +82,7 @@ export class LessonController {
   }
 
   @Get('student/:studentId')
+  @RequiresActivePlan()
   findByStudent(
     @CurrentUser() user: AuthenticatedUser,
     @Param('studentId') studentId: string,

@@ -71,6 +71,7 @@ describe('RescheduleService', () => {
         rescheduleRequested: jest.fn().mockResolvedValue(undefined),
         rescheduleDecided: jest.fn().mockResolvedValue(undefined),
       } as any,
+      { assertStudentIsPaying: jest.fn().mockResolvedValue(undefined) } as any,
     );
   });
 

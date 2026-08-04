@@ -61,6 +61,13 @@ npm run start:prod
 | `RESEND_API_KEY` | Chave da [Resend](https://resend.com) para e-mail transacional |
 | `FIREBASE_STORAGE_BUCKET` | *(opcional)* Bucket do Firebase Storage para avatares e capas |
 | `RESEND_FROM` | *(opcional)* Remetente próprio, ex.: `Bárbara Farias <no-reply@barbarafarias.com.br>` |
+| `ABACATEPAY_API_KEY` | Chave da [AbacatePay](https://abacatepay.com) — cobranças **PIX** do aluno (Spec 012) |
+| `ABACATEPAY_WEBHOOK_SECRET` | Segredo conferido no webhook `POST /webhooks/abacatepay` |
+| `STRIPE_SECRET_KEY` | Chave do [Stripe](https://stripe.com) — assinaturas de **cartão** (Spec 014). Prefira uma chave restrita (`rk_`) |
+| `STRIPE_WEBHOOK_SECRET_INSTANTANEO` | Assinatura do endpoint `POST /stripe/webhook/conteudo-instantaneo` |
+| `STRIPE_WEBHOOK_SECRET_MINIMO` | Assinatura do endpoint `POST /stripe/webhook/conteudo-minimo` |
+| `DEV_MODE` | `true` libera `POST /subscriptions/dev/mock-pay` (simulação de PIX). **Nunca em produção** |
+| `APP_BASE_URL` | Base do frontend, usada nas URLs de retorno do checkout de cartão |
 
 > **`.env.example`** na raiz lista todas as variáveis obrigatórias — copie para `.env` e preencha.
 >
@@ -160,6 +167,27 @@ src/
 │   ├── finance.controller.ts    # /finance — faturamento sob a ótica da professora (Spec 011)
 │   ├── teacher-earnings.service.ts # Projeção semanal/mensal por alunos ativos (Spec 011)
 │   └── payout.provider.ts       # Porta de pagamento (ManualPix hoje, AbacatePay depois)
+├── subscriptions/         # Assinaturas do aluno (Spec 012 + 014)
+│   ├── subscription.controller.ts # /subscriptions/* + POST /webhooks/abacatepay
+│   ├── subscription.service.ts    # Planos, cronograma, cupons, webhook, cancelamento
+│   ├── subscription.repository.ts # Persistência (coleção `subscriptions`)
+│   ├── subscription.entity.ts     # Subscription, Charge, PLAN_CONFIGS
+│   ├── coupon.entity.ts           # Coupon + aplicação do desconto (piso zero)
+│   ├── coupon.repository.ts       # Persistência (coleção `coupons`)
+│   ├── payment.gateway.ts         # Portas PixGateway/CardGateway + AbacatePayGateway
+│   ├── stripe.gateway.ts          # Cartão no Stripe: catálogo, checkout, eventos (Spec 014)
+│   ├── stripe-webhook.controller.ts # /stripe/webhook/conteudo-{instantaneo,minimo}
+│   ├── payment-access.service.ts  # Bloqueio de aluno inadimplente (lado professora)
+│   └── dto/subscription.dto.ts    # ChoosePlanDto, CreateCouponDto, SubscriptionDto
+├── finance/               # Tudo sob o prefixo /finance (Spec 012)
+│   ├── finance.controller.ts         # /finance/teacher/* (faturamento de quem pergunta)
+│   ├── teacher-earnings.service.ts   # Projeção da professora OU lucro da gerente
+│   ├── manager-finance.controller.ts # /finance/manager/*
+│   ├── manager-finance.service.ts    # Overview mensal/anual + dados do gráfico
+│   ├── infra-expense.service.ts      # Custo de infra com snapshots temporais
+│   ├── infra-expense.repository.ts   # Coleção `infrastructure_expenses`
+│   ├── revenue-goal.service.ts       # Metas anual e mensais
+│   └── revenue-goal.repository.ts    # `settings/revenue_goals_{ano}`
 ├── feedbacks/             # Acompanhamento pedagógico (Spec 010)
 │   ├── feedback.controller.ts # /students/:id/feedbacks
 │   └── feedback.service.ts    # Escopo: professora responsável ou gerente
@@ -519,6 +547,7 @@ Perfil do **aluno logado** e a edição que ele mesmo faz dele (spec 011 RF14).
 {
   "fullName": "João Silva",
   "phone": "11999999999",
+  "cpf": "12345678909",
   "profileImageUrl": "https://firebasestorage.../avatars/uid.jpg"
 }
 ```
@@ -526,6 +555,15 @@ Perfil do **aluno logado** e a edição que ele mesmo faz dele (spec 011 RF14).
 > A whitelist é intencional e **não** é a mesma do `PUT /users/:id`. Papel, professora
 > responsável, nível e situação de pagamento continuam exclusivos da gerente — sem esse
 > recorte, um aluno poderia se promover ou trocar de professora pelo próprio painel.
+
+> **CPF e telefone (spec 013).** Ambos chegam **só com dígitos** — a máscara é assunto da
+> tela, e o `@Transform` do DTO limpa o que vier formatado. O CPF é validado pelos dois
+> dígitos verificadores (`IsCpfConstraint`), não só pelo tamanho: o gateway valida o
+> número de verdade e recusaria a cobrança lá na frente. Os dois são opcionais neste
+> `PATCH` — ele é parcial e serve também ao upload de avatar — mas **obrigatórios para
+> contratar um plano**: `POST /subscriptions` responde `400` sem eles.
+> `GET /users/:id` omite o `cpf` do aluno para a professora vinculada; a gerente e o
+> próprio dono continuam recebendo.
 
 ---
 
@@ -1001,6 +1039,7 @@ o DTO público entrega apenas nome e, se a professora permitir, telefone.
 | `PATCH` | `/teachers/me` | `manager`, `teacher` | **Edição do próprio perfil**: `{ fullName?, phone?, profileImageUrl?, bio? }` |
 | `PATCH` | `/teachers/me/phone-visibility` | `manager`, `teacher` | Body `{ visible }` |
 | `GET` | `/teachers/mine` | `student` | Professora responsável (DTO público: nome, foto, bio e — se permitido — telefone) |
+| `GET` | `/teachers/:id/public` | `manager`, `teacher`, `student` | Mesmo DTO público, por id. Serve a quem abre o painel de um aluno que não é ele mesmo (spec 013) |
 
 > `PATCH /teachers/me` é deliberadamente separado de `PUT /teachers/:id`: a professora
 > edita nome, telefone, foto e bio; **dados fiscais e valor-hora continuam saindo só pelo
@@ -1103,18 +1142,23 @@ A gerente aparece marcada (`isManager`) e **não entra na folha como despesa**.
 | `GET` | `/billing/summary/:teacherId?month=` | `manager` | Detalhe aula a aula |
 | `POST` | `/billing/summary/:teacherId/pay?month=` | `manager` | Instrução de pagamento (`PayoutProvider`) |
 
-#### Faturamento da professora — `/finance`
+#### Faturamento — `/finance/teacher` (quanto eu ganho)
 
-Projeção sob a ótica da professora (spec 011 RF12.1). Vive **fora de `/billing`** porque
-aquele é o painel de fechamento da gerente e carrega PIX, CPF e a folha inteira.
+Vive **fora de `/billing`** porque aquele é o painel de fechamento da gerente e carrega PIX,
+CPF e a folha inteira. A resposta é **discriminada por `kind`**: a pergunta é sempre a mesma,
+mas quem responde depende do papel — e qual conta responde é regra de negócio, não decisão do
+cliente.
 
 | Método | Rota | Auth | Descrição |
 |---|---|---|---|
-| `GET` | `/finance/teacher/me` | `manager`, `teacher` | Projeção da professora logada |
-| `GET` | `/finance/teacher/:teacherId` | `manager` (ou a própria) | Projeção de uma professora |
+| `GET` | `/finance/teacher/me` | `manager`, `teacher` | Faturamento de quem está logado |
+| `GET` | `/finance/teacher/:teacherId` | `manager` (ou a própria) | Faturamento de uma professora |
+
+**Professora (`kind: "teacher"`)** — projeção contratual das horas:
 
 ```jsonc
 {
+  "kind": "teacher",
   "teacherId": "…",
   "hourlyRate": 60,
   "activeStudents": 8,
@@ -1129,8 +1173,271 @@ aquele é o painel de fechamento da gerente e carrega PIX, CPF e a folha inteira
 > (aluno `pendingTeacher` não conta) e da carga semanal de cada um. O apurado real, aula a
 > aula, continua no `BillingSummaryService`. Aluno sem `lessonsPerWeek` conta como 1.
 
+**Gerente (`kind: "manager"`)** — o **lucro do negócio**:
+
+```jsonc
+{
+  "kind": "manager",
+  "teacherId": "…",
+  "month": "2026-08",
+  "revenue": 4800,          // parcelas com vencimento no mês (assinaturas ativas)
+  "teacherExpenses": 1800,  // folha do mês, sem as horas da gerente
+  "infraExpenses": 300,     // snapshot vigente naquele mês
+  "monthly": 2700,          // receita − despesas
+  "activeStudents": 20,
+  "currency": "BRL"
+}
+```
+
+> **A gerente não recebe valor-hora** — é a mesma regra que já mantém as horas dela fora da
+> folha (RF11). O que ela ganha é o resultado: receita menos o custo com professoras e com
+> infraestrutura. A conta **não é reescrita aqui**; vem do `ManagerFinanceService`, que já a
+> faz para o painel. Prejuízo é devolvido negativo, sem piso em zero.
+>
+> Não há `weekly`: lucro é apuração mensal, e dividir por 4,33 daria um número que não
+> corresponde a nada.
+>
+> `GET /finance/teacher/:teacherId` usa o papel do **alvo**: a gerente consultando uma
+> professora vê a projeção de horas dela; só ao consultar a si mesma é que vem o lucro.
+
 > O pagamento é **PIX manual** (`ManualPixProvider`). A porta `PayoutProvider` existe para
 > trocar por AbacatePay sem tocar em controller nem em regra de negócio.
+
+
+---
+
+### 💳 Subscriptions — `/subscriptions` (Spec 012)
+
+Assinatura do aluno. **Três planos fixos**, sem contratação avulsa:
+
+| Plano | Valor | Cobranças | Por parcela |
+|---|---|---|---|
+| `MONTHLY` | R$ 240 | recorrente (sem fim) | R$ 240/mês |
+| `SEMIANNUAL` | R$ 1.200 | 6 | R$ 200 |
+| `ANNUAL` | R$ 2.280 | 12 | R$ 190 |
+
+O cronograma inteiro é montado na contratação, para o aluno ver todas as datas de uma vez
+(RF5). O plano **mensal é recorrente**: `installments: 1`, mas `charges` projeta as
+**próximas 6 renovações** — cada renovação paga empurra mais uma no fim da fila.
+
+Status da assinatura: `PENDING` (aguardando o primeiro pagamento) → `ACTIVE` →
+`PAST_DUE` | `CANCELLED`. **Só `ACTIVE` libera o conteúdo do aluno** (RF13).
+
+| Método | Rota | Auth | Descrição |
+|---|---|---|---|
+| `GET` | `/subscriptions/plans` | autenticado | Catálogo dos três planos |
+| `GET` | `/subscriptions/coupons/:code` | `student` | Valida um cupom e devolve o desconto (RF16) |
+| `GET` | `/subscriptions/me` | `student` | Assinatura do aluno logado (`null` se não houver) |
+| `POST` | `/subscriptions/me` | `student` | Escolher plano — devolve PIX ou `checkoutUrl` |
+| `PATCH` | `/subscriptions/me/payment-method` | `student` | Trocar a forma de pagamento (RF3) |
+| `POST` | `/subscriptions/me/cancel` | `student` | Cancelar (RF4) |
+| `GET` | `/subscriptions/me/charges` | `student` | Parcelas ainda não pagas |
+| `POST` | `/subscriptions/dev/mock-pay` | `student` | **Só com `DEV_MODE=true`** — simula a confirmação do PIX |
+| `GET` | `/subscriptions/:studentId` | `manager` | Assinatura de qualquer aluno |
+| `POST` | `/webhooks/abacatepay` | 🔓 pública | Confirmação de pagamento do PIX |
+| `POST` | `/stripe/webhook/conteudo-instantaneo` | 🔓 pública | Eventos do Stripe, payload *snapshot* (Spec 014) |
+| `POST` | `/stripe/webhook/conteudo-minimo` | 🔓 pública | Eventos do Stripe, payload *thin* (Spec 014) |
+
+**`POST /subscriptions/me`** responde com o que a tela precisa para cobrar:
+
+```jsonc
+{
+  "subscription": { /* SubscriptionDto */ },
+  "paymentMethod": "PIX_RECURRING",
+  "pixQrCodeUrl": "data:image/png;base64,…",  // PIX: QR Code
+  "pixCopyPaste": "00020126…",                // PIX: copia-e-cola
+  "clientSecret": "cs_test_…_secret",         // Cartão: Stripe incorporado na página
+  "checkoutUrl": "https://pay.abacatepay…",   // Cartão: checkout hospedado (hoje sem uso)
+  "warning": "…"                              // gateway indisponível: plano salvo, cobrança não
+}
+```
+
+#### Arquitetura multi-gateway (Spec 014)
+
+Cada método de pagamento tem a **sua** porta abstrata, e o roteamento é por
+`paymentMethod`:
+
+| Método | Porta | Implementação | Como cobra |
+|---|---|---|---|
+| `PIX_RECURRING` | `PixGateway` | `AbacatePayGateway` | Uma cobrança avulsa por parcela, QR Code transparente |
+| `CREDIT_CARD` | `CardGateway` | `StripeGateway` | Assinatura recorrente + Checkout Session incorporada |
+
+> **Por que os três planos são assinatura no Stripe.** O mensal não tem fim; o semestral e
+> o anual são a mesma assinatura mensal com **teto de ciclos** (6 e 12). É como o nosso
+> `charges[]` já os modela — uma cobrança por mês —, e **não** como parcelado brasileiro
+> (`card.installments`, que dividiria *uma* cobrança no emissor).
+>
+> O teto não cabe na criação do checkout: `subscription_data` não aceita `cancel_at`, e a
+> assinatura só existe depois do primeiro pagamento. Ele viaja em `metadata.cycles` e é
+> aplicado no `checkout.session.completed`, com rede de segurança no `invoice.paid` — que
+> encerra o plano finito ao completar as parcelas. É o único ponto da integração onde uma
+> falha silenciosa cobraria dinheiro a mais.
+
+> **Catálogo do Stripe**, resolvido preguiçosamente e memoizado: um **Product por plano**
+> (`bf-plan-<PLANO>`, id determinístico — `products.search` é eventualmente consistente e
+> duplicaria o produto), e um **Price recorrente mensal por valor**
+> (`lookup_key: bf-<PLANO>-<centavos>`). O valor entra na chave porque cupom e plano mudam
+> a parcela e Price tem preço fixo.
+>
+> O `cus_…` fica gravado em `users/{id}.stripeCustomerId`: `customers.create` não deduplica
+> por e-mail, e sem persistir cada contratação criaria um cliente novo.
+
+> **Cupom vai inteiro para o cartão, abatido para o PIX.** No cartão quem desconta as
+> renovações é o Stripe (`Coupon` com `duration: forever | repeating`), então mandamos o
+> valor cheio da parcela e o cupom ao lado; mandar o valor pronto acertaria só a primeira
+> cobrança. No PIX cada cobrança é avulsa e o gateway não tem noção de cupom, então o
+> desconto vai aplicado.
+
+> **`payment_method_types` nunca é enviado** ao Stripe. Quem decide os métodos aceitos é o
+> painel; fixar no código congelaria o cartão e desligaria os métodos que aumentam
+> conversão. Há teste de regressão para isso.
+>
+> **Sem `STRIPE_SECRET_KEY` a aplicação sobe normalmente**, igual ao AbacatePay: o plano é
+> gravado e a resposta traz `warning`.
+
+#### Webhooks do Stripe
+
+São **dois endpoints** porque o painel oferece dois estilos de payload — "conteúdo
+instantâneo" (*snapshot*: o evento inteiro vem no corpo) e "conteúdo mínimo" (*thin*: vêm
+só id e tipo, e o objeto é buscado na API). Cada um tem a **sua própria** chave de
+assinatura no Stripe, daí as duas variáveis de ambiente; usar a do outro endpoint falha
+com *"No signatures found"*.
+
+Os dois verificam separadamente e chamam o **mesmo** `handleStripeEvent`. Separar a regra
+por endpoint deixaria o pagamento dependendo de qual estilo está configurado no painel, e
+uma troca de configuração pararia de ativar planos em silêncio.
+
+| Evento | Efeito |
+|---|---|
+| `checkout.session.completed` | Amarra o `sub_…` ao plano, confirma a 1ª parcela, aplica o teto de ciclos |
+| `invoice.paid` | Confirma a próxima parcela em aberto e projeta a renovação seguinte |
+| `invoice.payment_failed` | `PAST_DUE` — derruba o acesso ao conteúdo (RF13) |
+| `customer.subscription.deleted` | `CANCELLED`, sem tentar cancelar de volta |
+
+```
+produção  https://api.barbarafarias.com.br/stripe/webhook/conteudo-instantaneo
+          https://api.barbarafarias.com.br/stripe/webhook/conteudo-minimo
+staging   https://dev-api.barbarafarias.com.br/stripe/webhook/…
+local     stripe listen --forward-to http://localhost:3000/stripe/webhook/conteudo-instantaneo
+```
+
+> **Assinatura inválida devolve `400`**, não `401`: é o que faz o Stripe parar de reenviar
+> um payload que nunca vai ser aceito. Já uma falha no **processamento** propaga (`500`) de
+> propósito — aí queremos a retentativa, porque o dinheiro entrou e o plano não ativou.
+>
+> A verificação exige o corpo **cru**: `constructEvent` recalcula o HMAC sobre os bytes que
+> chegaram, e um `JSON.stringify` do objeto parseado não os reproduz. Por isso o `json()`
+> do `main.ts` guarda o buffer em `req.rawBody`.
+
+> **Cancelar propaga.** Cancelar o plano ou trocar cartão → PIX encerra a assinatura no
+> Stripe (`Subscription.stripeSubscriptionId`). Falhar lá fora **não** impede o
+> cancelamento aqui: prender o aluno num plano por erro de rede é pior que uma assinatura
+> órfã no painel, que fica registrada no log de erro.
+
+> **Webhook do AbacatePay.** Autenticado pelo `?webhookSecret=` que o AbacatePay devolve, comparado com
+> `ABACATEPAY_WEBHOOK_SECRET`. O processamento é **idempotente** — o gateway reenvia até
+> receber 200, e reprocessar não conta a mesma parcela duas vezes.
+>
+> A URL a cadastrar no painel do AbacatePay (Configurações → Webhooks) leva o segredo na
+> query, porque a rota é pública e é ele quem autentica a chamada:
+>
+> ```
+> produção  https://api.barbarafarias.com.br/webhooks/abacatepay?webhookSecret=SEU_SEGREDO
+> staging   https://dev-api.barbarafarias.com.br/webhooks/abacatepay?webhookSecret=SEU_SEGREDO
+> ```
+>
+> O gateway não alcança `localhost`: para exercitar o webhook na máquina, exponha a porta com
+> um túnel (`ngrok http 3000`) e cadastre a URL pública dele. Para o desenvolvimento normal
+> não é preciso — `DEV_MODE=true` libera `POST /subscriptions/dev/mock-pay`.
+
+> **Trocar de plano** exige cancelar o atual antes (`400` caso contrário): trocar no meio
+> exigiria pró-rata e estorno da parcela em curso, e arriscaria cobrar o mesmo mês duas vezes.
+
+#### Cupons (RF15/RF16)
+
+Cupons são **nossos**, em coleção própria — o cupom do AbacatePay modela percentual/fixo
+com limite de resgates, sem noção de "vale por N parcelas desta assinatura". O desconto é
+em reais, aplicado por parcela, com **piso zero** (nunca fica negativo). `durationMonths:
+null` = vitalício. Parcela zerada por cupom é confirmada localmente, sem ir ao gateway
+(que exige mínimo de R$ 1).
+
+---
+
+### 📊 Finance Manager — `/finance/manager` (Spec 012)
+
+Painel estratégico da gerente. Todas as rotas são `@Roles(MANAGER)`. Vive sob prefixo
+próprio para não herdar a audiência de `/finance/teacher`, que a professora enxerga.
+
+| Método | Rota | Descrição |
+|---|---|---|
+| `GET` | `/finance/manager/overview?month=YYYY-MM` | Receita, despesas, lucro e meta do mês |
+| `GET` | `/finance/manager/annual?year=YYYY` | Os 12 meses + totais do ano |
+| `GET` | `/finance/manager/chart?year=YYYY` | Mesma série formatada para o gráfico |
+| `GET` | `/finance/manager/goals?year=YYYY` | Metas do ano |
+| `PUT` | `/finance/manager/goals` | Define a meta anual |
+| `PUT` | `/finance/manager/goals/:month` | Define a meta de um mês |
+| `POST` | `/finance/manager/infra` | Registra novo custo de infra (cria snapshot) |
+| `GET` | `/finance/manager/infra?year=YYYY` | `{ current, breakdown, history }` |
+| `GET` | `/finance/manager/coupons` | Lista cupons |
+| `POST` | `/finance/manager/coupons` | Cria cupom |
+| `PATCH` | `/finance/manager/coupons/:id` | Ativa/desativa cupom |
+
+**Como cada número é apurado:**
+
+- **Receita do mês** = soma das parcelas com `dueDate` naquele mês entre as assinaturas
+  `ACTIVE`. Não é a soma dos planos: um anual de R$ 2.280 pesa R$ 190 em cada mês.
+  Parcela já paga **continua contando** — ela é receita daquele mês, e removê-la faria o
+  faturamento passado encolher com o tempo.
+- **Despesa com professoras** = `BillingSummaryService.summary(mês)` **sem as linhas com
+  `isManager`** (RF11): a gerente não recebe valor-hora, o lucro é dela.
+- **Despesa de infraestrutura** = snapshot vigente naquele mês (abaixo).
+- **Lucro** = receita − despesas.
+
+**Gráfico (`/chart`)** devolve `colorToken` semântico (`primary`/`accent`/`success`) em vez
+de cor literal — quem resolve para a variável do tema é o frontend, que sabe se está no
+modo claro ou escuro. As duas despesas vêm com `stack: "despesas"` (somadas empilhadas) e a
+receita como `kind: "line"`, num **eixo só**: ambas são reais.
+
+#### Infraestrutura: histórico imutável (RF9/RF10)
+
+Cada alteração grava um **registro novo** com o mês em que passa a valer; nada é
+sobrescrito. O valor de um mês é o snapshot mais recente cujo `effectiveFrom <= mês`.
+Mês anterior a qualquer snapshot custa zero. Assim, reajustar hoje **não recalcula** a
+rentabilidade de meses já fechados.
+
+---
+
+### 🔒 Inadimplência (Spec 012 RF13/RF14)
+
+O acesso do aluno depende de `user.isPaying`, que o `SubscriptionService` mantém alinhado
+ao status da assinatura (`isPaying = subscriptionStatus === 'ACTIVE'`).
+
+**Lado do aluno** — `ActivePlanGuard`, terceiro `APP_GUARD` (depois de auth e papel), roda
+só nas rotas marcadas com `@RequiresActivePlan()` e só para `student`. Devolve `403`:
+
+| Bloqueado | Liberado |
+|---|---|
+| `GET /articles`, `GET /articles/:id` | `GET`/`PATCH` do próprio perfil |
+| `GET /supplies/:studentId(/:level)` | Todo `/subscriptions/*` |
+| `GET /agenda/student/:studentId` | |
+| `GET /lessons/student/:studentId`, `/lessons/:id/access`, `/lessons/:id/student-cancel`, `/lessons/:id/rating` | |
+
+**Lado da professora** — `PaymentAccessService`, chamado pelos services, porque aqui o
+aluno-alvo aparece no meio da regra (no corpo do pedido, na aula referenciada):
+
+| Bloqueado | Liberado |
+|---|---|
+| `POST /agenda` com `occupantType: 'student'` (agendar) | `POST /lessons/:id/attendance` (presença) |
+| `POST /lessons/:id/reschedule-requests` (reagendar) | `GET /students/:id/feedbacks` (histórico) |
+| `POST /students/:studentId/feedbacks` (avaliar) | |
+
+> A **presença** continua liberada de propósito: é escrituração que alimenta o fechamento
+> da professora (spec 010), e travá-la puniria quem já deu a aula.
+
+> **Retrocompatibilidade.** Aluno **sem** assinatura segue no `isPaying` manual que a
+> gerente marca — não há migração forçada. Aluno **com** assinatura tem o `isPaying`
+> enviado em `PATCH /users/:id` descartado: a edição manual seria desfeita na próxima
+> cobrança de qualquer forma, e descartá-la evita que painel e barreira discordem.
 
 ---
 
@@ -1283,13 +1590,21 @@ Armazena os dados pessoais e de perfil dos usuários (alunos e professores).
   "prognosis": "string",
 
   "profileImageUrl": "string? — URL no Firebase Storage (spec 011)",
-  "bio": "string? — apresentação da professora, ≤600 chars (spec 011)"
+  "bio": "string? — apresentação da professora, ≤600 chars (spec 011)",
+
+  "subscriptionPlan": "string? — espelho do plano contratado (spec 012)",
+  "subscriptionStatus": "string? — espelho do status da assinatura (spec 012)"
 }
 ```
 
 > `profileImageUrl` vale para **todos** os papéis; `bio` só é preenchida para
 > professora/gerente. A imagem é comprimida e redimensionada **no cliente** antes do
 > upload (256×256 para avatar) — o Firestore guarda apenas a URL.
+
+> `subscriptionPlan` e `subscriptionStatus` são **desnormalização** da coleção
+> `subscriptions` (spec 012): a verdade mora lá, mas a listagem de alunos da gerente
+> precisa de plano e situação sem uma leitura extra por linha. Quem mantém sincronizado —
+> junto do `isPaying` — é o `SubscriptionService`.
 
 ### 3. `student_supplies`
 **Cabeçalho** do material didático personalizado gerado pela IA (Google Gemini).
@@ -1463,6 +1778,110 @@ Material de apoio em Markdown (spec 011). Substitui a antiga página do IPA.
 
 > A ordenação da listagem (mais recente primeiro) é feita **em memória**: a coleção é
 > pequena e curada pela gerente, então não exige índice composto.
+
+---
+
+### 10. `subscriptions`
+Assinatura do aluno (spec 012). **Uma por aluno** — não há histórico de planos antigos.
+- **Doc ID:** `studentId`
+```json
+{
+  "studentId": "string (UUID)",
+  "plan": "string — 'MONTHLY' | 'SEMIANNUAL' | 'ANNUAL'",
+  "status": "string — 'PENDING' | 'ACTIVE' | 'PAST_DUE' | 'CANCELLED'",
+  "paymentMethod": "string — 'PIX_RECURRING' | 'CREDIT_CARD'",
+  "totalAmount": "number — em reais, já com o cupom aplicado",
+  "installments": "number — 1 no mensal (recorrente), 6 no semestral, 12 no anual",
+  "installmentAmount": "number",
+  "paidInstallments": "number",
+  "charges": [
+    {
+      "index": "number (1-based)",
+      "dueDate": "string 'YYYY-MM-DD'",
+      "amount": "number",
+      "status": "string — 'pending' | 'paid' | 'overdue'",
+      "paidAt": "string ISO | null",
+      "gatewayChargeId": "string | null — id da cobrança no gateway que a emitiu",
+      "gatewayProvider": "string | null — 'ABACATEPAY' | 'STRIPE'",
+      "abacatePayId": "string | null — LEGADO, ver nota abaixo"
+    }
+  ],
+  "startDate": "string 'YYYY-MM-DD'",
+  "nextChargeDate": "string 'YYYY-MM-DD' | ausente",
+  "cancelledAt": "string ISO | ausente",
+  "stripeSubscriptionId": "string? — assinatura recorrente no Stripe (spec 014)",
+  "couponCode": "string? — cupom aplicado na contratação",
+  "couponDiscount": "number? — abatimento em R$ por parcela",
+  "couponRemainingCharges": "number | null — por quantas parcelas vale (null = vitalício)",
+  "createdAt": "string ISO",
+  "updatedAt": "string ISO"
+}
+```
+
+> `gatewayChargeId` é o caminho de volta do webhook: ele chega com o id da cobrança e nada
+> nosso. A busca varre a coleção em memória — é uma linha por aluno, e `array-contains`
+> não procura dentro de objetos. Renovações do cartão não têm cobrança emitida por nós: a
+> fatura só aponta para a assinatura, então o caminho de volta delas é
+> `stripeSubscriptionId`.
+>
+> `abacatePayId` é o nome anterior do campo (spec 014 Task 51). Continua sendo **lido**
+> para as assinaturas criadas antes, e **gravado** quando a cobrança é do AbacatePay — se
+> o deploy for revertido, a versão anterior ainda acha o PIX em aberto. Uma sessão do
+> Stripe não é espelhada ali: o código antigo não saberia o que fazer com ela.
+>
+> **Cancelar** apaga as parcelas ainda **pendentes** e guarda `cancelledAt`; as pagas
+> continuam no documento como histórico.
+
+### 11. `coupons`
+Cupons de desconto criados pela gerente (spec 012 RF15).
+- **Doc ID:** UUID gerado na criação
+```json
+{
+  "code": "string — sempre em MAIÚSCULAS, único",
+  "discountAmount": "number — abatimento em R$ por parcela",
+  "durationMonths": "number | null — por quantas parcelas vale; null = vitalício",
+  "active": "boolean",
+  "createdAt": "string ISO",
+  "createdBy": "string — uid da gerente"
+}
+```
+
+> Cupom **nunca é apagado**, só desativado: um código já usado segue descontando as
+> parcelas daquela assinatura, e sumir com o registro deixaria a gerente sem explicação
+> para o valor menor no fechamento.
+
+### 12. `infrastructure_expenses`
+Custo fixo de infraestrutura em **marcos temporais** (spec 012 RF9/RF10).
+- **Doc ID:** UUID gerado na criação
+```json
+{
+  "monthlyAmount": "number — valor mensal em R$",
+  "effectiveFrom": "string 'YYYY-MM' — primeiro mês em que vale",
+  "createdAt": "string ISO",
+  "createdBy": "string — uid da gerente"
+}
+```
+
+> **Nada é sobrescrito.** O valor de um mês é o snapshot mais recente cujo
+> `effectiveFrom <= mês`; mês anterior a qualquer snapshot custa zero. É isso que garante
+> que reajustar hoje não recalcule a rentabilidade de meses já fechados.
+
+### 13. `settings/revenue_goals_{ano}`
+Metas de faturamento (spec 012 RF8). Um documento por ano, na mesma coleção de
+configuração que já guarda `settings/billing`.
+```json
+{
+  "year": "number",
+  "annualTarget": "number",
+  "monthlyTargets": { "01": 5000, "02": 6000 },
+  "updatedAt": "string ISO",
+  "updatedBy": "string — uid da gerente"
+}
+```
+
+> Sem histórico de propósito: a meta é um alvo declarado, e mudar de ideia sobre ela não
+> reescreve nenhum resultado apurado. Mês sem meta própria usa a anual dividida por doze
+> como referência na tela.
 
 ---
 

@@ -33,6 +33,13 @@ export class FeedbackService {
     now: Date = new Date(),
   ): Promise<StudentFeedback> {
     const student = await this.assertCanAccess(user, studentId);
+    // Avaliar a evolução de quem está inadimplente fica bloqueado (RF14). Ler
+    // avaliações antigas continua liberado: é histórico, não serviço novo.
+    if (student.isPaying === false) {
+      throw new ForbiddenException(
+        `${student.fullName ?? 'O aluno'} está com pagamento pendente.`,
+      );
+    }
     const author = await this.userRepository.findById(user.sub);
 
     return this.feedbackRepository.create(

@@ -47,12 +47,17 @@ export class UserRepository {
     return [...byId.values()].filter((user) => resolveRole(user) === role);
   }
 
+  /**
+   * O id da entidade é o do documento. Depender do campo `id` gravado dentro
+   * do corpo funciona para quem foi criado pela API, mas documentos feitos à
+   * mão no console do Firestore não o têm — e saíam daqui com `id:
+   * undefined`, levando junto o `PublicTeacherDto.id` (spec 013 Task 46.2).
+   */
   async findById(id: string): Promise<User | null> {
     const doc = await this.db.collection('users').doc(id).get();
     if (doc.exists) {
       const data = doc.data();
-      const user = plainToInstance(User, data);
-      return user;
+      return plainToInstance(User, { ...data, id: data?.id ?? doc.id });
     }
     return null;
   }
@@ -78,6 +83,45 @@ export class UserRepository {
       .collection('users')
       .doc(userId!)
       .set(userObject, { merge: true });
+  }
+
+  /**
+   * Grava só o espelho da assinatura (spec 012 Task 17/18). É um `merge`
+   * cirúrgico em vez de um `update(user)` completo porque o webhook do gateway
+   * chega em paralelo com edições de perfil — reescrever o documento inteiro a
+   * partir de uma cópia lida antes desfaria o que a outra gravação salvou.
+   */
+  async updateSubscriptionState(
+    id: string,
+    state: {
+      subscriptionPlan?: string;
+      subscriptionStatus?: string;
+      isPaying: boolean;
+    },
+  ): Promise<void> {
+    await this.db
+      .collection('users')
+      .doc(id)
+      .set(
+        {
+          subscriptionPlan: state.subscriptionPlan ?? null,
+          subscriptionStatus: state.subscriptionStatus ?? null,
+          isPaying: state.isPaying,
+        },
+        { merge: true },
+      );
+  }
+
+  /**
+   * Grava o pagador do Stripe (spec 014 Task 54). `merge` cirúrgico pelo mesmo
+   * motivo do espelho da assinatura: isto acontece no meio de uma contratação,
+   * em paralelo com o que o aluno esteja editando no perfil.
+   */
+  async setStripeCustomerId(id: string, customerId: string): Promise<void> {
+    await this.db
+      .collection('users')
+      .doc(id)
+      .set({ stripeCustomerId: customerId }, { merge: true });
   }
 
   async delete(id: string): Promise<void> {

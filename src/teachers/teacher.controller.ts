@@ -83,6 +83,20 @@ export class TeacherController {
     return teacher ? new PublicTeacherDto(teacher) : null;
   }
 
+  /**
+   * Recorte público de uma professora, para qualquer autenticado. `/mine`
+   * resolve a professora pelo token e só serve ao aluno dono da conta; quando
+   * a gerente ou a professora abre o painel de um aluno, era isto que faltava
+   * — sem a rota, o front montava a professora com o nome desnormalizado do
+   * documento do aluno, e foto e bio simplesmente não existiam (spec 013
+   * Task 46.1). Declarada antes de `/:id`, que é da gerente.
+   */
+  @Get(':id/public')
+  @Roles(ROLES.MANAGER, ROLES.TEACHER, ROLES.STUDENT)
+  async findPublicById(@Param('id') id: string): Promise<PublicTeacherDto> {
+    return new PublicTeacherDto(await this.service.findById(id));
+  }
+
   /** Configuração individual do aluno (professora, carga, reposição, sala). */
   @Patch('students/:studentId')
   async updateStudentAssignment(
