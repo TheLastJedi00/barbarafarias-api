@@ -49,6 +49,13 @@ export class User {
    */
   subscriptionPlan?: SubscriptionPlan;
   subscriptionStatus?: SubscriptionStatus;
+  /**
+   * Pagador no Stripe (`cus_…`), gravado na primeira contratação por cartão
+   * (spec 014). Precisa ser persistido: `customers.create` **não** deduplica
+   * por e-mail, então sem isto cada contratação criaria um cliente novo e o
+   * histórico do aluno ficaria espalhado por vários no painel.
+   */
+  stripeCustomerId?: string;
   teacherId?: string;
   teacherName?: string;
   pendingTeacher?: boolean; // professora responsável foi desativada

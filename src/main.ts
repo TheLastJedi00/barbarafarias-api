@@ -31,7 +31,19 @@ async function bootstrap() {
   // enxerga o status real.
   app.enableCors(buildCorsOptions());
 
-  app.use(json({ limit: BODY_LIMIT }));
+  // O corpo cru guardado ao lado do objeto já parseado é exigência do Stripe
+  // (spec 014): `constructEvent` recalcula a assinatura HMAC sobre os bytes
+  // exatos que chegaram, e um `JSON.stringify` do objeto não os reproduz —
+  // ordem de chaves, escapes e espaços mudam. Sem isto **todo** webhook do
+  // Stripe é recusado, inclusive os legítimos.
+  app.use(
+    json({
+      limit: BODY_LIMIT,
+      verify: (req, _res, buf) => {
+        (req as unknown as { rawBody?: Buffer }).rawBody = buf;
+      },
+    }),
+  );
   app.use(urlencoded({ extended: true, limit: BODY_LIMIT }));
 
   app.useGlobalPipes(

@@ -4,6 +4,8 @@
  * a ser derivado daqui quando há assinatura (RF13 / Task 18).
  */
 
+import type { GatewayProvider } from './payment.gateway';
+
 /** Os três planos vendidos. Não há plano avulso. */
 export const SUBSCRIPTION_PLANS = {
   MONTHLY: 'MONTHLY',
@@ -107,7 +109,17 @@ export interface Charge {
   amount: number;
   status: ChargeStatus;
   paidAt?: string;
-  /** Id da cobrança no AbacatePay (pixQrCode ou billing), quando gerada. */
+  /**
+   * Id da cobrança no gateway que a emitiu — cobrança do AbacatePay ou sessão
+   * de checkout do Stripe. É por ele que o webhook volta à assinatura.
+   */
+  gatewayChargeId?: string;
+  gatewayProvider?: GatewayProvider;
+  /**
+   * @deprecated Nome anterior de `gatewayChargeId`, de quando só havia o
+   * AbacatePay. Continua sendo lido e gravado pelo repositório para as
+   * assinaturas criadas antes da spec 014 — ninguém deve ler daqui.
+   */
   abacatePayId?: string;
 }
 
@@ -127,6 +139,13 @@ export class Subscription {
   startDate!: string;
   nextChargeDate?: string;
   cancelledAt?: string;
+
+  /**
+   * Assinatura recorrente no Stripe (`sub_…`), quando o plano é de cartão
+   * (spec 014). É o elo com quem emite as renovações: sem ele, cancelar aqui
+   * deixaria o cartão sendo debitado todo mês lá fora.
+   */
+  stripeSubscriptionId?: string;
 
   // --- cupom aplicado (RF15/RF16) ---
   couponCode?: string;

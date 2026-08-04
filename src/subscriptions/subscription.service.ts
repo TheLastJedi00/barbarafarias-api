@@ -11,7 +11,13 @@ import { SubscriptionRepository } from './subscription.repository';
 import { CouponRepository } from './coupon.repository';
 import { UserRepository } from '../users/user.repository';
 import type { User } from '../users/user.entity';
-import { PaymentGateway, toCents } from './payment.gateway';
+import {
+  CardGateway,
+  GATEWAY_PROVIDERS,
+  PixGateway,
+  toCents,
+} from './payment.gateway';
+import type { StripeDomainEvent } from './stripe.gateway';
 import {
   CHARGE_STATUS,
   Charge,
@@ -23,7 +29,12 @@ import {
   planConfig,
 } from './subscription.entity';
 import type { PaymentMethod, SubscriptionPlan } from './subscription.entity';
-import { Coupon, applyDiscount, normalizeCouponCode, round2 } from './coupon.entity';
+import {
+  Coupon,
+  applyDiscount,
+  normalizeCouponCode,
+  round2,
+} from './coupon.entity';
 import {
   ChangePaymentMethodDto,
   ChoosePlanDto,
@@ -50,7 +61,8 @@ export class SubscriptionService {
     private readonly subscriptions: SubscriptionRepository,
     private readonly coupons: CouponRepository,
     private readonly users: UserRepository,
-    private readonly gateway: PaymentGateway,
+    private readonly pix: PixGateway,
+    private readonly card: CardGateway,
     private readonly configService: ConfigService,
   ) {}
 
@@ -142,10 +154,16 @@ export class SubscriptionService {
     // ela falharia lá dentro, agora com uma parcela já desvinculada.
     this.assertPayableProfile(student);
 
+    // Sair do cartão encerra a recorrência: mantê-la faria o aluno pagar nos
+    // dois trilhos no mês seguinte.
+    await this.releaseStripeSubscription(subscription);
+
     // A cobrança em aberto perde o vínculo com o gateway antigo antes de ser
     // reemitida — sem isso o webhook do PIX abandonado ainda a marcaria paga.
     const pending = this.nextPendingCharge(subscription);
     if (pending) {
+      pending.gatewayChargeId = undefined;
+      pending.gatewayProvider = undefined;
       pending.abacatePayId = undefined;
     }
 
@@ -173,6 +191,8 @@ export class SubscriptionService {
     if (subscription.status === SUBSCRIPTION_STATUS.CANCELLED) {
       return new SubscriptionDto(subscription);
     }
+
+    await this.releaseStripeSubscription(subscription);
 
     const now = new Date().toISOString();
     subscription.status = SUBSCRIPTION_STATUS.CANCELLED;
@@ -240,6 +260,174 @@ export class SubscriptionService {
   }
 
   /**
+   * Regra de domínio dos eventos do Stripe (spec 014).
+   *
+   * Recebe o evento **já verificado e normalizado**, venha ele do endpoint de
+   * conteúdo instantâneo ou do de conteúdo mínimo. Os dois desembocam aqui de
+   * propósito: separar o processamento por endpoint deixaria o pagamento
+   * dependendo de qual estilo de payload o painel está configurado a enviar, e
+   * uma troca de configuração pararia de ativar planos em silêncio.
+   *
+   * Idempotente do começo ao fim — o Stripe reenvia até receber 2xx.
+   */
+  async handleStripeEvent(event: StripeDomainEvent): Promise<void> {
+    switch (event.type) {
+      case 'checkout.session.completed':
+        return this.onCheckoutCompleted(event.object);
+      case 'invoice.paid':
+        return this.onInvoicePaid(event.object);
+      case 'invoice.payment_failed':
+        return this.onInvoiceFailed(event.object);
+      case 'customer.subscription.deleted':
+        return this.onStripeSubscriptionDeleted(event.object);
+      default:
+        // Estorno e disputa ficam para a dívida técnica D1, como no PIX.
+        return;
+    }
+  }
+
+  /**
+   * Primeira cobrança paga: a assinatura recorrente passa a existir, e é aqui
+   * que ela é amarrada ao plano e ganha o teto de ciclos dos planos finitos.
+   */
+  private async onCheckoutCompleted(session: Record<string, any>) {
+    const studentId = session?.metadata?.studentId;
+    if (!studentId) {
+      this.logger.warn(
+        `Sessão ${session?.id} sem studentId no metadata; nada a fazer.`,
+      );
+      return;
+    }
+
+    const subscription = await this.subscriptions.findByStudent(studentId);
+    if (!subscription) {
+      this.logger.warn(`Sessão ${session?.id} sem assinatura correspondente`);
+      return;
+    }
+
+    const stripeSubscriptionId = idOf(session.subscription);
+    if (stripeSubscriptionId) {
+      subscription.stripeSubscriptionId = stripeSubscriptionId;
+      await this.subscriptions.save(subscription);
+      await this.capCycles(subscription, Number(session.metadata?.cycles));
+    }
+
+    await this.confirmCharge(
+      subscription,
+      session.id,
+      Number(session.metadata?.chargeIndex) || undefined,
+    );
+  }
+
+  /**
+   * Renovação paga pelo Stripe. Confirma a próxima parcela em aberto: a fatura
+   * não sabe o índice dela, e a ordem do cronograma é a nossa verdade.
+   */
+  private async onInvoicePaid(invoice: Record<string, any>) {
+    const subscription = await this.fromInvoice(invoice);
+    if (!subscription) return;
+
+    const pending = this.nextPendingCharge(subscription);
+    if (!pending) return;
+
+    await this.confirmCharge(subscription, undefined, pending.index);
+
+    // Rede de segurança do teto de ciclos: se o `cancel_at` não tiver sido
+    // aplicado, o plano finito pararia de renovar só aqui. É o único ponto
+    // desta integração onde uma falha silenciosa cobraria dinheiro a mais.
+    const config = planConfig(subscription.plan);
+    if (
+      !config.recurring &&
+      subscription.paidInstallments >= config.installments &&
+      subscription.stripeSubscriptionId
+    ) {
+      await this.releaseStripeSubscription(subscription);
+      await this.subscriptions.save(subscription);
+    }
+  }
+
+  /** Parcela recusada: o aluno perde o acesso até regularizar (RF13). */
+  private async onInvoiceFailed(invoice: Record<string, any>) {
+    const subscription = await this.fromInvoice(invoice);
+    if (!subscription) return;
+    if (subscription.status === SUBSCRIPTION_STATUS.PAST_DUE) return;
+
+    subscription.status = SUBSCRIPTION_STATUS.PAST_DUE;
+    subscription.updatedAt = new Date().toISOString();
+    await this.subscriptions.save(subscription);
+    await this.syncUser(subscription);
+  }
+
+  /**
+   * A assinatura acabou no Stripe — por cancelamento no painel, pelo
+   * `cancel_at` do plano finito ou por inadimplência. Não tenta cancelar de
+   * volta: o outro lado já fez isso.
+   */
+  private async onStripeSubscriptionDeleted(stripeSubscription: {
+    id?: string;
+  }) {
+    if (!stripeSubscription?.id) return;
+    const subscription = await this.subscriptions.findByStripeSubscriptionId(
+      stripeSubscription.id,
+    );
+    if (!subscription) return;
+    if (subscription.status === SUBSCRIPTION_STATUS.CANCELLED) return;
+
+    const now = new Date().toISOString();
+    subscription.status = SUBSCRIPTION_STATUS.CANCELLED;
+    subscription.cancelledAt = now;
+    subscription.updatedAt = now;
+    subscription.nextChargeDate = undefined;
+    subscription.stripeSubscriptionId = undefined;
+    subscription.charges = subscription.charges.filter(
+      (charge) => charge.status === CHARGE_STATUS.PAID,
+    );
+
+    await this.subscriptions.save(subscription);
+    await this.syncUser(subscription);
+  }
+
+  /** Assinatura dona de uma fatura, pela assinatura que a fatura aponta. */
+  private async fromInvoice(
+    invoice: Record<string, any>,
+  ): Promise<Subscription | null> {
+    // A partir das versões recentes da API a fatura aninha a assinatura em
+    // `parent.subscription_details`; o campo raso continua vindo nas antigas.
+    const stripeSubscriptionId =
+      idOf(invoice?.subscription) ??
+      idOf(invoice?.parent?.subscription_details?.subscription);
+    if (!stripeSubscriptionId) return null;
+
+    const subscription =
+      await this.subscriptions.findByStripeSubscriptionId(stripeSubscriptionId);
+    if (!subscription) {
+      this.logger.warn(
+        `Fatura de ${stripeSubscriptionId} sem assinatura correspondente`,
+      );
+    }
+    return subscription;
+  }
+
+  /** Fecha o plano finito no fim do último ciclo, quando o evento diz quantos. */
+  private async capCycles(
+    subscription: Subscription,
+    cycles: number,
+  ): Promise<void> {
+    if (!cycles || !subscription.stripeSubscriptionId) return;
+    try {
+      await this.card.capSubscriptionCycles(
+        subscription.stripeSubscriptionId,
+        cycles,
+      );
+    } catch (error) {
+      // A rede de segurança de `onInvoicePaid` ainda pega este caso.
+      this.logger.error(
+        `Não foi possível limitar a assinatura ${subscription.stripeSubscriptionId} a ${cycles} ciclos: ${String(error)}`,
+      );
+    }
+  }
+
+  /**
    * Simulação local do pagamento do PIX. Só existe com `DEV_MODE=true`: em
    * produção a rota devolve 403 mesmo para o aluno dono da assinatura.
    */
@@ -256,11 +444,15 @@ export class SubscriptionService {
 
     // Quando a cobrança existe no gateway, simulamos por lá: assim o webhook
     // também dispara e o caminho testado é o mesmo da produção.
-    if (pending.abacatePayId && this.gateway.isEnabled()) {
-      await this.gateway.simulatePayment(pending.abacatePayId);
+    if (pending.gatewayChargeId && this.pix.isEnabled()) {
+      await this.pix.simulatePayment(pending.gatewayChargeId);
     }
 
-    await this.confirmCharge(subscription, pending.abacatePayId, pending.index);
+    await this.confirmCharge(
+      subscription,
+      pending.gatewayChargeId,
+      pending.index,
+    );
     return new SubscriptionDto(
       (await this.subscriptions.findByStudent(studentId))!,
     );
@@ -390,7 +582,11 @@ export class SubscriptionService {
 
     const charges: Charge[] = [];
     for (let index = 1; index <= scheduled; index++) {
-      const discounted = this.amountFor(config.installmentAmount, coupon, index);
+      const discounted = this.amountFor(
+        config.installmentAmount,
+        coupon,
+        index,
+      );
       charges.push({
         index,
         dueDate: addMonths(today, index - 1),
@@ -408,9 +604,7 @@ export class SubscriptionService {
       paymentMethod,
       totalAmount: config.recurring
         ? config.totalAmount
-        : round2(
-            charges.reduce((sum, charge) => sum + charge.amount, 0),
-          ),
+        : round2(charges.reduce((sum, charge) => sum + charge.amount, 0)),
       installments: config.installments,
       installmentAmount: charges[0].amount,
       paidInstallments: 0,
@@ -474,7 +668,8 @@ export class SubscriptionService {
       return {};
     }
 
-    if (!this.gateway.isEnabled()) {
+    const isPix = subscription.paymentMethod === PAYMENT_METHODS.PIX_RECURRING;
+    if (!(isPix ? this.pix : this.card).isEnabled()) {
       return {
         warning:
           'Pagamento indisponível no momento. O plano foi registrado e a cobrança será emitida em breve.',
@@ -499,17 +694,36 @@ export class SubscriptionService {
     };
 
     try {
-      if (subscription.paymentMethod === PAYMENT_METHODS.PIX_RECURRING) {
-        const pix = await this.gateway.createPixCharge(request);
-        charge.abacatePayId = pix.id;
+      if (isPix) {
+        const charged = await this.pix.createPixCharge(request);
+        charge.gatewayChargeId = charged.id;
+        charge.gatewayProvider = GATEWAY_PROVIDERS.ABACATEPAY;
         await this.subscriptions.save(subscription);
-        return { pixQrCodeUrl: pix.brCodeBase64, pixCopyPaste: pix.brCode };
+        return {
+          pixQrCodeUrl: charged.brCodeBase64,
+          pixCopyPaste: charged.brCode,
+        };
       }
 
-      const checkout = await this.gateway.createCheckout(request);
-      charge.abacatePayId = checkout.id;
+      const checkout = await this.card.createCheckout({
+        ...request,
+        // Valor **cheio** da parcela, com o cupom ao lado em vez de já
+        // abatido: no cartão a cobrança é recorrente e quem aplica o desconto
+        // às renovações é o gateway. Mandar o valor pronto acertaria a
+        // primeira parcela e cobraria o preço cheio em todas as seguintes.
+        amount: config.installmentAmount,
+        coupon: this.couponFor(subscription),
+        plan: subscription.plan,
+        planLabel: `Plano ${config.label}`,
+        studentId: subscription.studentId,
+        chargeIndex: charge.index,
+        // Plano recorrente não tem fim; os finitos fecham no último ciclo.
+        recurring: { cycles: config.recurring ? null : config.installments },
+      });
+      charge.gatewayChargeId = checkout.id;
+      charge.gatewayProvider = checkout.provider;
       await this.subscriptions.save(subscription);
-      return { checkoutUrl: checkout.url };
+      return { checkoutUrl: checkout.url, clientSecret: checkout.clientSecret };
     } catch (error) {
       // O plano já está gravado: falhar aqui derrubaria a contratação inteira
       // por um problema do gateway. O aluno reemite pela própria tela.
@@ -521,6 +735,44 @@ export class SubscriptionService {
           'Não foi possível gerar a cobrança agora. Tente novamente em instantes.',
       };
     }
+  }
+
+  /**
+   * Encerra a assinatura recorrente no gateway e solta o vínculo do nosso lado.
+   *
+   * Falhar lá fora **não** impede o cancelamento aqui: deixar o aluno preso
+   * num plano por causa de um erro de rede é pior que uma assinatura órfã no
+   * painel, que a gerente resolve à mão. O log é o que torna a órfã visível.
+   */
+  private async releaseStripeSubscription(
+    subscription: Subscription,
+  ): Promise<void> {
+    const stripeId = subscription.stripeSubscriptionId;
+    if (!stripeId) return;
+
+    try {
+      await this.card.cancelSubscription(stripeId);
+    } catch (error) {
+      this.logger.error(
+        `Assinatura ${stripeId} de ${subscription.studentId} não pôde ser cancelada no gateway: ${String(error)}`,
+      );
+    }
+    subscription.stripeSubscriptionId = undefined;
+  }
+
+  /**
+   * O cupom gravado na assinatura, no formato que o gateway de cartão espera.
+   * `undefined` quando não há cupom — mandar um `discounts` vazio é recusado.
+   */
+  private couponFor(subscription: Subscription) {
+    if (!subscription.couponCode || !subscription.couponDiscount) {
+      return undefined;
+    }
+    return {
+      code: subscription.couponCode,
+      amountOff: subscription.couponDiscount,
+      durationMonths: subscription.couponRemainingCharges ?? null,
+    };
   }
 
   private nextPendingCharge(subscription: Subscription): Charge | undefined {
@@ -536,11 +788,13 @@ export class SubscriptionService {
    */
   private async confirmCharge(
     subscription: Subscription,
-    abacatePayId?: string,
+    gatewayChargeId?: string,
     index?: number,
   ): Promise<void> {
     const charge = subscription.charges.find((item) =>
-      abacatePayId ? item.abacatePayId === abacatePayId : item.index === index,
+      gatewayChargeId
+        ? item.gatewayChargeId === gatewayChargeId
+        : item.index === index,
     );
     if (!charge || charge.status === CHARGE_STATUS.PAID) return;
 
@@ -614,6 +868,20 @@ export function addMonths(date: string, months: number): string {
   ).getUTCDate();
   target.setUTCDate(Math.min(day, lastDay));
   return target.toISOString().slice(0, 10);
+}
+
+/**
+ * O Stripe manda ora o id, ora o objeto expandido, no mesmo campo. Isso
+ * depende de configuração do endpoint, não do nosso código, então tratar os
+ * dois é mais barato que garantir um.
+ */
+function idOf(value: unknown): string | undefined {
+  if (typeof value === 'string') return value;
+  if (value && typeof value === 'object') {
+    const id = (value as { id?: unknown }).id;
+    if (typeof id === 'string') return id;
+  }
+  return undefined;
 }
 
 /** O AbacatePay aninha o id em lugares diferentes conforme o tipo da cobrança. */

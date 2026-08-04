@@ -77,8 +77,11 @@ export class MonthQueryDto {
 
 /**
  * O que o aluno precisa para pagar, devolvido por `POST /subscriptions/me`.
- * PIX volta com QR Code e copia-e-cola para o modal; cartão volta com a URL do
- * checkout do AbacatePay, para onde o frontend redireciona (§3).
+ *
+ * PIX volta com QR Code e copia-e-cola para o modal. Cartão volta com o
+ * `clientSecret` da sessão do Stripe, que o frontend monta na própria página
+ * (spec 014) — `checkoutUrl` continua existindo para o caso de o cartão voltar
+ * a sair por um gateway de checkout hospedado, e os dois nunca vêm juntos.
  */
 export class ChoosePlanResponseDto {
   subscription!: SubscriptionDto;
@@ -86,6 +89,7 @@ export class ChoosePlanResponseDto {
   pixQrCodeUrl?: string;
   pixCopyPaste?: string;
   checkoutUrl?: string;
+  clientSecret?: string;
   /** Explica por que não veio cobrança (ex.: gateway sem chave configurada). */
   warning?: string;
 }

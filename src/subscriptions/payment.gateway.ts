@@ -36,6 +36,46 @@ export interface ChargeRequest {
   product?: ChargeProduct;
 }
 
+/** Quem processou uma cobrança. Guardado na parcela para o webhook se achar. */
+export const GATEWAY_PROVIDERS = {
+  ABACATEPAY: 'ABACATEPAY',
+  STRIPE: 'STRIPE',
+} as const;
+
+export type GatewayProvider =
+  (typeof GATEWAY_PROVIDERS)[keyof typeof GATEWAY_PROVIDERS];
+
+/**
+ * Pedido de checkout de cartão. Estende o pedido de cobrança com o que só o
+ * cartão tem: a recorrência e o cupom.
+ *
+ * O cupom vai **inteiro** para o gateway em vez de já abatido no `amount`
+ * porque no Stripe quem aplica o desconto às renovações é ele — mandar o valor
+ * pronto acertaria a primeira parcela e cobraria o preço cheio nas seguintes.
+ */
+export interface CheckoutRequest extends ChargeRequest {
+  /** Plano do aluno, para o gateway resolver o produto/preço do catálogo. */
+  plan: string;
+  /** Rótulo legível do plano, usado para nomear o produto no painel. */
+  planLabel?: string;
+  /** Dono da assinatura. É por ele que o gateway acha (ou grava) o pagador. */
+  studentId: string;
+  /** Parcela sendo cobrada, para o webhook saber qual confirmar. */
+  chargeIndex?: number;
+  /**
+   * Quantos ciclos mensais a assinatura tem. `null` = sem fim (plano mensal);
+   * `6`/`12` fecham o semestral e o anual no fim do período.
+   */
+  recurring?: { cycles: number | null };
+  coupon?: {
+    code: string;
+    /** Abatimento em **reais** por parcela. */
+    amountOff: number;
+    /** `null` = vitalício. */
+    durationMonths: number | null;
+  };
+}
+
 export interface PixChargeResult {
   id: string;
   /** Código copia-e-cola. */
@@ -44,13 +84,23 @@ export interface PixChargeResult {
   brCodeBase64: string;
 }
 
+/**
+ * Um checkout aberto. Os dois provedores entregam coisas diferentes e as duas
+ * são opcionais de propósito: o AbacatePay hospeda a página e devolve `url`
+ * (o front redireciona), o Stripe roda incorporado e devolve `clientSecret`
+ * (o front monta o formulário na própria tela).
+ */
 export interface CheckoutResult {
   id: string;
-  url: string;
+  provider: GatewayProvider;
+  url?: string;
+  clientSecret?: string;
+  /** Id da assinatura no gateway, quando o checkout cria uma. */
+  subscriptionId?: string;
 }
 
 /**
- * Porta de cobrança do aluno. Existe pelo mesmo motivo do `PayoutProvider` do
+ * Raiz das portas de cobrança. Existe pelo mesmo motivo do `PayoutProvider` do
  * fechamento das professoras: a regra de negócio (cronograma, cupom, status)
  * não deve saber qual gateway está do outro lado, e os testes não devem
  * precisar de rede.
@@ -58,10 +108,38 @@ export interface CheckoutResult {
 export abstract class PaymentGateway {
   /** `false` quando não há chave configurada — o plano nasce sem cobrança. */
   abstract isEnabled(): boolean;
+}
+
+/**
+ * Cobrança por PIX. Separada do cartão porque nenhum provedor implementa os
+ * dois de verdade: o Stripe não emite PIX recorrente para este caso de uso, e
+ * o cartão saiu do AbacatePay nesta spec. Uma porta só obrigaria cada
+ * implementação a carregar metade dos métodos jogando "não suportado".
+ */
+export abstract class PixGateway extends PaymentGateway {
   abstract createPixCharge(request: ChargeRequest): Promise<PixChargeResult>;
-  abstract createCheckout(request: ChargeRequest): Promise<CheckoutResult>;
   /** Simula a confirmação do PIX no ambiente de testes do gateway. */
   abstract simulatePayment(chargeId: string): Promise<boolean>;
+}
+
+/** Cobrança recorrente por cartão. Implementada pelo Stripe (spec 014). */
+export abstract class CardGateway extends PaymentGateway {
+  abstract createCheckout(request: CheckoutRequest): Promise<CheckoutResult>;
+  /**
+   * Encerra a assinatura no gateway. Tolerante a já estar encerrada: o
+   * cancelamento pela tela e o webhook do próprio gateway podem chegar em
+   * qualquer ordem.
+   */
+  abstract cancelSubscription(subscriptionId: string): Promise<void>;
+  /**
+   * Fecha uma assinatura recorrente no fim do ciclo `cycles`, para os planos
+   * que têm fim (semestral, anual). Fica fora do `createCheckout` porque a
+   * assinatura só passa a existir depois do primeiro pagamento.
+   */
+  abstract capSubscriptionCycles(
+    subscriptionId: string,
+    cycles: number,
+  ): Promise<void>;
 }
 
 /** R$ → centavos, que é a unidade da API do AbacatePay. */
@@ -76,10 +154,10 @@ export const PIX_EXPIRATION_SECONDS = 3600;
 const ABACATEPAY_BASE_URL = 'https://api.abacatepay.com/v2';
 
 /**
- * Formas de pagamento pedidas no checkout hospedado. Fica só `PIX` porque a
- * loja não tem cartão habilitado: pedir `CARD` faz a v2 **recusar a criação
- * inteira** com "CARD is not available for this store", derrubando também o
- * PIX. Quando o cartão for liberado no painel, é aqui que ele entra.
+ * Formas de pagamento pedidas no checkout hospedado. Só `PIX`: a loja não tem
+ * cartão habilitado, e pedir `CARD` faz a v2 **recusar a criação inteira** com
+ * "CARD is not available for this store", derrubando também o PIX. Desde a
+ * spec 014 isso deixou de ser contorno — o cartão é do Stripe.
  */
 const CHECKOUT_METHODS = ['PIX'];
 
@@ -101,9 +179,15 @@ const CHECKOUT_METHODS = ['PIX'];
  *
  * O SDK `abacatepay-nodejs-sdk` saiu do caminho: a versão 1.6.0 só conhece as
  * rotas v1 (`billing`, `pixQrCode`).
+ *
+ * **Só implementa a porta de PIX** desde a spec 014. O `createCheckout` e o
+ * catálogo de produtos continuam aqui, fora da porta e sem ninguém chamando:
+ * são o caminho de volta se o cartão do Stripe ficar indisponível (conta em
+ * análise, por exemplo), e foram acertados contra a API de verdade em quatro
+ * PRs. Apagá-los custaria pouco agora e caro depois.
  */
 @Injectable()
-export class AbacatePayGateway extends PaymentGateway {
+export class AbacatePayGateway extends PixGateway {
   private readonly logger = new Logger(AbacatePayGateway.name);
   private readonly apiKey?: string;
   private readonly appBaseUrl: string;
@@ -191,7 +275,11 @@ export class AbacatePayGateway extends PaymentGateway {
       if (!data?.id || !data.url) {
         throw new Error(`Resposta incompleta: ${JSON.stringify(data)}`);
       }
-      return { id: data.id, url: data.url };
+      return {
+        id: data.id,
+        url: data.url,
+        provider: GATEWAY_PROVIDERS.ABACATEPAY,
+      };
     } catch (error: any) {
       throw new Error(`AbacatePay não devolveu o checkout: ${error.message}`);
     }
@@ -344,6 +432,42 @@ export class AbacatePayGateway extends PaymentGateway {
     }
 
     return data?.data ?? data;
+  }
+}
+
+/**
+ * Cartão pelo checkout hospedado do AbacatePay.
+ *
+ * **Provisório**: existe para a porta de cartão ter uma implementação entre a
+ * separação (Task 50) e o `StripeGateway` (Fase 2), preservando o
+ * comportamento que estava em produção. A Fase 2 troca a classe no módulo.
+ */
+@Injectable()
+export class AbacatePayCardGateway extends CardGateway {
+  constructor(private readonly abacate: AbacatePayGateway) {
+    super();
+  }
+
+  isEnabled(): boolean {
+    return this.abacate.isEnabled();
+  }
+
+  createCheckout(request: CheckoutRequest): Promise<CheckoutResult> {
+    return this.abacate.createCheckout(request);
+  }
+
+  /**
+   * O checkout do AbacatePay cobra uma parcela por vez: não há assinatura do
+   * lado dele para encerrar, e cancelar aqui já basta. Só o Stripe tem o que
+   * desfazer lá fora.
+   */
+  cancelSubscription(): Promise<void> {
+    return Promise.resolve();
+  }
+
+  /** Sem assinatura recorrente, não há ciclo para limitar. */
+  capSubscriptionCycles(): Promise<void> {
+    return Promise.resolve();
   }
 }
 
