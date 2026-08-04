@@ -183,13 +183,24 @@ export class StripeGateway extends CardGateway {
    * criaria um cliente novo e espalharia o histórico do mesmo aluno por vários
    * no painel. `customers.search` resolveria em teoria, mas é eventualmente
    * consistente — logo após criar, ela ainda devolve vazio.
+   *
+   * O id gravado é **conferido** antes de ser reusado (spec 015). O par
+   * banco/painel sai de sincronia com facilidade fora de produção — base
+   * copiada de outro ambiente, limpeza manual no painel de teste — e entregar
+   * um `cus_…` órfão para `checkout.sessions.create` derruba a emissão inteira
+   * com `No such customer`, sem caminho de volta. Sumiu, cadastramos de novo.
    */
   async resolveCustomerId(
     studentId: string,
     customer: GatewayCustomer,
   ): Promise<string> {
     const student = await this.users.findById(studentId);
-    if (student?.stripeCustomerId) return student.stripeCustomerId;
+    if (
+      student?.stripeCustomerId &&
+      (await this.customerExists(student.stripeCustomerId))
+    ) {
+      return student.stripeCustomerId;
+    }
 
     const created = await this.require().customers.create({
       email: customer.email,
@@ -200,6 +211,39 @@ export class StripeGateway extends CardGateway {
 
     await this.users.setStripeCustomerId(studentId, created.id);
     return created.id;
+  }
+
+  /**
+   * O cliente ainda existe na conta desta chave?
+   *
+   * Ausência chega de duas formas: `resource_missing`, quando o registro foi
+   * apagado de vez ou pertence a outra conta, e uma resposta com `deleted:
+   * true`, que é o que a API devolve para quem foi removido mas ainda tem
+   * histórico. As duas valem como "não existe".
+   *
+   * Só isso é tratado. Chave inválida, rede fora e limite de requisições
+   * continuam estourando — engoli-los aqui trocaria uma falha diagnosticável
+   * por um cliente duplicado no painel a cada tentativa.
+   */
+  private async customerExists(customerId: string): Promise<boolean> {
+    try {
+      const found = await this.require().customers.retrieve(customerId);
+      if ((found as Stripe.DeletedCustomer).deleted) {
+        this.logger.warn(
+          `Cliente ${customerId} está apagado no Stripe: cadastrando outro.`,
+        );
+        return false;
+      }
+      return true;
+    } catch (error: any) {
+      if (error?.code === 'resource_missing') {
+        this.logger.warn(
+          `Cliente ${customerId} não existe nesta conta do Stripe: cadastrando outro.`,
+        );
+        return false;
+      }
+      throw error;
+    }
   }
 
   // ------------------------------------------------------------ catálogo
