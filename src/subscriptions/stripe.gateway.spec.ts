@@ -299,12 +299,20 @@ describe('StripeGateway — checkout incorporado (Task 56)', () => {
     expect(payload.line_items).toEqual([{ price: 'price_1', quantity: 1 }]);
   });
 
-  it('volta para "Meu Plano" com o id da sessão, para a tela reconsultar', async () => {
+  it('não redireciona ao concluir: o JWT vive em memória e a volta deslogava', async () => {
     const { payload } = await checkout();
 
-    expect(payload.return_url).toBe(
-      'https://app.example/meu-plano?pagamento=concluido&session_id={CHECKOUT_SESSION_ID}',
-    );
+    // Regressão vista no navegador: com o padrão (`always`), pagar levava a uma
+    // navegação de página inteira e o aluno caía na tela de login.
+    expect(payload.redirect_on_completion).toBe('never');
+  });
+
+  it('não manda `return_url`: a API recusa a sessão junto com `never`', async () => {
+    const { payload } = await checkout();
+
+    // "You cannot pass a `return_url` when `ui_mode: embedded_page` and
+    // `redirect_on_completion: never`" — erro real, visto no navegador.
+    expect(payload).not.toHaveProperty('return_url');
   });
 
   it('carrega no metadata o que o webhook precisa para achar a parcela', async () => {
@@ -314,6 +322,25 @@ describe('StripeGateway — checkout incorporado (Task 56)', () => {
       studentId: 'aluno-1',
       plan: 'MONTHLY',
       chargeIndex: '3',
+    });
+  });
+
+  it('o metadata da sessão também carrega ciclos e parcela', async () => {
+    // Regressão vista no navegador: `checkout.session.completed` entrega o
+    // metadata da **sessão**, não o da assinatura. Com `cycles` só em
+    // `subscription_data`, o teto de ciclos nunca era aplicado e o semestral
+    // renovava para sempre — `cancel_at` ficou nulo numa contratação real.
+    const { payload } = await checkout({
+      plan: 'SEMIANNUAL',
+      chargeIndex: 1,
+      recurring: { cycles: 6 },
+    });
+
+    expect(payload.metadata).toMatchObject({
+      studentId: 'aluno-1',
+      plan: 'SEMIANNUAL',
+      chargeIndex: '1',
+      cycles: '6',
     });
   });
 
@@ -402,7 +429,9 @@ describe('StripeGateway — verificação de eventos (Task 57)', () => {
   it('evento instantâneo é verificado com a chave do endpoint instantâneo', async () => {
     const { gateway, stripe, config } = build();
     config.get.mockImplementation((key: string) =>
-      key === 'STRIPE_WEBHOOK_SECRET_SNAPSHOT' ? 'whsec_snapshot' : undefined,
+      key === 'STRIPE_WEBHOOK_SECRET_INSTANTANEO'
+        ? 'whsec_instantaneo'
+        : undefined,
     );
     stripe.webhooks.constructEvent.mockReturnValue({
       id: 'evt_1',
@@ -415,7 +444,7 @@ describe('StripeGateway — verificação de eventos (Task 57)', () => {
     expect(stripe.webhooks.constructEvent).toHaveBeenCalledWith(
       CORPO,
       'assinatura',
-      'whsec_snapshot',
+      'whsec_instantaneo',
     );
     expect(event).toEqual({
       id: 'evt_1',
@@ -427,7 +456,7 @@ describe('StripeGateway — verificação de eventos (Task 57)', () => {
   it('evento mínimo traz só o id: o objeto é buscado na API', async () => {
     const { gateway, stripe, config } = build();
     config.get.mockImplementation((key: string) =>
-      key === 'STRIPE_WEBHOOK_SECRET_THIN' ? 'whsec_thin' : undefined,
+      key === 'STRIPE_WEBHOOK_SECRET_MINIMO' ? 'whsec_minimo' : undefined,
     );
     const parse = jest
       .fn()
@@ -441,7 +470,7 @@ describe('StripeGateway — verificação de eventos (Task 57)', () => {
 
     const event = await gateway.verifyThinEvent(CORPO, 'assinatura');
 
-    expect(parse).toHaveBeenCalledWith(CORPO, 'assinatura', 'whsec_thin');
+    expect(parse).toHaveBeenCalledWith(CORPO, 'assinatura', 'whsec_minimo');
     expect(event).toEqual({
       id: 'evt_thin_1',
       // O prefixo `v1.` some para o handler de domínio não precisar saber por
@@ -455,7 +484,7 @@ describe('StripeGateway — verificação de eventos (Task 57)', () => {
     const { gateway } = build();
 
     await expect(gateway.verifySnapshotEvent(CORPO, 'x')).rejects.toThrow(
-      /STRIPE_WEBHOOK_SECRET_SNAPSHOT/,
+      /STRIPE_WEBHOOK_SECRET_INSTANTANEO/,
     );
   });
 });

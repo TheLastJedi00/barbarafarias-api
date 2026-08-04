@@ -64,8 +64,8 @@ npm run start:prod
 | `ABACATEPAY_API_KEY` | Chave da [AbacatePay](https://abacatepay.com) — cobranças **PIX** do aluno (Spec 012) |
 | `ABACATEPAY_WEBHOOK_SECRET` | Segredo conferido no webhook `POST /webhooks/abacatepay` |
 | `STRIPE_SECRET_KEY` | Chave do [Stripe](https://stripe.com) — assinaturas de **cartão** (Spec 014). Prefira uma chave restrita (`rk_`) |
-| `STRIPE_WEBHOOK_SECRET_SNAPSHOT` | Assinatura do endpoint `POST /stripe/webhook/conteudo-instantaneo` |
-| `STRIPE_WEBHOOK_SECRET_THIN` | Assinatura do endpoint `POST /stripe/webhook/conteudo-minimo` |
+| `STRIPE_WEBHOOK_SECRET_INSTANTANEO` | Assinatura do endpoint `POST /stripe/webhook/conteudo-instantaneo` |
+| `STRIPE_WEBHOOK_SECRET_MINIMO` | Assinatura do endpoint `POST /stripe/webhook/conteudo-minimo` |
 | `DEV_MODE` | `true` libera `POST /subscriptions/dev/mock-pay` (simulação de PIX). **Nunca em produção** |
 | `APP_BASE_URL` | Base do frontend, usada nas URLs de retorno do checkout de cartão |
 

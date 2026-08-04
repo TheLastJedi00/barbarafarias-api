@@ -60,8 +60,6 @@ export interface StripeDomainEvent {
 @Injectable()
 export class StripeGateway extends CardGateway {
   private readonly logger = new Logger(StripeGateway.name);
-  private readonly appBaseUrl: string;
-
   /** `bf-plan-<PLANO>` → `prod_…`. Ver `resolveProductId`. */
   private readonly productIds = new Map<string, string>();
   /** `bf-<PLANO>-<centavos>` → `price_…`. Ver `resolvePriceId`. */
@@ -75,9 +73,6 @@ export class StripeGateway extends CardGateway {
     private readonly configService: ConfigService,
   ) {
     super();
-    this.appBaseUrl =
-      this.configService.get<string>('APP_BASE_URL') ?? 'http://localhost:4200';
-
     if (!this.stripe) {
       this.logger.warn(
         'STRIPE_SECRET_KEY ausente: cobranças de cartão não serão emitidas.',
@@ -104,7 +99,6 @@ export class StripeGateway extends CardGateway {
    */
   async createCheckout(request: CheckoutRequest): Promise<CheckoutResult> {
     const stripe = this.require();
-    const returnUrl = `${this.appBaseUrl}/meu-plano?pagamento=concluido&session_id={CHECKOUT_SESSION_ID}`;
 
     const [customer, price] = await Promise.all([
       this.resolveCustomerId(request.studentId, request.customer),
@@ -121,7 +115,18 @@ export class StripeGateway extends CardGateway {
       mode: 'subscription',
       customer,
       line_items: [{ price, quantity: 1 }],
-      return_url: returnUrl,
+      // O padrão do checkout incorporado é **redirecionar** para o `return_url`
+      // ao concluir, e isso é uma navegação de página inteira: como o nosso JWT
+      // vive em memória, o aluno pagava e caía na tela de login — comprovado no
+      // navegador. Com `never` o pagamento termina dentro do modal e quem avisa
+      // é o `onComplete`.
+      //
+      // Os dois parâmetros são mutuamente exclusivos: mandar `return_url` junto
+      // faz a API recusar a sessão inteira ("No `return_url` is required for
+      // these sessions"). O preço é que métodos de pagamento que saem da página
+      // ficam de fora desta sessão — aceitável, porque aqui o alvo é o cartão e
+      // o PIX é do AbacatePay.
+      redirect_on_completion: 'never',
       // Rótulo do fluxo no painel, para comparar integrações. O sufixo
       // aleatório é exigência do formato.
       integration_identifier: `bf-assinatura-${randomLetters(8)}`,
@@ -133,9 +138,18 @@ export class StripeGateway extends CardGateway {
           ...(cycles === null ? {} : { cycles: String(cycles) }),
         },
       },
+      // O mesmo metadata vai nos **dois** lugares de propósito. O evento
+      // `checkout.session.completed` entrega o metadata da *sessão*, e o das
+      // faturas entrega o da *assinatura*: pôr só em `subscription_data`
+      // deixava `cycles` invisível no momento de aplicar o teto de ciclos, e o
+      // plano semestral renovava para sempre — comprovado no navegador, com
+      // `cancel_at` nulo depois de uma contratação real.
       metadata: {
         studentId: request.studentId,
         externalId: request.externalId,
+        plan: request.plan,
+        chargeIndex: String(request.chargeIndex ?? 1),
+        ...(cycles === null ? {} : { cycles: String(cycles) }),
       },
     };
 
@@ -367,7 +381,7 @@ export class StripeGateway extends CardGateway {
     const event = this.require().webhooks.constructEvent(
       rawBody,
       signature,
-      this.secret('STRIPE_WEBHOOK_SECRET_SNAPSHOT'),
+      this.secret('STRIPE_WEBHOOK_SECRET_INSTANTANEO'),
     );
     return {
       id: event.id,
@@ -390,7 +404,7 @@ export class StripeGateway extends CardGateway {
     const notification = stripe.parseEventNotification(
       rawBody,
       signature,
-      this.secret('STRIPE_WEBHOOK_SECRET_THIN'),
+      this.secret('STRIPE_WEBHOOK_SECRET_MINIMO'),
     );
 
     const event = await stripe.v2.core.events.retrieve(notification.id);
