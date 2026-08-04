@@ -9,6 +9,11 @@ function fakeStripe() {
   return {
     customers: {
       create: jest.fn().mockResolvedValue({ id: 'cus_1' }),
+      retrieve: jest
+        .fn()
+        .mockImplementation((id: string) =>
+          Promise.resolve({ id, deleted: false }),
+        ),
     },
     products: {
       create: jest.fn().mockResolvedValue({ id: 'prod_1' }),
@@ -146,6 +151,64 @@ describe('StripeGateway — pagador (Task 54)', () => {
     const id = await gateway.resolveCustomerId('aluno-1', PEDIDO.customer);
 
     expect(id).toBe('cus_ja_existe');
+    expect(stripe.customers.create).not.toHaveBeenCalled();
+  });
+
+  it('cadastra outro quando o id gravado sumiu do painel (spec 015)', async () => {
+    const { gateway, stripe, users } = build();
+    users.findById.mockResolvedValue({
+      id: 'aluno-1',
+      email: 'ana@example.com',
+      stripeCustomerId: 'cus_apagado',
+    });
+    stripe.customers.retrieve.mockRejectedValue(
+      Object.assign(new Error("No such customer: 'cus_apagado'"), {
+        code: 'resource_missing',
+      }),
+    );
+
+    const id = await gateway.resolveCustomerId('aluno-1', PEDIDO.customer);
+
+    // Sem isto o `cus_…` órfão ia para `sessions.create` e derrubava a emissão
+    // inteira — base de dev copiada de outro ambiente é o caso comum.
+    expect(id).toBe('cus_1');
+    expect(users.setStripeCustomerId).toHaveBeenCalledWith('aluno-1', 'cus_1');
+  });
+
+  it('cadastra outro quando o cliente gravado foi apagado mas ainda responde', async () => {
+    const { gateway, stripe, users } = build();
+    users.findById.mockResolvedValue({
+      id: 'aluno-1',
+      email: 'ana@example.com',
+      stripeCustomerId: 'cus_apagado',
+    });
+    stripe.customers.retrieve.mockResolvedValue({
+      id: 'cus_apagado',
+      deleted: true,
+    });
+
+    const id = await gateway.resolveCustomerId('aluno-1', PEDIDO.customer);
+
+    expect(id).toBe('cus_1');
+    expect(users.setStripeCustomerId).toHaveBeenCalledWith('aluno-1', 'cus_1');
+  });
+
+  it('uma falha real da API não vira cliente duplicado', async () => {
+    const { gateway, stripe, users } = build();
+    users.findById.mockResolvedValue({
+      id: 'aluno-1',
+      email: 'ana@example.com',
+      stripeCustomerId: 'cus_ja_existe',
+    });
+    stripe.customers.retrieve.mockRejectedValue(
+      Object.assign(new Error('Invalid API Key provided'), {
+        code: 'api_key_invalid',
+      }),
+    );
+
+    await expect(
+      gateway.resolveCustomerId('aluno-1', PEDIDO.customer),
+    ).rejects.toThrow(/Invalid API Key/);
     expect(stripe.customers.create).not.toHaveBeenCalled();
   });
 });
