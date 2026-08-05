@@ -51,7 +51,7 @@ npm run start:prod
 | Variável | Descrição |
 |---|---|
 | `PORT` | Porta do servidor (padrão: `8080`) |
-| `FIREBASE_WEB_API_KEY` | Chave da Web API (console → Configurações do projeto → Geral). É o que permite ao backend falar com o Identity Toolkit — sem ela o login responde 500 |
+| `FIREBASE_WEB_API_KEY` | Chave de API **de servidor** para o Identity Toolkit. Criada em Google Cloud Console → Credenciais, sem restrição de aplicativo e restrita às APIs Identity Toolkit + Token Service — a chave web do console do Firebase é restrita por HTTP referrer e derruba o login (ver `.env.example`). Precisa ser do mesmo projeto do service account |
 | `GEMINI_API_KEY` | Chave de API do Google Gemini |
 | `GEMINI_MODEL` | Modelo do Gemini (padrão: `gemini-2.5-pro`) |
 | `FIREBASE_SERVICE_ACCOUNT_BASE64` | Service Account do Firebase em Base64 (produção/Vercel) |
@@ -378,7 +378,8 @@ em lugar nenhum deste sistema.
 |---|---|
 | `401` | E-mail ou senha incorretos (o Firebase unifica os dois casos quando a proteção contra enumeração de e-mail está ligada — a mensagem é a mesma de propósito) |
 | `429` | Muitas tentativas |
-| `500` | Configuração ausente (ex.: `FIREBASE_WEB_API_KEY`) — **não** vira 401, senão um erro de configuração ficaria indistinguível de senha errada |
+| `500` | Falha que não se consegue classificar — **não** vira 401, senão um erro de configuração ficaria indistinguível de senha errada |
+| `503` | Configuração do projeto no Google: chave restrita, chave inválida, API desabilitada ou provedor de e-mail/senha desligado. A mensagem não pede para tentar de novo, porque não adianta; o log do `IdentityToolkitClient` diz qual dos casos é e o que conferir (spec 017) |
 
 #### `POST /auth/refresh`
 

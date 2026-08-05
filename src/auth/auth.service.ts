@@ -4,10 +4,12 @@ import {
   Inject,
   Injectable,
   Logger,
+  ServiceUnavailableException,
   UnauthorizedException,
 } from '@nestjs/common';
 import { Auth } from 'firebase-admin/auth';
 import {
+  CONFIG_UNAVAILABLE_MESSAGE,
   FirebaseSession,
   IdentityToolkitClient,
   IdentityToolkitError,
@@ -281,7 +283,7 @@ export class AuthService {
   private async ensureRoleClaim(
     session: FirebaseSession,
   ): Promise<FirebaseSession> {
-    const decoded = await this.auth.verifyIdToken(session.idToken);
+    const decoded = await this.decodeFreshToken(session.idToken);
     if (decoded.role) {
       return session;
     }
@@ -290,6 +292,30 @@ export class AuthService {
     this.logger.log(`Gravando papel ausente (${role}) em ${session.localId}.`);
     await this.auth.setCustomUserClaims(session.localId, { role });
     return this.run(() => this.identity.refresh(session.refreshToken));
+  }
+
+  /**
+   * Abre um token que **acabou** de ser emitido pelo Identity Toolkit.
+   *
+   * Diferente do `verifyIdToken` público, aqui a falha não pode virar 401: o
+   * Firebase aceitou a senha segundos atrás, então o token é legítimo e quem
+   * está recusando é o nosso lado. Na prática só há uma explicação — a
+   * `FIREBASE_WEB_API_KEY` pertence a um projeto e o service account a outro,
+   * de modo que o `aud` do token não bate com o do Admin SDK (spec 017). Sem
+   * esta mensagem o sintoma chega como "Token inválido" e manda procurar no
+   * lugar errado.
+   */
+  private async decodeFreshToken(idToken: string) {
+    try {
+      return await this.auth.verifyIdToken(idToken);
+    } catch (error) {
+      this.logger.error(
+        'ID Token recusado pelo Admin SDK logo após um login aceito pelo ' +
+          'Firebase: FIREBASE_WEB_API_KEY e FIREBASE_SERVICE_ACCOUNT_BASE64 ' +
+          `parecem ser de projetos diferentes. Detalhe: ${error}`,
+      );
+      throw new ServiceUnavailableException(CONFIG_UNAVAILABLE_MESSAGE);
+    }
   }
 
   /**
