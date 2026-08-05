@@ -47,7 +47,10 @@ export class TeacherController {
   @Get('me')
   @Roles(ROLES.MANAGER, ROLES.TEACHER)
   async me(@CurrentUser() user: AuthenticatedUser): Promise<ResponseTeacherDto> {
-    return new ResponseTeacherDto(await this.service.findById(user.sub));
+    const dto = new ResponseTeacherDto(await this.service.findById(user.sub));
+    // Do token, como em /users/me (spec 016 Task 78).
+    dto.emailVerified = user.emailVerified;
+    return dto;
   }
 
   /** Perfil editável pela própria professora: nome, telefone, foto e bio. */

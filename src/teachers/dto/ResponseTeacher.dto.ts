@@ -22,6 +22,8 @@ export class ResponseTeacherDto {
   studentsCount?: number;
   profileImageUrl?: string;
   bio?: string;
+  /** Vem do token, não do documento (spec 016 Task 78). */
+  emailVerified?: boolean;
 
   constructor(user: User, studentsCount?: number) {
     this.id = user.id!;

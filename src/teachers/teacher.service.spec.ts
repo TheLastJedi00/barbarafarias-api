@@ -13,8 +13,8 @@ describe('TeacherService', () => {
   };
   let userRepository: { findById: jest.Mock; save: jest.Mock; update: jest.Mock };
   let authService: {
-    registerCredentials: jest.Mock;
-    removeCredentials: jest.Mock;
+    createAccount: jest.Mock;
+    deleteAccount: jest.Mock;
   };
 
   const teacher = new User({
@@ -38,8 +38,8 @@ describe('TeacherService', () => {
       update: jest.fn().mockResolvedValue(undefined),
     };
     authService = {
-      registerCredentials: jest.fn().mockResolvedValue(undefined),
-      removeCredentials: jest.fn().mockResolvedValue(undefined),
+      createAccount: jest.fn().mockResolvedValue(undefined),
+      deleteAccount: jest.fn().mockResolvedValue(undefined),
     };
     service = new TeacherService(
       teacherRepository as any,
@@ -61,10 +61,10 @@ describe('TeacherService', () => {
   } as any;
 
   describe('create', () => {
-    it('registra credencial com papel teacher e persiste a professora', async () => {
+    it('cria a conta com papel teacher e persiste a professora', async () => {
       const created = await service.create(createDto);
 
-      expect(authService.registerCredentials).toHaveBeenCalledWith(
+      expect(authService.createAccount).toHaveBeenCalledWith(
         expect.objectContaining({ email: 'bia@x.com', role: ROLES.TEACHER }),
       );
       expect(created.role).toBe(ROLES.TEACHER);
@@ -79,7 +79,7 @@ describe('TeacherService', () => {
       userRepository.save.mockRejectedValueOnce(new Error('firestore fora'));
 
       await expect(service.create(createDto)).rejects.toThrow('firestore fora');
-      expect(authService.removeCredentials).toHaveBeenCalled();
+      expect(authService.deleteAccount).toHaveBeenCalled();
     });
   });
 

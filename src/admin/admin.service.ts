@@ -1,12 +1,16 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Inject, Injectable, Logger } from '@nestjs/common';
+import { Auth } from 'firebase-admin/auth';
 import { AdminRepository, RawDoc } from './admin.repository';
 import { ROLES, Role, resolveRole } from '../types/role';
+import { FIREBASE_AUTH } from '../firestore/firebase-auth.module';
 
 export interface MigrateRolesReport {
   totalUsers: number;
   updatedUsers: number;
-  updatedCredentials: number;
-  missingCredentials: string[];
+  /** Contas cuja Custom Claim de papel foi (re)gravada — spec 016 Task 81. */
+  updatedClaims: number;
+  /** `uid`s que não têm conta no Firebase: rodar `/admin/migrate-auth`. */
+  missingAccounts: string[];
   agendaSlotsMigrated: number;
   agendaSlotsSkipped: number;
 }
@@ -17,16 +21,25 @@ const KNOWN_ROLES: string[] = Object.values(ROLES);
 export class AdminService {
   private readonly logger = new Logger(AdminService.name);
 
-  constructor(private readonly adminRepository: AdminRepository) {}
+  constructor(
+    private readonly adminRepository: AdminRepository,
+    @Inject(FIREBASE_AUTH) private readonly auth: Auth,
+  ) {}
 
   /**
-   * Migra `isTeacher` → `role` (spec 010 §2.1). Idempotente: só escreve onde o
-   * papel está ausente ou fora de sincronia entre `users` e `credentials`.
+   * Migra `isTeacher` → `role` (spec 010 §2.1) e sincroniza a **Custom Claim**
+   * do Firebase com o papel resolvido (spec 016 Task 81). Idempotente: só
+   * escreve onde o papel está ausente ou fora de sincronia.
+   *
+   * **A claim só chega ao usuário no próximo token.** Quem for promovido a
+   * gerente com a sessão aberta continua com o papel antigo até sair e entrar
+   * (ou até o refresh de uma hora) — é característica do Firebase, não uma
+   * falha desta rota.
    *
    * Precedência do papel desejado:
    *   1. `users.role`        — já migrado pela app
-   *   2. `credentials.role`  — respeita o ajuste manual da gerente (é o que
-   *                            alimenta o JWT), evitando rebaixar manager→teacher
+   *   2. `credentials.role`  — respeita o ajuste manual da gerente, enquanto a
+   *                            coleção legada existir (spec 016 Task 84)
    *   3. `isTeacher`         — fallback legado
    */
   async migrateRoles(): Promise<MigrateRolesReport> {
@@ -38,34 +51,36 @@ export class AdminService {
     const credentialById = new Map(credentials.map((c) => [c.id, c.data]));
 
     const userUpdates: { id: string; data: Record<string, any> }[] = [];
-    const credentialUpdates: { id: string; data: Record<string, any> }[] = [];
-    const missingCredentials: string[] = [];
+    const missingAccounts: string[] = [];
+    let updatedClaims = 0;
 
     for (const user of users) {
-      const credential = credentialById.get(user.id);
-      const desired = this.desiredRole(user.data, credential);
+      const desired = this.desiredRole(
+        user.data,
+        credentialById.get(user.id),
+      );
 
       if (user.data.role !== desired) {
         userUpdates.push({ id: user.id, data: { role: desired } });
       }
 
-      if (!credential) {
-        missingCredentials.push(user.id);
-      } else if (credential.role !== desired) {
-        credentialUpdates.push({ id: user.id, data: { role: desired } });
+      const synced = await this.syncRoleClaim(user.id, desired);
+      if (synced === 'missing') {
+        missingAccounts.push(user.id);
+      } else if (synced === 'updated') {
+        updatedClaims += 1;
       }
     }
 
     await this.adminRepository.mergeAll('users', userUpdates);
-    await this.adminRepository.mergeAll('credentials', credentialUpdates);
 
     const agenda = await this.migrateAgendaSlots(users, credentialById);
 
     const report: MigrateRolesReport = {
       totalUsers: users.length,
       updatedUsers: userUpdates.length,
-      updatedCredentials: credentialUpdates.length,
-      missingCredentials,
+      updatedClaims,
+      missingAccounts,
       agendaSlotsMigrated: agenda.migrated,
       agendaSlotsSkipped: agenda.skipped,
     };
@@ -114,6 +129,30 @@ export class AdminService {
 
     await this.adminRepository.moveAll('agenda', moves);
     return { migrated: moves.length, skipped: 0 };
+  }
+
+  /**
+   * Grava a claim só quando ela está diferente. Reescrever à toa custaria uma
+   * chamada por usuário a cada execução — e a migração é feita para ser
+   * rodada de novo sem medo.
+   */
+  private async syncRoleClaim(
+    uid: string,
+    desired: Role,
+  ): Promise<'updated' | 'unchanged' | 'missing'> {
+    try {
+      const account = await this.auth.getUser(uid);
+      if (account.customClaims?.role === desired) {
+        return 'unchanged';
+      }
+      await this.auth.setCustomUserClaims(uid, { role: desired });
+      return 'updated';
+    } catch (error: any) {
+      if (error?.code === 'auth/user-not-found') {
+        return 'missing';
+      }
+      throw error;
+    }
   }
 
   private desiredRole(

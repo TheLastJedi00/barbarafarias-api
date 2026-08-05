@@ -28,9 +28,10 @@ export class AuthGuard implements CanActivate {
     const token = this.extractTokenFromHeader(request);
     if (!token) throw new UnauthorizedException('Token não fornecido');
 
-    const userFromToken = this.authService.verifyToken(token);
-
-    request['user'] = userFromToken;
+    // ID Token do Firebase, verificado pelo Admin SDK (spec 016 Task 72). A
+    // verificação é local — o SDK guarda as chaves públicas do Google em cache
+    // — então continua sendo uma checagem por requisição, sem ida à rede.
+    request['user'] = await this.authService.verifyIdToken(token);
     return true;
   }
 

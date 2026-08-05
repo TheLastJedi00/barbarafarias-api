@@ -49,7 +49,11 @@ export class UserController {
   @Get('me')
   @Roles(ROLES.STUDENT)
   async me(@CurrentUser() user: AuthenticatedUser): Promise<User> {
-    return this.service.findById(user.sub);
+    const profile = await this.service.findById(user.sub);
+    // `emailVerified` vem do próprio token que o guard já decodificou (spec 016
+    // Task 78) — sem consulta extra ao Firebase, e sem virar campo do documento,
+    // que sairia de sincronia no dia em que o e-mail fosse verificado.
+    return Object.assign(profile, { emailVerified: user.emailVerified });
   }
 
   /** Edição que o próprio aluno faz: nome, telefone e foto (spec 011 RF14). */

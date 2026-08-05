@@ -5,12 +5,19 @@ import { SubscriptionModule } from './subscription.module';
 import { CardGateway, PixGateway } from './payment.gateway';
 import { StripeGateway } from './stripe.gateway';
 import { FIRESTORE } from '../firestore/firestore.module';
+import { FIREBASE_AUTH } from '../firestore/firebase-auth.module';
 
-/** Firestore de mentira, global como o de verdade, mas sem credencial. */
+/**
+ * Firestore e Firebase Auth de mentira, globais como os de verdade, mas sem
+ * credencial: instanciar os reais aqui exigiria a service account.
+ */
 @Global()
 @Module({
-  providers: [{ provide: FIRESTORE, useValue: { collection: () => ({}) } }],
-  exports: [FIRESTORE],
+  providers: [
+    { provide: FIRESTORE, useValue: { collection: () => ({}) } },
+    { provide: FIREBASE_AUTH, useValue: {} },
+  ],
+  exports: [FIRESTORE, FIREBASE_AUTH],
 })
 class FakeFirestoreModule {}
 
