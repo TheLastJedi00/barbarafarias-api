@@ -1,64 +1,295 @@
 import {
+  BadRequestException,
+  ConflictException,
+  Inject,
   Injectable,
+  Logger,
   UnauthorizedException,
 } from '@nestjs/common';
-import { JwtService } from '@nestjs/jwt';
-import { AuthRepository } from './auth.repository';
-import { BcryptService } from './bcrypt.service';
-import { AuthUser } from './entities/auth-user.entity';
+import { Auth } from 'firebase-admin/auth';
+import {
+  FirebaseSession,
+  IdentityToolkitClient,
+  IdentityToolkitError,
+  toHttpException,
+} from './identity-toolkit.client';
+import { EmailCooldownService } from './email-cooldown.service';
+import { FIREBASE_AUTH } from '../firestore/firebase-auth.module';
 import { Role, resolveRole } from '../types/role';
+import type { AuthenticatedUser } from '../decorators/current-user.decorator';
 import { UserRepository } from '../users/user.repository';
+import { User } from '../users/user.entity';
+
+/** O que as rotas de sessão devolvem. `access_token` é o ID Token do Firebase. */
+export interface SessionResponse {
+  access_token: string;
+  refresh_token: string;
+  /** Segundos até o ID Token expirar — sempre 3600 no Firebase. */
+  expires_in: number;
+}
 
 @Injectable()
 export class AuthService {
+  private readonly logger = new Logger(AuthService.name);
+
   constructor(
-    private jwtService: JwtService,
-    private authRepository: AuthRepository,
-    private bcryptService: BcryptService,
-    private userRepository: UserRepository,
+    @Inject(FIREBASE_AUTH) private readonly auth: Auth,
+    private readonly identity: IdentityToolkitClient,
+    private readonly userRepository: UserRepository,
+    private readonly cooldown: EmailCooldownService,
   ) {}
 
-  verifyToken(token: string) {
+  /**
+   * Valida a senha no Firebase e devolve a sessão (spec 016 Task 71).
+   *
+   * A senha não fica em lugar nenhum do nosso lado: quem a guarda e confere é
+   * o Firebase, e este serviço só a repassa.
+   */
+  async login(email: string, password: string): Promise<SessionResponse> {
+    const session = await this.run(() =>
+      this.identity.signInWithPassword(email, password),
+    );
+    return this.toResponse(await this.ensureRoleClaim(session));
+  }
+
+  /**
+   * Troca o refresh token por um ID Token novo (spec 016 Task 73). É o que
+   * compensa a validade de uma hora do ID Token e o que permite a sessão
+   * sobreviver ao recarregamento da página.
+   */
+  async refresh(refreshToken: string): Promise<SessionResponse> {
+    const session = await this.run(() => this.identity.refresh(refreshToken));
+    return this.toResponse(await this.ensureRoleClaim(session));
+  }
+
+  /**
+   * Invalida **todos** os refresh tokens da pessoa (spec 016 Task 74).
+   *
+   * Enquanto o token vivia só na memória do navegador, esquecê-lo bastava.
+   * Agora que o refresh token sobrevive ao fechamento da aba, sem isto "sair"
+   * seria só uma formalidade — e não haveria como cortar o acesso de um
+   * aparelho perdido.
+   */
+  async logout(uid: string): Promise<void> {
     try {
-      return this.jwtService.verify(token);
-    } catch (e) {
+      await this.auth.revokeRefreshTokens(uid);
+    } catch (error) {
+      // Sair não pode falhar: quando chega aqui o front já descartou os tokens.
+      this.logger.warn(`Falha ao revogar sessões de ${uid}: ${error}`);
+    }
+  }
+
+  /**
+   * Verifica o ID Token e monta o usuário que o `AuthGuard` injeta no request
+   * (spec 016 Task 72).
+   *
+   * Sem `checkRevoked`: ele custa uma ida à rede **por requisição**, e derrubar
+   * uma sessão revogada até uma hora antes não paga esse preço num app onde o
+   * próprio token já expira em uma hora.
+   */
+  async verifyIdToken(token: string): Promise<AuthenticatedUser> {
+    let decoded;
+    try {
+      decoded = await this.auth.verifyIdToken(token);
+    } catch {
       throw new UnauthorizedException('Token inválido');
-    }
-  }
-
-  async registerCredentials(data: Partial<AuthUser>) {
-    const hashedPassword = await this.bcryptService.transform(data.password!);
-    const authUser = new AuthUser({
-      ...data,
-      password: hashedPassword,
-    });
-    await this.authRepository.save(authUser);
-  }
-
-  async removeCredentials(id: string) {
-    await this.authRepository.delete(id);
-  }
-
-  async login(email: string, pass: string) {
-    const authUser = await this.authRepository.findByEmail(email);
-
-    if (!authUser || !authUser.password) {
-      throw new UnauthorizedException('Esse usuário não existe.');
-    }
-
-    const isMatch = await this.bcryptService.compare(pass, authUser.password);
-
-    if (!isMatch) {
-      throw new UnauthorizedException('Senha incorreta.');
     }
 
     return {
-      access_token: this.jwtService.sign({
-        email: authUser.email,
-        sub: authUser.id,
-        role: await this.resolveUserRole(authUser),
-      }),
+      sub: decoded.uid,
+      email: decoded.email ?? '',
+      // A claim é o caminho normal; o banco é a rede de segurança para um token
+      // emitido antes de o papel existir. Deixar `undefined` chegar ao
+      // RolesGuard viraria um 403 sem explicação nenhuma.
+      role: (decoded.role as Role) ?? (await this.resolveUserRole(decoded.uid)),
+      emailVerified: decoded.email_verified === true,
     };
+  }
+
+  /**
+   * Pede ao Firebase o e-mail de redefinição (spec 016 Task 75).
+   *
+   * **Nunca revela se o e-mail existe.** Uma resposta diferente por caso
+   * transformaria a rota num verificador de quem estuda aqui, e é justamente
+   * quem não tem conta que descobriria isso primeiro. Erro de infraestrutura,
+   * por outro lado, sobe: uma chave errada ficaria indistinguível de um envio
+   * bem-sucedido, e ninguém notaria que o botão parou de funcionar.
+   */
+  async sendPasswordReset(email: string): Promise<void> {
+    await this.cooldown.enforce(email);
+    try {
+      await this.identity.sendPasswordResetEmail(email);
+    } catch (error) {
+      if (
+        error instanceof IdentityToolkitError &&
+        (error.code === 'EMAIL_NOT_FOUND' || error.code === 'INVALID_EMAIL')
+      ) {
+        this.logger.debug(`Redefinição pedida para e-mail inexistente.`);
+        return;
+      }
+      throw error instanceof IdentityToolkitError
+        ? toHttpException(error)
+        : error;
+    }
+  }
+
+  /**
+   * Cria a conta no Firebase com o papel já na Custom Claim (spec 016 Task 77).
+   *
+   * O `uid` é o mesmo id do documento em `users` — é isso que mantém `sub`
+   * sendo a chave de `users/{id}` e evita mexer em toda rota que faz
+   * `findById(user.sub)`.
+   */
+  async createAccount(data: {
+    uid: string;
+    email: string;
+    password: string;
+    role: Role;
+  }): Promise<void> {
+    try {
+      await this.auth.createUser({
+        uid: data.uid,
+        email: data.email,
+        password: data.password,
+      });
+    } catch (error) {
+      throw this.toAccountException(error);
+    }
+
+    await this.auth.setCustomUserClaims(data.uid, { role: data.role });
+    await this.sendVerificationFor(data.email, data.password);
+  }
+
+  /**
+   * Apaga a conta (spec 016 Task 80). Tolerante à conta já ausente: é chamada
+   * tanto no rollback de um cadastro que falhou quanto na exclusão do aluno, e
+   * nos dois casos o objetivo é o mesmo — a conta não existir no fim.
+   */
+  async deleteAccount(uid: string): Promise<void> {
+    try {
+      await this.auth.deleteUser(uid);
+    } catch (error: any) {
+      if (error?.code === 'auth/user-not-found') {
+        return;
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * Troca o e-mail da conta (spec 016 Task 79).
+   *
+   * **A senha atual é exigida** porque esta é a única operação que muda *quem*
+   * a pessoa é para o sistema: sem re-autenticação, uma aba esquecida aberta
+   * num computador compartilhado bastaria para sequestrar a conta.
+   *
+   * A ordem é deliberada — Firebase primeiro, documento depois, com desfazer
+   * no meio. O inverso deixaria `users.email` apontando para um endereço com o
+   * qual ninguém consegue entrar, que é exatamente o modo de falha que tranca
+   * a pessoa fora da própria conta.
+   */
+  async changeEmail(
+    uid: string,
+    currentEmail: string,
+    novoEmail: string,
+    senhaAtual: string,
+  ): Promise<void> {
+    await this.run(() =>
+      this.identity.signInWithPassword(currentEmail, senhaAtual),
+    );
+
+    try {
+      await this.auth.updateUser(uid, {
+        email: novoEmail,
+        emailVerified: false,
+      });
+    } catch (error) {
+      throw this.toAccountException(error);
+    }
+
+    try {
+      // `update` faz merge, então gravar só o id e o e-mail não apaga o resto
+      // do documento — e não corre com uma edição de perfil em paralelo.
+      await this.userRepository.update(
+        new User({ id: uid, email: novoEmail }),
+      );
+    } catch (error) {
+      await this.auth.updateUser(uid, {
+        email: currentEmail,
+        emailVerified: true,
+      });
+      throw error;
+    }
+
+    // O endereço novo precisa ser verificado, mas o e-mail não sair não desfaz
+    // a troca — que já valeu no Firebase e no documento.
+    await this.sendVerificationFor(novoEmail, senhaAtual);
+  }
+
+  /**
+   * Reenvia a verificação para quem já está logado (spec 016 Task 78). O ID
+   * Token de quem chama é a credencial: é assim que o Firebase garante que
+   * ninguém dispara verificação para a conta de outra pessoa.
+   */
+  async resendVerification(idToken: string, email: string): Promise<void> {
+    await this.cooldown.enforce(email);
+    await this.run(() => this.identity.sendVerificationEmail(idToken));
+  }
+
+  /**
+   * Verificação no cadastro. Precisa de um ID Token, e o único jeito de obtê-lo
+   * aqui é entrar com a senha que acabamos de definir — o Admin SDK só sabe
+   * *gerar* o link, não enviá-lo.
+   *
+   * **Nunca derruba o cadastro:** a gerente cadastrando um aluno na frente dele
+   * não pode perder o cadastro porque o e-mail não saiu.
+   */
+  private async sendVerificationFor(
+    email: string,
+    password: string,
+  ): Promise<void> {
+    try {
+      const session = await this.identity.signInWithPassword(email, password);
+      await this.identity.sendVerificationEmail(session.idToken);
+    } catch (error) {
+      this.logger.warn(`Verificação de e-mail não enviada para ${email}: ${error}`);
+    }
+  }
+
+  /** Erros do Admin SDK ao criar conta, traduzidos para o que a tela mostra. */
+  private toAccountException(error: any): Error {
+    if (error?.code === 'auth/email-already-exists') {
+      return new ConflictException('Já existe uma conta com esse e-mail.');
+    }
+    if (error?.code === 'auth/invalid-password') {
+      return new BadRequestException('A senha precisa ter ao menos 6 caracteres.');
+    }
+    if (error?.code === 'auth/invalid-email') {
+      return new BadRequestException('E-mail inválido.');
+    }
+    return error;
+  }
+
+  /**
+   * Garante que o ID Token devolvido carregue o papel.
+   *
+   * Custom Claim só entra em token novo, então quando a claim falta (conta
+   * criada fora do nosso fluxo, ou migração interrompida) não basta gravá-la:
+   * é preciso reemitir o token pelo refresh, senão a pessoa entraria com um
+   * token sem papel e o `RolesGuard` a barraria em tudo, em silêncio.
+   */
+  private async ensureRoleClaim(
+    session: FirebaseSession,
+  ): Promise<FirebaseSession> {
+    const decoded = await this.auth.verifyIdToken(session.idToken);
+    if (decoded.role) {
+      return session;
+    }
+
+    const role = await this.resolveUserRole(session.localId);
+    this.logger.log(`Gravando papel ausente (${role}) em ${session.localId}.`);
+    await this.auth.setCustomUserClaims(session.localId, { role });
+    return this.run(() => this.identity.refresh(session.refreshToken));
   }
 
   /**
@@ -67,19 +298,33 @@ export class AuthService {
    * filtrar alunos) — o Firestore não faz join, então o papel precisa morar
    * no documento consultado.
    *
-   * `credentials.role` fica como **ponte de transição**: quem ainda não tem
-   * `users.role` continua entrando com o papel certo, e um rollback do deploy
-   * volta a funcionar sem ninguém ficar trancado. Some depois que a base
-   * estiver migrada.
+   * Aqui ele só é consultado quando o token **não** traz a claim; o caminho
+   * normal lê o papel do próprio token, sem tocar no banco.
    *
-   * Ordem: `users.role` → `credentials.role` → `isTeacher` (legado) →
-   * `student` (menor privilégio).
+   * Ordem: `users.role` → `isTeacher` (legado) → `student` (menor privilégio).
    */
-  private async resolveUserRole(authUser: AuthUser): Promise<Role> {
-    const user = await this.userRepository.findById(authUser.id);
-    return resolveRole({
-      role: user?.role ?? authUser.role,
-      isTeacher: user?.isTeacher,
-    });
+  private async resolveUserRole(uid: string): Promise<Role> {
+    const user = await this.userRepository.findById(uid);
+    return resolveRole({ role: user?.role, isTeacher: user?.isTeacher });
+  }
+
+  private toResponse(session: FirebaseSession): SessionResponse {
+    return {
+      access_token: session.idToken,
+      refresh_token: session.refreshToken,
+      expires_in: session.expiresIn,
+    };
+  }
+
+  /** Converte a falha do Identity Toolkit no status HTTP correspondente. */
+  private async run<T>(operation: () => Promise<T>): Promise<T> {
+    try {
+      return await operation();
+    } catch (error) {
+      if (error instanceof IdentityToolkitError) {
+        throw toHttpException(error);
+      }
+      throw error;
+    }
   }
 }

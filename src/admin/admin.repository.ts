@@ -35,6 +35,18 @@ export class AdminRepository {
     }
   }
 
+  /** Apaga documentos em lote (spec 016 Task 84). */
+  async deleteAll(collection: string, ids: string[]): Promise<void> {
+    const CHUNK = 400;
+    for (let i = 0; i < ids.length; i += CHUNK) {
+      const batch = this.db.batch();
+      for (const id of ids.slice(i, i + CHUNK)) {
+        batch.delete(this.db.collection(collection).doc(id));
+      }
+      await batch.commit();
+    }
+  }
+
   /** Aplica um merge em cada documento, em lotes (limite do Firestore é 500). */
   async mergeAll(
     collection: string,

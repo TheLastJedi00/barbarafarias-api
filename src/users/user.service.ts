@@ -26,11 +26,11 @@ export class UserService {
     const uid = randomUUID();
     const role = dto.isTeacher ? ROLES.TEACHER : ROLES.STUDENT;
 
-    await this.authService.registerCredentials({
-      id: uid,
+    await this.authService.createAccount({
+      uid,
       email: dto.email,
       password: dto.password,
-      role: role,
+      role,
     });
 
     try {
@@ -41,8 +41,8 @@ export class UserService {
       const id = await this.userRepository.save(user, uid);
       return new ResponseUserDto(id, user.fullName);
     } catch (error) {
-      // rollback: evita credencial órfã caso a gravação do usuário falhe
-      await this.authService.removeCredentials(uid);
+      // rollback: evita conta órfã caso a gravação do usuário falhe
+      await this.authService.deleteAccount(uid);
       throw error;
     }
   }
@@ -191,7 +191,21 @@ export class UserService {
     return user;
   }
 
+  /**
+   * Apaga o documento **e** a conta de autenticação (spec 016 Task 80).
+   *
+   * Antes só o documento sumia, e a credencial órfã ficava — o efeito passava
+   * despercebido porque o login antigo dependia de `users` para resolver o
+   * papel. Com o Firebase, uma conta órfã continua conseguindo token: quem foi
+   * removido da escola entraria e receberia 404 nas telas, em vez de não
+   * entrar.
+   *
+   * O documento primeiro: se a conta sumisse antes e a exclusão do documento
+   * falhasse, sobraria um aluno sem nenhum jeito de entrar e sem registro do
+   * porquê.
+   */
   async delete(id: string): Promise<void> {
-    return await this.userRepository.delete(id);
+    await this.userRepository.delete(id);
+    await this.authService.deleteAccount(id);
   }
 }

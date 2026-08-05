@@ -32,8 +32,8 @@ export class TeacherService {
   async create(dto: CreateTeacherDto): Promise<User> {
     const uid = randomUUID();
 
-    await this.authService.registerCredentials({
-      id: uid,
+    await this.authService.createAccount({
+      uid,
       email: dto.email,
       password: dto.password,
       role: ROLES.TEACHER,
@@ -63,8 +63,8 @@ export class TeacherService {
       await this.userRepository.save(teacher, uid);
       return teacher;
     } catch (error) {
-      // rollback: evita credencial órfã caso a gravação falhe
-      await this.authService.removeCredentials(uid);
+      // rollback: evita conta órfã caso a gravação falhe
+      await this.authService.deleteAccount(uid);
       throw error;
     }
   }

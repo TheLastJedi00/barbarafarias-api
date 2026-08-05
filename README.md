@@ -1,6 +1,6 @@
 # 📚 Bárbara Farias API
 
-API RESTful para a plataforma educacional **Bárbara Farias**, construída com **NestJS** e **Firebase (Firestore)**. A API gerencia usuários (alunos e professores), materiais didáticos gerados por IA (Gemini), módulos de vídeo e autenticação baseada em JWT.
+API RESTful para a plataforma educacional **Bárbara Farias**, construída com **NestJS** e **Firebase (Firestore)**. A API gerencia usuários (alunos e professores), materiais didáticos gerados por IA (Gemini), módulos de vídeo e autenticação pelo **Firebase Auth**.
 
 ---
 
@@ -11,7 +11,7 @@ API RESTful para a plataforma educacional **Bárbara Farias**, construída com *
 | **NestJS 11** | Framework backend |
 | **Firebase Admin SDK** | Firestore (banco de dados) e autenticação |
 | **Google Gemini AI** | Geração de conteúdo didático personalizado |
-| **JWT (JSON Web Tokens)** | Autenticação e autorização |
+| **Firebase Auth** | Autenticação (senhas, tokens) e papéis via Custom Claims |
 | **Bcrypt** | Hash de senhas |
 | **Zod** | Validação de schemas (resposta da IA) |
 | **class-validator / class-transformer** | Validação de DTOs e transformação de dados |
@@ -51,7 +51,7 @@ npm run start:prod
 | Variável | Descrição |
 |---|---|
 | `PORT` | Porta do servidor (padrão: `8080`) |
-| `JWT_SECRET` | Chave secreta para assinatura dos tokens JWT |
+| `FIREBASE_WEB_API_KEY` | Chave da Web API (console → Configurações do projeto → Geral). É o que permite ao backend falar com o Identity Toolkit — sem ela o login responde 500 |
 | `GEMINI_API_KEY` | Chave de API do Google Gemini |
 | `GEMINI_MODEL` | Modelo do Gemini (padrão: `gemini-2.5-pro`) |
 | `FIREBASE_SERVICE_ACCOUNT_BASE64` | Service Account do Firebase em Base64 (produção/Vercel) |
@@ -88,14 +88,11 @@ npm run start:prod
 ```
 src/
 ├── auth/                  # Módulo de autenticação
-│   ├── auth.controller.ts     # Endpoint de login
-│   ├── auth.service.ts        # Lógica de autenticação (JWT + Firebase)
-│   ├── auth.repository.ts     # Persistência de credenciais no Firestore
-│   ├── bcrypt.service.ts      # Hash e comparação de senhas
-│   ├── dto/
-│   │   └── login.dto.ts       # DTO de login
-│   └── entities/
-│       └── auth-user.entity.ts # Entidade de credenciais
+│   ├── auth.controller.ts     # Login, refresh, logout, senha e e-mail
+│   ├── auth.service.ts        # Sessão, contas e Custom Claims
+│   ├── identity-toolkit.client.ts # REST de identidade do Firebase
+│   ├── email-cooldown.service.ts  # Intervalo de 60s por endereço
+│   └── dto/                   # login, sessão e troca de e-mail
 ├── users/                 # Módulo de usuários
 │   ├── user.controller.ts     # CRUD de usuários
 │   ├── user.service.ts        # Lógica de negócios de usuários
@@ -209,7 +206,7 @@ src/
 ├── decorators/            # Decorators customizados
 │   ├── public.decorator.ts    # @Public() - marca rotas públicas
 │   ├── roles.decorator.ts     # @Roles() - define roles necessárias
-│   └── current-user.decorator.ts # @CurrentUser() - payload do JWT
+│   └── current-user.decorator.ts # @CurrentUser() - payload do ID Token
 ├── types/                 # Tipos compartilhados
 │   ├── student.level.ts       # Type Level (A1, A2, B1, B2)
 │   ├── student.info.ts        # Interface StudentInfo
@@ -224,10 +221,47 @@ src/
 
 ### Mecanismo
 
-A API utiliza um sistema duplo de proteção:
+Desde a **spec 016**, quem guarda senhas e emite tokens é o **Firebase Auth**. A API não
+assina mais nada: não há `JWT_SECRET`, não há bcrypt, e a coleção `credentials` deixou de
+ser lida.
 
-1. **AuthGuard (Global)** — Verifica o token Firebase ID Token enviado no header `Authorization: Bearer <token>`. Todas as rotas são protegidas por padrão.
-2. **RolesGuard (Global)** — Verifica se o usuário autenticado possui a role necessária para acessar o endpoint.
+1. **AuthGuard (Global)** — verifica o **ID Token do Firebase** enviado em
+   `Authorization: Bearer <token>` com `admin.auth().verifyIdToken()`. A verificação é
+   local (o SDK guarda as chaves públicas do Google em cache), então continua sendo uma
+   checagem por requisição sem ida à rede. Todas as rotas são protegidas por padrão.
+   Sem `checkRevoked`: ele custaria uma chamada de rede por requisição para adiantar em
+   no máximo uma hora algo que o próprio vencimento do token já resolve.
+2. **RolesGuard (Global)** — lê `role` do token, que agora é uma **Custom Claim** do
+   Firebase. O guard não mudou.
+3. **ActivePlanGuard (Global)** — inalterado (spec 012 RF13).
+
+**Validade e renovação.** O ID Token dura **1 hora** e isso não é configurável no Firebase.
+Por isso o login devolve também um `refresh_token`, e existe `POST /auth/refresh`. O front
+guarda o refresh token no `localStorage` e o ID Token só em memória; `POST /auth/logout`
+revoga os refresh tokens da pessoa em **todos** os aparelhos.
+
+**Claim só entra em token novo.** Mudar o papel de alguém logado só surte efeito no próximo
+login ou refresh — vale para `/admin/migrate-roles` e para edição manual.
+
+**Limite de tentativas** (`@nestjs/throttler`, só no `AuthController`, nunca global — global
+atingiria os webhooks de pagamento):
+
+| Rota | Por IP | Por endereço |
+|---|---|---|
+| `/auth/login`, `/auth/refresh` | 10/min | — |
+| `/auth/recuperar-senha`, `/auth/reenviar-verificacao`, `PATCH /auth/email` | 3/min | 60s (coleção `emailCooldowns`, com o e-mail em hash) |
+
+> `app.set('trust proxy', 1)` no `main.ts` é o que faz o limite contar o IP de quem chama.
+> Atrás da Vercel, sem essa linha `req.ip` é o IP do proxy e **todo mundo divide o mesmo
+> balde** — a terceira pessoa a pedir a senha no mesmo minuto tomaria 429 sem ter feito nada.
+>
+> O armazenamento do throttler é em memória, ou seja, **por instância**: em serverless isso
+> é um piso, não um teto. O teto de verdade é o do próprio Firebase
+> (`TOO_MANY_ATTEMPTS_TRY_LATER`).
+
+**Templates de e-mail são configuração, não código.** Quem envia a redefinição de senha e a
+verificação de e-mail é o Firebase. Antes do deploy, no console → Authentication →
+Templates: idioma pt-BR, remetente e URL de retorno apontando para o login.
 
 ### Decorators
 
@@ -236,7 +270,7 @@ A API utiliza um sistema duplo de proteção:
 | `@Public()` | Marca a rota como pública (sem autenticação) |
 | `@Roles(ROLES.MANAGER)` | Restringe à gerente |
 | `@Roles(ROLES.MANAGER, ROLES.TEACHER)` | Operação de aula (a professora fica restrita às próprias) |
-| `@CurrentUser()` | Injeta o payload do JWT (`{ sub, email, role }`) no handler |
+| `@CurrentUser()` | Injeta o payload do ID Token (`{ sub, email, role, emailVerified }`) no handler |
 
 ### Papéis
 
@@ -248,16 +282,18 @@ A API utiliza um sistema duplo de proteção:
 - **`users.role` é a fonte única do papel.** É o campo que todas as consultas do servidor
   usam — listar professoras, achar as gerentes para notificar, filtrar alunos. O Firestore
   não faz join, então o papel precisa morar no documento consultado.
-- **O login lê o papel de `users`** (uma leitura a mais por login, não por requisição — o JWT
-  carrega a role depois disso). `credentials` guarda o que a autenticação precisa: e-mail e
-  hash da senha.
-- **`credentials.role` é ponte de transição**, não fonte: quem ainda não tem `users.role`
-  continua entrando com o papel certo, e um rollback do deploy não tranca ninguém. Sai de
-  cena quando a base estiver migrada.
-- Precedência no login: `users.role` → `credentials.role` → `isTeacher` (legado) → `student`
-  (menor privilégio). Mesma ordem usada por `POST /admin/migrate-roles`.
-- **Promover alguém à mão:** edite `users/{id}.role`. Depois é só relogar — ou rodar
-  "Corrigir papéis dos usuários" no painel, que propaga para o resto da base.
+- **No token, o papel é uma Custom Claim do Firebase**, gravada quando a conta é criada
+  (`setCustomUserClaims`) e ressincronizada por `POST /admin/migrate-roles`. O caminho normal
+  não toca no banco para descobrir papel.
+- **Rede de segurança:** se um token chegar **sem** a claim (conta criada fora do nosso
+  fluxo, migração interrompida), o login resolve o papel por `users`, grava a claim e
+  **reemite** o token pelo refresh. Sem reemitir, a pessoa entraria com um token sem papel e
+  o `RolesGuard` a barraria em tudo, em silêncio.
+- Precedência quando é preciso resolver: `users.role` → `isTeacher` (legado) → `student`
+  (menor privilégio). O `migrate-roles` ainda considera `credentials.role` enquanto a coleção
+  legada existir.
+- **Promover alguém à mão:** edite `users/{id}.role` e rode "Corrigir papéis dos usuários" no
+  painel — é ele que grava a claim. Depois, a pessoa precisa sair e entrar.
 
 #### Onde a herança gerente→professora **não** vale (spec 011 RF2.1)
 
@@ -288,9 +324,12 @@ base** e sobre **de quem** é o aluno — não sobre o acompanhamento em si.
 Authorization: Bearer <firebase_id_token>
 ```
 
-### Fluxo de Login (JWT)
+### Fluxo de Login (Firebase)
 
-O endpoint `POST /auth/login` autentica via email/senha (credenciais internas com bcrypt) e retorna um JWT com expiração de **3 horas**.
+`POST /auth/login` repassa e-mail e senha ao **Identity Toolkit** (a REST API de identidade
+do Firebase — o Admin SDK cria e verifica contas, mas não valida senha) e devolve o ID Token,
+o refresh token e a validade. A senha não passa por nenhuma lógica nossa e não é armazenada
+em lugar nenhum deste sistema.
 
 ---
 
@@ -298,9 +337,16 @@ O endpoint `POST /auth/login` autentica via email/senha (credenciais internas co
 
 ### 🔑 Auth — `/auth`
 
-#### `POST /auth/login`
+| Rota | Auth | Descrição |
+|---|---|---|
+| `POST` | `/auth/login` | 🔓 | E-mail e senha → sessão do Firebase |
+| `POST` | `/auth/refresh` | 🔓 | Refresh token → ID Token novo |
+| `POST` | `/auth/logout` | 🔒 | Revoga os refresh tokens em todos os aparelhos (204) |
+| `POST` | `/auth/recuperar-senha` | 🔓 | Firebase envia o link de redefinição (204 sempre) |
+| `POST` | `/auth/reenviar-verificacao` | 🔒 | Firebase reenvia a verificação do e-mail (204) |
+| `PATCH` | `/auth/email` | 🔒 | Troca o e-mail, exigindo a senha atual (204) |
 
-Realiza login com credenciais internas e retorna um JWT.
+#### `POST /auth/login`
 
 | Propriedade | Valor |
 |---|---|
@@ -320,7 +366,9 @@ Realiza login com credenciais internas e retorna um JWT.
 
 ```json
 {
-  "access_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+  "access_token": "eyJhbGciOiJSUzI1NiIsImtpZCI6...",
+  "refresh_token": "AMf-vBz...",
+  "expires_in": 3600
 }
 ```
 
@@ -328,13 +376,38 @@ Realiza login com credenciais internas e retorna um JWT.
 
 | Status | Descrição |
 |---|---|
-| `401` | Credenciais inválidas |
+| `401` | E-mail ou senha incorretos (o Firebase unifica os dois casos quando a proteção contra enumeração de e-mail está ligada — a mensagem é a mesma de propósito) |
+| `429` | Muitas tentativas |
+| `500` | Configuração ausente (ex.: `FIREBASE_WEB_API_KEY`) — **não** vira 401, senão um erro de configuração ficaria indistinguível de senha errada |
 
-**Fluxo interno:**
-1. Busca credenciais no Firestore (coleção `credentials`) pelo email
-2. Compara a senha com o hash armazenado (bcrypt)
-3. Gera um JWT contendo `{ email, sub: userId, role }`
-4. Retorna o `access_token`
+#### `POST /auth/refresh`
+
+Mesmo corpo de resposta do login. Recebe `{ "refresh_token": "…" }`. Erro do Firebase
+(expirado, revogado, conta desativada) vira `401` — o sinal para o front deslogar de vez.
+
+#### `POST /auth/recuperar-senha`
+
+Recebe `{ "email": "…" }` e responde **204 sempre**, inclusive para e-mail inexistente:
+uma resposta diferente por caso transformaria a rota num verificador de quem estuda aqui.
+Quem envia o e-mail, hospeda a página de nova senha e expira o código é o Firebase.
+
+> Concluir uma redefinição marca o e-mail como **verificado** no Firebase. É por isso que a
+> base migrada (spec 016 Fase 4) fica verificada sem nenhum passo extra.
+
+#### `PATCH /auth/email`
+
+Recebe `{ "novoEmail": "…", "senhaAtual": "…" }`. A senha é conferida no Firebase antes de
+qualquer escrita: é a única operação que muda *quem* a pessoa é para o sistema, e sem
+re-autenticação uma aba esquecida aberta bastaria para sequestrar a conta.
+
+A ordem é Firebase → documento, com desfazer no meio. O inverso deixaria `users.email`
+apontando para um endereço com o qual ninguém consegue entrar.
+
+| Status | Descrição |
+|---|---|
+| `401` | Senha atual incorreta |
+| `409` | E-mail já usado por outra conta |
+| `429` | Muitas tentativas |
 
 ---
 
@@ -379,7 +452,7 @@ Cria um novo usuário (aluno ou professor).
 
 **Fluxo interno:**
 1. Gera UUID v4 para o novo usuário
-2. Registra credenciais (email + senha hashada + role) na coleção `credentials`
+2. Cria a conta no Firebase Auth com o mesmo uid, grava a Custom Claim do papel e dispara o e-mail de verificação
 3. Salva os dados do usuário na coleção `users`
 4. Retorna o ID e nome do usuário criado
 
@@ -1459,10 +1532,40 @@ responsável e para a gerente — **não** para o aluno.
 
 | Método | Rota | Auth | Descrição |
 |---|---|---|---|
-| `POST` | `/admin/migrate-roles` | `manager` | Grava `role` em `users` + sincroniza `credentials`, e migra os docIds antigos da agenda para a gerente. Idempotente |
+| `POST` | `/admin/migrate-roles` | `manager` | Grava `role` em `users`, sincroniza a **Custom Claim** de cada conta e migra os docIds antigos da agenda para a gerente. Idempotente |
+| `POST` | `/admin/migrate-auth` | `manager` | Cria no Firebase Auth quem já existe no Firestore (spec 016). Idempotente |
+| `POST` | `/admin/cleanup-credentials` | `manager` | Sem corpo: **relata**. Com `{ "confirmar": "apagar-credentials" }`: apaga a coleção legada |
 
 Precedência do papel: `users.role` → `credentials.role` → `isTeacher` (legado). A ordem
 respeita o ajuste manual da gerente em `credentials` e nunca rebaixa `manager` → `teacher`.
+
+#### Migração para o Firebase Auth (spec 016)
+
+`migrate-auth` percorre `users`, pega o e-mail do documento (ou de `credentials`, para
+fichas antigas) e cria a conta com **o mesmo `uid` do documento** — é isso que mantém `sub`
+sendo a chave de `users/{id}` em toda rota do sistema. A senha é aleatória e **nunca é
+gravada nem devolvida**: o caminho de volta de cada pessoa é o "Esqueci minha senha", e
+concluí-lo já marca o e-mail como verificado.
+
+Relatório: `{ totalUsers, criados, jaExistentes, semEmail[], emailDuplicado[], erros[] }`.
+`emailDuplicado` é o caso de duas fichas com o mesmo e-mail — a coleção `credentials`
+aceitava, o Firebase não. A rota **não** escolhe qual conta fica; isso é decisão humana.
+
+`cleanup-credentials` confere, documento a documento, se existe conta no Firebase, e recusa
+(409) se faltar alguma: apagar o registro de quem ainda não migrou destruiria a única pista
+de como consertar.
+
+**Ordem de implantação:**
+
+1. console do Firebase: provedor E-mail/senha ligado, templates de redefinição e verificação
+   em pt-BR, URL de retorno no login;
+2. deploy do backend;
+3. `POST /admin/migrate-auth` — **antes disso ninguém consegue entrar**, porque as contas
+   ainda não existem no Firebase;
+4. conferir o relatório: `erros` e `emailDuplicado` zerados ou resolvidos à mão;
+5. deploy do frontend;
+6. avisar os usuários que o primeiro acesso passa por "Esqueci minha senha";
+7. **dias depois**, `POST /admin/cleanup-credentials`.
 
 ---
 
@@ -1553,7 +1656,7 @@ do IPA como repositório de conteúdo.
 - `coverImageUrl` aponta para o **Firebase Storage**; o binário nunca entra no Firestore.
 - A **listagem não devolve o corpo**: `ArticleSummaryDto` carrega um `excerpt` de 180
   caracteres já limpo de marcação, para a lista não arrastar dezenas de textos longos.
-- `authorName` é gravado junto do artigo (o JWT só tem `sub`/`email`/`role`), evitando um
+- `authorName` é gravado junto do artigo (o token só tem `sub`/`email`/`role`), evitando um
   join a cada leitura.
 
 ---
@@ -1562,16 +1665,36 @@ do IPA como repositório de conteúdo.
 
 Abaixo está a estrutura de dados armazenada em cada coleção do banco de dados:
 
-### 1. `credentials`
-Armazena as informações de autenticação (email, senha com hash e função do usuário).
-- **Doc ID:** UUID do usuário (mesmo ID da coleção `users`)
+### 1. `credentials` — **legada (spec 016)**
+
+Guardava e-mail, hash bcrypt e papel. **Nada no código lê ou escreve mais nesta coleção**:
+as senhas passaram para o Firebase Auth. Os documentos foram deixados de propósito como o
+único registro de qual e-mail pertencia a qual `uid` antes da migração — se a criação das
+contas falhar pela metade, é por ali que se reconstrói.
+
+Apagar é um passo à parte, e **irreversível**: `POST /admin/cleanup-credentials` (ver abaixo),
+dias depois do deploy, com a base entrando normalmente.
+
 ```json
 {
   "id": "string (UUID)",
   "email": "string",
   "password": "string (hash bcrypt)",
-  "role": "string (ex: 'teacher' ou 'student')"
+  "role": "string"
 }
+```
+
+### 1b. `emailCooldowns`
+
+Intervalo mínimo de 60s entre dois e-mails para o mesmo endereço (spec 016 Task 76). O limite
+por IP protege o servidor; este protege a caixa de entrada de uma pessoa, que é o que um
+pedido de senha repetido ataca — e quem faz isso troca de IP.
+
+- **Doc ID:** SHA-256 do e-mail em minúsculas. É hash porque, em claro, a coleção viraria uma
+  lista de endereços digitados na tela de recuperação, inclusive de quem não tem conta aqui.
+
+```json
+{ "lastSentAt": 1754350000000 }
 ```
 
 ### 2. `users`
