@@ -23,11 +23,13 @@ import { AuthGuard } from './guards/auth.guard';
 import { RolesGuard } from './guards/roles.guard';
 import { ActivePlanGuard } from './guards/active-plan.guard';
 import { FirestoreModule } from './firestore/firestore.module';
+import { FirebaseAuthModule } from './firestore/firebase-auth.module';
 
 @Module({
   imports: [
     ConfigModule.forRoot({ isGlobal: true }),
     FirestoreModule,
+    FirebaseAuthModule,
     UserModule,
     SupplyModule,
     AuthModule,
