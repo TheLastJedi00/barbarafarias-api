@@ -11,32 +11,19 @@ import { UpdateProfileDto } from './dto/UpdateProfile.dto';
 import { pickDefined } from '../common/patch';
 import { ResponseUserDto } from './dto/ResponseUser.dto';
 import { UserRepository } from './user.repository';
+import { onboardingCompletedAt } from './onboarding';
 import { AuthService } from '../auth/auth.service';
 import { ROLES, Role, resolveRole } from '../types/role';
 import type { AuthenticatedUser } from '../decorators/current-user.decorator';
 import { randomUUID } from 'node:crypto';
 
 /**
- * O que ainda falta o aluno preencher para poder usar o sistema (spec 018).
- *
- * **Regra única, derivada dos campos** — e não do `onboardedAt`. O campo marca
- * quando a pessoa concluiu, mas dezenas de alunos foram cadastrados antes de
- * ele existir: usá-lo como régua mandaria toda a base para a tela de
- * boas-vindas no próximo login, inclusive quem já tem tudo preenchido.
- *
- * O conjunto é o que o checkout exige (`assertPayableProfile`: CPF e celular)
- * mais nome e objetivo. Só vale para aluno: professora e gerente não passam
- * por onboarding.
+ * A régua do onboarding mora em `./onboarding` desde a Fase 7 da spec 018 —
+ * professora também passa por ela, e o módulo de professoras não deveria
+ * importar este serviço inteiro para conhecê-la. Reexportado porque o
+ * controller e os testes já apontavam para cá.
  */
-export function missingOnboardingFields(user: User): string[] {
-  if (resolveRole(user) !== ROLES.STUDENT) return [];
-  return [
-    ...(user.fullName ? [] : ['nome']),
-    ...(user.phone ? [] : ['celular']),
-    ...(user.cpf ? [] : ['CPF']),
-    ...(user.objective ? [] : ['objetivo']),
-  ];
-}
+export { missingOnboardingFields } from './onboarding';
 
 @Injectable()
 export class UserService {
@@ -257,35 +244,12 @@ export class UserService {
     }
     const patch = pickDefined(dto);
     const user = new User({ ...foundUser, ...patch, id });
-    const onboardedAt = this.onboardingCompletedAt(user);
-    if (onboardedAt) {
-      user.onboardedAt = onboardedAt;
+    const concluido = onboardingCompletedAt(user);
+    if (concluido) {
+      user.onboardedAt = concluido;
     }
     await this.userRepository.update(user);
     return user;
-  }
-
-  /**
-   * Data de conclusão do onboarding (spec 018 Task 105), ou `undefined` se
-   * ainda falta algo.
-   *
-   * Registra **quando aconteceu**, e por isso nunca é reescrito: um patch
-   * posterior que apague o telefone não "desconclui" o onboarding — a pessoa
-   * já entrou, e expulsá-la de volta para a tela de boas-vindas por causa de
-   * uma edição de perfil seria pior do que o problema que isso resolveria.
-   *
-   * O conjunto é o mesmo que o checkout exige (`assertPayableProfile`: CPF e
-   * celular) mais nome e objetivo — é a razão de a tela existir.
-   */
-  private onboardingCompletedAt(user: User): string | undefined {
-    if (user.onboardedAt) return undefined;
-    // Lista vazia tem dois significados — "não falta nada" e "não se aplica",
-    // que é o caso de professora e gerente. Sem esta linha, a primeira edição
-    // de perfil da professora carimbaria nela um onboarding que ela não fez.
-    if (resolveRole(user) !== ROLES.STUDENT) return undefined;
-    return missingOnboardingFields(user).length === 0
-      ? new Date().toISOString()
-      : undefined;
   }
 
   async findById(id: string): Promise<User> {

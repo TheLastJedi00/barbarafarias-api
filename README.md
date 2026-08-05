@@ -1154,15 +1154,37 @@ o DTO público entrega apenas nome e, se a professora permitir, telefone.
 | `GET` | `/teachers/:id/students` | `manager` | Alunos da professora |
 | `PUT` | `/teachers/:id/students` | `manager` | Substitui o roster. Body `{ studentIds[] }` |
 | `PATCH` | `/teachers/students/:studentId` | `manager` | Config do aluno: `{ teacherId?, lessonsPerWeek?, makeupSlot?, meetUrl? }` |
-| `GET` | `/teachers/me` | `manager`, `teacher` | Perfil próprio |
-| `PATCH` | `/teachers/me` | `manager`, `teacher` | **Edição do próprio perfil**: `{ fullName?, phone?, profileImageUrl?, bio? }` |
+| `POST` | `/teachers/invite` | `manager` | **Convite só com o e-mail** (spec 018). Body `{ email }` |
+| `POST` | `/teachers/:id/invite/resend` | `manager` | Reenvia o e-mail de entrada. Mesma trava de 60s |
+| `DELETE` | `/teachers/:id` | `manager` | **Só convite pendente**: apaga documento e conta de quem nunca preencheu nada (o e-mail digitado errado). Recusa quem já entrou, quem tem aluno vinculado e a gerente |
+| `GET` | `/teachers/me` | `manager`, `teacher` | Perfil próprio + `missingOnboarding` |
+| `PATCH` | `/teachers/me` | `manager`, `teacher` | **Edição do próprio perfil**: `{ fullName?, phone?, cpf?, pixKey?, profileImageUrl?, bio? }` |
 | `PATCH` | `/teachers/me/phone-visibility` | `manager`, `teacher` | Body `{ visible }` |
 | `GET` | `/teachers/mine` | `student` | Professora responsável (DTO público: nome, foto, bio e — se permitido — telefone) |
 | `GET` | `/teachers/:id/public` | `manager`, `teacher`, `student` | Mesmo DTO público, por id. Serve a quem abre o painel de um aluno que não é ele mesmo (spec 013) |
 
-> `PATCH /teachers/me` é deliberadamente separado de `PUT /teachers/:id`: a professora
-> edita nome, telefone, foto e bio; **dados fiscais e valor-hora continuam saindo só pelo
-> painel da gerente**.
+> `PATCH /teachers/me` continua separado de `PUT /teachers/:id`, mas a linha entre os dois
+> mudou na spec 018: **CPF e chave PIX passaram a ser dela**. A regra anterior nasceu num
+> mundo em que só a gerente os digitava; com o convite por e-mail a professora entra sem
+> nada preenchido e é ela quem conhece os dois. O peso está no `pixKey` — é o destino do
+> repasse que o fechamento emite, e uma chave digitada por terceiro paga a pessoa errada
+> em silêncio, aparecendo só no fim do mês. A gerente segue corrigindo por
+> `PUT /teachers/:id`: muda a fonte, não a permissão. O **valor-hora** continua fora — é
+> remuneração combinada, não dado pessoal.
+
+> **Excluir vs. desativar.** `DELETE /teachers/:id` existe para o convite errado e só
+> para ele: a régua é `!onboardedAt` **e** `!fullName`, ou seja, quem nunca preencheu
+> absolutamente nada. Olhar só para o carimbo deixaria apagar professora em atividade,
+> porque a coluna é nova e toda a base anterior está sem ela. Quem já entrou tem aula
+> dada e histórico de repasse: para essa existe `PATCH /:id/active`, que preserva o
+> passado e marca os alunos como `pendingTeacher`.
+
+> **Onboarding (spec 018).** `GET /teachers/me` devolve `missingOnboarding: string[]` com
+> o que falta entre nome, celular, CPF e chave PIX — mesmo campo e formato do `/users/me`,
+> para o front ler um só. A **gerente fica fora da régua**: ela é quem conserta o que
+> trava, e retê-la numa tela seria trancar a chave dentro de casa. Professora convidada
+> ainda sem chave aparece no fechamento com "Professora sem chave PIX cadastrada" em vez
+> de uma instrução de transferência.
 
 ---
 

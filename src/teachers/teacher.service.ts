@@ -12,6 +12,10 @@ import { CreateTeacherDto } from './dto/CreateTeacher.dto';
 import { UpdateTeacherDto } from './dto/UpdateTeacher.dto';
 import { UpdateTeacherProfileDto } from '../users/dto/UpdateProfile.dto';
 import { pickDefined } from '../common/patch';
+import {
+  isInvitePending,
+  onboardingCompletedAt,
+} from '../users/onboarding';
 import { ROLES, resolveRole, isStaff } from '../types/role';
 import { NotificationService } from '../notifications/notification.service';
 
@@ -28,6 +32,96 @@ export class TeacherService {
     private readonly authService: AuthService,
     private readonly notifications: NotificationService,
   ) {}
+
+  /**
+   * Convida uma professora com o e-mail e mais nada (spec 018 Task 121).
+   *
+   * Mesmo desenho do convite do aluno: senha aleatória descartável, e a entrada
+   * acontece pelo e-mail de redefinição. O que muda é o que ela preencherá
+   * depois — **CPF e chave PIX**, e não CPF e objetivo: ela não paga, ela
+   * recebe, e o `pixKey` é o destino do repasse do fechamento do mês.
+   */
+  async invite(email: string): Promise<User> {
+    const uid = randomUUID();
+    await this.authService.createAccount({
+      uid,
+      email,
+      password: randomUUID(),
+      role: ROLES.TEACHER,
+      sendVerification: false,
+    });
+
+    try {
+      // Sem `onboardedAt`: a ausência dele é o convite pendente.
+      const teacher = new User({
+        id: uid,
+        email,
+        role: ROLES.TEACHER,
+        isTeacher: true,
+        isPaying: false,
+        level: '',
+        objective: '',
+        prognosis: '',
+        createdAt: new Date().toISOString(),
+        phoneVisibleToStudent: false,
+        active: true,
+      });
+      await this.userRepository.save(teacher, uid);
+      await this.authService.sendPasswordReset(email);
+      return teacher;
+    } catch (error) {
+      // rollback: evita conta órfã caso a gravação falhe
+      await this.authService.deleteAccount(uid);
+      throw error;
+    }
+  }
+
+  /**
+   * Apaga um convite que ninguém respondeu (spec 018 Task 130).
+   *
+   * **Só convite pendente.** Professora que entrou tem aula dada, aluno
+   * vinculado e histórico de repasse — para essa existe `PATCH /:id/active`,
+   * que a tira do ar preservando o passado. Aqui o alvo é o erro de digitação
+   * no e-mail do convite, que hoje só se resolvia no console do Firebase.
+   *
+   * As três recusas abaixo são deliberadas, e cada uma cobre um jeito
+   * diferente de apagar a pessoa errada.
+   */
+  async deleteInvite(id: string): Promise<void> {
+    const teacher = await this.findById(id);
+
+    if (resolveRole(teacher) === ROLES.MANAGER) {
+      throw new BadRequestException('A gerente não pode ser excluída');
+    }
+    if (!isInvitePending(teacher)) {
+      throw new BadRequestException(
+        'Só um convite pendente pode ser excluído. Para tirar do ar quem já entrou, use desativar.',
+      );
+    }
+    // Rede de segurança: convite pendente não deveria ter aluno vinculado, mas
+    // se tiver, apagar deixaria alunos apontando para uma professora que sumiu
+    // — e o `pendingTeacher` que a desativação cuida nunca seria marcado.
+    const alunos = await this.teacherRepository.findStudentsByTeacher(id);
+    if (alunos.length > 0) {
+      throw new BadRequestException(
+        'Esta professora tem alunos vinculados. Desative em vez de excluir.',
+      );
+    }
+
+    await this.userRepository.delete(id);
+    await this.authService.deleteAccount(id);
+  }
+
+  /** Reenvia o convite de quem ainda não concluiu (spec 018 Task 122). */
+  async resendInvite(id: string): Promise<void> {
+    const teacher = await this.findById(id);
+    if (teacher.onboardedAt) {
+      throw new BadRequestException(
+        'Esta professora já concluiu o cadastro. Não há convite a reenviar.',
+      );
+    }
+    await this.authService.sendPasswordReset(teacher.email);
+  }
 
   async create(dto: CreateTeacherDto): Promise<User> {
     const uid = randomUUID();
@@ -98,8 +192,11 @@ export class TeacherService {
 
   /**
    * Edição que a própria professora faz do seu perfil (spec 011 RF13).
-   * Restrito a nome, telefone, foto e bio: dados fiscais e valor-hora
-   * continuam saindo só pelo painel da gerente.
+   *
+   * Desde a spec 018 inclui **CPF e chave PIX**: com o convite por e-mail é ela
+   * quem os preenche, e o `pixKey` é o destino do dinheiro dela. O valor-hora
+   * continua só no painel da gerente — é remuneração combinada, não dado
+   * pessoal.
    */
   async updateOwnProfile(
     id: string,
@@ -107,6 +204,11 @@ export class TeacherService {
   ): Promise<User> {
     const teacher = await this.findById(id);
     const updated = new User({ ...teacher, ...pickDefined(dto), id });
+    // Mesma regra do aluno: quando o conjunto fecha, carimba uma vez só.
+    const concluido = onboardingCompletedAt(updated);
+    if (concluido) {
+      updated.onboardedAt = concluido;
+    }
     await this.userRepository.update(updated);
     return updated;
   }

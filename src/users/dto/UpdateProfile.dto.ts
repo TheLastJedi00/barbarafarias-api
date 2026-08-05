@@ -86,12 +86,34 @@ export class UpdateProfileDto extends BaseProfileDto {
 }
 
 /**
- * O que a professora edita. Herda do base, não de `UpdateProfileDto`: o CPF
- * dela é dado fiscal do pagamento, cadastrado pela gerente em `/teachers` —
- * deixá-lo passar por aqui criaria um segundo lugar para editar a mesma
- * informação, com `whitelist: true` calado a respeito.
+ * O que a professora edita.
+ *
+ * **CPF e chave PIX entraram na spec 018, revertendo a decisão da spec 013.**
+ * Lá eles ficaram de fora porque só a gerente os digitava, e um segundo lugar
+ * de edição criaria divergência. O convite por e-mail mudou a premissa: a
+ * professora entra sem nada preenchido e é ela quem conhece os dois. O peso
+ * está no `pixKey` — o `payout.provider` monta a instrução de repasse com ele
+ * ("Transfira R$ X via PIX para {pixKey}"), então uma chave digitada por
+ * terceiro paga a pessoa errada, em silêncio, e só aparece no fechamento.
+ *
+ * A gerente continua corrigindo por `PUT /teachers/:id`: muda a fonte, não a
+ * permissão.
+ *
+ * O que **não** entra é o `hourlyRate`. É remuneração combinada, não dado
+ * pessoal — aqui ele significaria a professora definir o próprio pagamento.
  */
 export class UpdateTeacherProfileDto extends BaseProfileDto {
+  @IsOptional()
+  @toDigits()
+  @IsString()
+  @Validate(IsCpfConstraint)
+  cpf?: string;
+
+  @IsString()
+  @IsOptional()
+  @MaxLength(140)
+  pixKey?: string;
+
   @IsString()
   @IsOptional()
   @MaxLength(600, { message: 'Bio deve ter no máximo 600 caracteres' })

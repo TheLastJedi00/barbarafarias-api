@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   Param,
   Patch,
@@ -22,6 +23,8 @@ import { Roles } from '../decorators/roles.decorator';
 import { CurrentUser } from '../decorators/current-user.decorator';
 import type { AuthenticatedUser } from '../decorators/current-user.decorator';
 import { ROLES } from '../types/role';
+import { InviteUserDto } from '../users/dto/InviteUser.dto';
+import { missingOnboardingFields } from '../users/onboarding';
 
 @Controller('teachers')
 // Padrão do painel: tudo é da gerente, salvo o que estiver anotado abaixo.
@@ -43,13 +46,26 @@ export class TeacherController {
     return new ResponseTeacherDto(await this.service.create(dto));
   }
 
+  /**
+   * Convite de professora só com o e-mail (spec 018 Task 121). Convive com o
+   * cadastro completo acima, como no aluno.
+   */
+  @Post('invite')
+  async invite(@Body() dto: InviteUserDto): Promise<ResponseTeacherDto> {
+    return new ResponseTeacherDto(await this.service.invite(dto.email));
+  }
+
   // Rotas fixas antes das paramétricas: /me não pode cair em /:id.
   @Get('me')
   @Roles(ROLES.MANAGER, ROLES.TEACHER)
   async me(@CurrentUser() user: AuthenticatedUser): Promise<ResponseTeacherDto> {
-    const dto = new ResponseTeacherDto(await this.service.findById(user.sub));
+    const teacher = await this.service.findById(user.sub);
+    const dto = new ResponseTeacherDto(teacher);
     // Do token, como em /users/me (spec 016 Task 78).
     dto.emailVerified = user.emailVerified;
+    // Mesmo campo e mesmo formato do `/users/me` (spec 018 Task 123): assim o
+    // guard do front não precisa saber de qual rota o perfil veio.
+    dto.missingOnboarding = missingOnboardingFields(teacher);
     return dto;
   }
 
@@ -117,6 +133,22 @@ export class TeacherController {
   @Get(':id/students')
   async findStudents(@Param('id') id: string) {
     return this.service.findStudents(id);
+  }
+
+  /** Reenvia o e-mail de entrada de quem ainda não concluiu (Task 122). */
+  @Post(':id/invite/resend')
+  async resendInvite(@Param('id') id: string): Promise<void> {
+    return this.service.resendInvite(id);
+  }
+
+  /**
+   * Apaga um convite que ninguém respondeu (Task 130) — o e-mail digitado
+   * errado, tipicamente. Quem já entrou não é excluída: para essa existe
+   * `PATCH /:id/active`, que preserva aulas e histórico de repasse.
+   */
+  @Delete(':id')
+  async deleteInvite(@Param('id') id: string): Promise<void> {
+    return this.service.deleteInvite(id);
   }
 
   @Put(':id')
