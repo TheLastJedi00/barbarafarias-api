@@ -147,6 +147,12 @@ export class AuthService {
     email: string;
     password: string;
     role: Role;
+    /**
+     * Convite (spec 018 Task 101) manda `false`: a senha ali é aleatória e
+     * descartável, então o login que este envio faria não teria sentido — quem
+     * prova a posse do e-mail é a redefinição de senha que o convite dispara.
+     */
+    sendVerification?: boolean;
   }): Promise<void> {
     try {
       await this.auth.createUser({
@@ -159,7 +165,9 @@ export class AuthService {
     }
 
     await this.auth.setCustomUserClaims(data.uid, { role: data.role });
-    await this.sendVerificationFor(data.email, data.password);
+    if (data.sendVerification !== false) {
+      await this.sendVerificationFor(data.email, data.password);
+    }
   }
 
   /**

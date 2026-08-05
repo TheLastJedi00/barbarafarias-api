@@ -1,4 +1,11 @@
-import { IsBoolean, IsEmail, IsOptional, IsString } from 'class-validator';
+import {
+  IsBoolean,
+  IsEmail,
+  IsIn,
+  IsOptional,
+  IsString,
+} from 'class-validator';
+import { LEVELS } from '../../types/student.level';
 
 export class UpdateUserDto {
   @IsString()
@@ -21,7 +28,8 @@ export class UpdateUserDto {
   @IsOptional()
   isTeacher?: boolean;
 
-  @IsString()
+  /** Mesmo enum fechado do cadastro (spec 018 Task 106). */
+  @IsIn(LEVELS, { message: `Nível deve ser um de: ${LEVELS.join(', ')}` })
   @IsOptional()
   level?: string;
 

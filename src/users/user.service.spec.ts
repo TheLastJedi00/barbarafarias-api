@@ -15,6 +15,7 @@ describe('UserService', () => {
   let authService: {
     createAccount: jest.Mock;
     deleteAccount: jest.Mock;
+    sendPasswordReset: jest.Mock;
   };
 
   beforeEach(() => {
@@ -28,6 +29,7 @@ describe('UserService', () => {
     authService = {
       createAccount: jest.fn().mockResolvedValue(undefined),
       deleteAccount: jest.fn().mockResolvedValue(undefined),
+      sendPasswordReset: jest.fn().mockResolvedValue(undefined),
     };
     service = new UserService(userRepository as any, authService as any);
   });
@@ -51,6 +53,135 @@ describe('UserService', () => {
       userRepository.save.mockRejectedValue(new Error('firestore down'));
       await expect(service.createUser(dto)).rejects.toThrow('firestore down');
       expect(authService.deleteAccount).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe('inviteUser (spec 018)', () => {
+    it('cria a conta, grava o documento mínimo e manda o e-mail de entrada', async () => {
+      const result = await service.inviteUser('novo@x.com');
+
+      const conta = authService.createAccount.mock.calls[0][0];
+      expect(conta.email).toBe('novo@x.com');
+      expect(conta.role).toBe(ROLES.STUDENT);
+      // A senha é aleatória e descartável: mandar a verificação faria login
+      // com ela, o que não tem sentido nenhum aqui.
+      expect(conta.sendVerification).toBe(false);
+      expect(conta.password).toEqual(expect.any(String));
+      expect(conta.password.length).toBeGreaterThan(10);
+
+      const [gravado] = userRepository.save.mock.calls[0];
+      expect(gravado.email).toBe('novo@x.com');
+      expect(gravado.isPaying).toBe(false);
+      // Ausência de `onboardedAt` é o que marca o convite como pendente.
+      expect(gravado.onboardedAt).toBeUndefined();
+      expect(gravado.fullName).toBeUndefined();
+
+      expect(authService.sendPasswordReset).toHaveBeenCalledWith('novo@x.com');
+      expect(result.id).toEqual(expect.any(String));
+    });
+
+    it('não deixa conta órfã quando a gravação falha', async () => {
+      userRepository.save.mockRejectedValue(new Error('firestore down'));
+
+      await expect(service.inviteUser('novo@x.com')).rejects.toThrow(
+        'firestore down',
+      );
+
+      expect(authService.deleteAccount).toHaveBeenCalledTimes(1);
+      expect(authService.sendPasswordReset).not.toHaveBeenCalled();
+    });
+
+    it('reenvia o convite de quem ainda não concluiu', async () => {
+      userRepository.findById.mockResolvedValue(
+        new User({ id: 'uid-1', email: 'novo@x.com', role: ROLES.STUDENT }),
+      );
+
+      await service.resendInvite('uid-1');
+
+      expect(authService.sendPasswordReset).toHaveBeenCalledWith('novo@x.com');
+    });
+
+    it('recusa reenvio para quem já concluiu o cadastro', async () => {
+      userRepository.findById.mockResolvedValue(
+        new User({
+          id: 'uid-1',
+          email: 'ana@x.com',
+          role: ROLES.STUDENT,
+          onboardedAt: '2026-08-01T10:00:00.000Z',
+        }),
+      );
+
+      await expect(service.resendInvite('uid-1')).rejects.toThrow(
+        /já concluiu/i,
+      );
+      expect(authService.sendPasswordReset).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('onboarding (spec 018)', () => {
+    /** Aluno convidado, com o documento ainda vazio. */
+    function convidado(extra: Partial<User> = {}) {
+      return new User({
+        id: 'uid-1',
+        email: 'novo@x.com',
+        role: ROLES.STUDENT,
+        ...extra,
+      });
+    }
+
+    it('marca a conclusão quando o último campo que faltava chega', async () => {
+      userRepository.findById.mockResolvedValue(
+        convidado({ fullName: 'Ana', phone: '11999999999', cpf: '12345678909' }),
+      );
+
+      const user = await service.updateOwnProfile('uid-1', {
+        objective: 'Viajar a trabalho',
+      } as any);
+
+      expect(user.onboardedAt).toEqual(expect.any(String));
+    });
+
+    it('não marca enquanto falta campo', async () => {
+      userRepository.findById.mockResolvedValue(convidado({ fullName: 'Ana' }));
+
+      const user = await service.updateOwnProfile('uid-1', {
+        phone: '11999999999',
+      } as any);
+
+      expect(user.onboardedAt).toBeUndefined();
+    });
+
+    it('não reescreve a data em edições posteriores', async () => {
+      // É registro de quando aconteceu. Reescrever faria a gerente ver a data
+      // andar toda vez que o aluno trocasse a foto.
+      const antes = '2026-01-01T00:00:00.000Z';
+      userRepository.findById.mockResolvedValue(
+        convidado({
+          fullName: 'Ana',
+          phone: '11999999999',
+          cpf: '12345678909',
+          objective: 'Viajar',
+          onboardedAt: antes,
+        }),
+      );
+
+      const user = await service.updateOwnProfile('uid-1', {
+        fullName: 'Ana Maria',
+      } as any);
+
+      expect(user.onboardedAt).toBe(antes);
+    });
+
+    it('não aplica a régua a professora nem a gerente', async () => {
+      userRepository.findById.mockResolvedValue(
+        new User({ id: 'uid-2', email: 't@x.com', role: ROLES.TEACHER }),
+      );
+
+      const user = await service.updateOwnProfile('uid-2', {
+        fullName: 'Bárbara',
+      } as any);
+
+      expect(user.onboardedAt).toBeUndefined();
     });
   });
 

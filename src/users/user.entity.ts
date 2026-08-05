@@ -42,6 +42,17 @@ export class User {
 
   // --- aluno (role student) ---
   /**
+   * Quando o aluno terminou o onboarding (spec 018 Task 102). **Ausente = foi
+   * convidado e ainda não completou o cadastro** — é o que o guard do front lê
+   * para reter a pessoa na tela de boas-vindas e o que a gerente vê como
+   * "convite pendente" na listagem.
+   *
+   * É campo próprio, e não `!fullName`, porque nome vazio também acontece por
+   * outros motivos — e sem ele a gerente não distinguiria "convite enviado,
+   * ninguém entrou" de "entrou e abandonou a tela no meio".
+   */
+  onboardedAt?: string;
+  /**
    * Espelho do plano contratado (spec 012 Task 17). É desnormalização pura: a
    * verdade mora na coleção `subscriptions`, mas a listagem de alunos da
    * gerente precisa mostrar plano e situação sem uma leitura extra por linha.

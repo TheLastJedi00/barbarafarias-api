@@ -740,3 +740,71 @@ describe('SubscriptionService — validação de cupom (RF16)', () => {
     await expect(service.validateCoupon('NADA')).rejects.toThrow();
   });
 });
+
+describe('PIX em plano parcelado (spec 018)', () => {
+  /** Contratação com plano e método escolhidos. */
+  function contratar(plan: string, method: string) {
+    const { service, users } = build();
+    return service.choosePlan('aluno-1', { plan, paymentMethod: method } as any);
+  }
+
+  it('recusa PIX no semestral e no anual', async () => {
+    for (const plan of [
+      SUBSCRIPTION_PLANS.SEMIANNUAL,
+      SUBSCRIPTION_PLANS.ANNUAL,
+    ]) {
+      await expect(
+        contratar(plan, PAYMENT_METHODS.PIX_RECURRING),
+      ).rejects.toBeInstanceOf(BadRequestException);
+      await expect(
+        contratar(plan, PAYMENT_METHODS.PIX_RECURRING),
+      ).rejects.toThrow(/cartão de crédito/i);
+    }
+  });
+
+  it('mantém PIX no mensal', async () => {
+    // O mensal não tem parcela futura: tem renovação, e quem não quiser
+    // renovar simplesmente não paga o próximo QR (decisão nº 2 da spec).
+    await expect(
+      contratar(SUBSCRIPTION_PLANS.MONTHLY, PAYMENT_METHODS.PIX_RECURRING),
+    ).resolves.toBeDefined();
+  });
+
+  it('aceita cartão em qualquer plano', async () => {
+    for (const plan of Object.values(SUBSCRIPTION_PLANS)) {
+      await expect(
+        contratar(plan, PAYMENT_METHODS.CREDIT_CARD),
+      ).resolves.toBeDefined();
+    }
+  });
+
+  it('bloqueia também a troca de método depois de contratado', async () => {
+    // Sem isto, bastava contratar o anual no cartão e trocar para PIX em
+    // seguida — o bloqueio da tela de contratação não olha para esta rota.
+    const { service } = build();
+    await service.choosePlan('aluno-1', {
+      plan: SUBSCRIPTION_PLANS.ANNUAL,
+      paymentMethod: PAYMENT_METHODS.CREDIT_CARD,
+    } as any);
+
+    await expect(
+      service.changePaymentMethod('aluno-1', {
+        paymentMethod: PAYMENT_METHODS.PIX_RECURRING,
+      } as any),
+    ).rejects.toThrow(/cartão de crédito/i);
+  });
+
+  it('deixa trocar para PIX quando o plano é mensal', async () => {
+    const { service } = build();
+    await service.choosePlan('aluno-1', {
+      plan: SUBSCRIPTION_PLANS.MONTHLY,
+      paymentMethod: PAYMENT_METHODS.CREDIT_CARD,
+    } as any);
+
+    await expect(
+      service.changePaymentMethod('aluno-1', {
+        paymentMethod: PAYMENT_METHODS.PIX_RECURRING,
+      } as any),
+    ).resolves.toBeDefined();
+  });
+});

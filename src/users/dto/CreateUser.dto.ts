@@ -1,4 +1,5 @@
-import { IsBoolean, IsEmail, IsNotEmpty, IsString } from 'class-validator';
+import { IsBoolean, IsEmail, IsIn, IsNotEmpty, IsString } from 'class-validator';
+import { LEVELS } from '../../types/student.level';
 
 export class CreateUserDto {
   @IsNotEmpty({ message: 'Name is required' })
@@ -11,7 +12,12 @@ export class CreateUserDto {
   isPaying!: boolean;
   @IsBoolean({ message: 'isTeacher must be a boolean' })
   isTeacher!: boolean;
-  @IsString({ message: 'Level is required' })
+  /**
+   * Enum fechado (spec 018 Task 106). Antes era `@IsString()` livre: uma string
+   * fora da lista era gravada sem reclamar e só quebrava mais tarde, na geração
+   * de material, longe da tela que a causou.
+   */
+  @IsIn(LEVELS, { message: `Nível deve ser um de: ${LEVELS.join(', ')}` })
   level!: string;
   @IsString({ message: 'Password is required' })
   password!: string;

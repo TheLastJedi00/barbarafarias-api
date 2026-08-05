@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   ForbiddenException,
   Injectable,
   NotFoundException,
@@ -14,6 +15,28 @@ import { AuthService } from '../auth/auth.service';
 import { ROLES, Role, resolveRole } from '../types/role';
 import type { AuthenticatedUser } from '../decorators/current-user.decorator';
 import { randomUUID } from 'node:crypto';
+
+/**
+ * O que ainda falta o aluno preencher para poder usar o sistema (spec 018).
+ *
+ * **Regra única, derivada dos campos** — e não do `onboardedAt`. O campo marca
+ * quando a pessoa concluiu, mas dezenas de alunos foram cadastrados antes de
+ * ele existir: usá-lo como régua mandaria toda a base para a tela de
+ * boas-vindas no próximo login, inclusive quem já tem tudo preenchido.
+ *
+ * O conjunto é o que o checkout exige (`assertPayableProfile`: CPF e celular)
+ * mais nome e objetivo. Só vale para aluno: professora e gerente não passam
+ * por onboarding.
+ */
+export function missingOnboardingFields(user: User): string[] {
+  if (resolveRole(user) !== ROLES.STUDENT) return [];
+  return [
+    ...(user.fullName ? [] : ['nome']),
+    ...(user.phone ? [] : ['celular']),
+    ...(user.cpf ? [] : ['CPF']),
+    ...(user.objective ? [] : ['objetivo']),
+  ];
+}
 
 @Injectable()
 export class UserService {
@@ -45,6 +68,61 @@ export class UserService {
       await this.authService.deleteAccount(uid);
       throw error;
     }
+  }
+
+  /**
+   * Convida um aluno com o e-mail e mais nada (spec 018 Task 101).
+   *
+   * A senha é aleatória e **descartável**: ninguém a vê, ninguém a guarda, e o
+   * aluno entra pelo e-mail de redefinição que sai daqui. Por isso o envio de
+   * verificação do cadastro normal não serve — ele faz login com a senha para
+   * obter um ID Token, e aqui a senha é lixo proposital. Não se perde nada: o
+   * Firebase marca o endereço como verificado quando a redefinição termina, o
+   * que prova a posse do e-mail do mesmo jeito.
+   */
+  async inviteUser(email: string): Promise<ResponseUserDto> {
+    const uid = randomUUID();
+    await this.authService.createAccount({
+      uid,
+      email,
+      password: randomUUID(),
+      role: ROLES.STUDENT,
+      sendVerification: false,
+    });
+
+    try {
+      // Sem `onboardedAt`: é a ausência dele que marca o convite pendente.
+      const user = new User({
+        email,
+        role: ROLES.STUDENT,
+        isTeacher: false,
+        isPaying: false,
+      });
+      user.id = uid;
+      await this.userRepository.save(user, uid);
+    } catch (error) {
+      // Mesmo rollback do cadastro completo: nada de conta órfã no Firebase.
+      await this.authService.deleteAccount(uid);
+      throw error;
+    }
+
+    await this.authService.sendPasswordReset(email);
+    return new ResponseUserDto(uid, email);
+  }
+
+  /**
+   * Reenvia o convite (spec 018 Task 103). É o mesmo e-mail de redefinição, e
+   * portanto passa pela mesma trava de um minuto — a gerente que clicar duas
+   * vezes recebe 429 com a mensagem explicando a espera, em vez do erro cru.
+   */
+  async resendInvite(id: string): Promise<void> {
+    const user = await this.findById(id);
+    if (user.onboardedAt) {
+      throw new BadRequestException(
+        'Este aluno já concluiu o cadastro. Não há convite a reenviar.',
+      );
+    }
+    await this.authService.sendPasswordReset(user.email);
   }
 
   async getAllUsers(role?: Role): Promise<User[]> {
@@ -179,8 +257,35 @@ export class UserService {
     }
     const patch = pickDefined(dto);
     const user = new User({ ...foundUser, ...patch, id });
+    const onboardedAt = this.onboardingCompletedAt(user);
+    if (onboardedAt) {
+      user.onboardedAt = onboardedAt;
+    }
     await this.userRepository.update(user);
     return user;
+  }
+
+  /**
+   * Data de conclusão do onboarding (spec 018 Task 105), ou `undefined` se
+   * ainda falta algo.
+   *
+   * Registra **quando aconteceu**, e por isso nunca é reescrito: um patch
+   * posterior que apague o telefone não "desconclui" o onboarding — a pessoa
+   * já entrou, e expulsá-la de volta para a tela de boas-vindas por causa de
+   * uma edição de perfil seria pior do que o problema que isso resolveria.
+   *
+   * O conjunto é o mesmo que o checkout exige (`assertPayableProfile`: CPF e
+   * celular) mais nome e objetivo — é a razão de a tela existir.
+   */
+  private onboardingCompletedAt(user: User): string | undefined {
+    if (user.onboardedAt) return undefined;
+    // Lista vazia tem dois significados — "não falta nada" e "não se aplica",
+    // que é o caso de professora e gerente. Sem esta linha, a primeira edição
+    // de perfil da professora carimbaria nela um onboarding que ela não fez.
+    if (resolveRole(user) !== ROLES.STUDENT) return undefined;
+    return missingOnboardingFields(user).length === 0
+      ? new Date().toISOString()
+      : undefined;
   }
 
   async findById(id: string): Promise<User> {
