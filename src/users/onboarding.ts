@@ -53,6 +53,19 @@ export function requiresOnboarding(user: User): boolean {
 }
 
 /**
+ * Convite enviado que ninguém respondeu ainda.
+ *
+ * **As duas condições importam.** `onboardedAt` sozinho não serve: a coluna é
+ * nova, e toda a base anterior a ela está sem o carimbo — inclusive professoras
+ * em atividade há meses. Exigir também a ausência de `fullName` restringe isto
+ * a quem nunca preencheu absolutamente nada, que é o único caso em que apagar
+ * não destrói história de ninguém.
+ */
+export function isInvitePending(user: User): boolean {
+  return requiresOnboarding(user) && !user.onboardedAt && !user.fullName;
+}
+
+/**
  * Data de conclusão, ou `undefined` se ainda falta algo — ou se já concluiu.
  *
  * Nunca reescreve: é registro de **quando** aconteceu, não flag de completude.

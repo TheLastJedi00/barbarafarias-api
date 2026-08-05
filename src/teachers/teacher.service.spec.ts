@@ -289,3 +289,92 @@ describe('TeacherService — convite (spec 018 Fase 7)', () => {
     expect(updated.onboardedAt).toBeUndefined();
   });
 });
+
+describe('TeacherService — excluir convite (spec 018 Task 130)', () => {
+  function build(teacher: User, alunos: User[] = []) {
+    const teacherRepository = {
+      findAllStaff: jest.fn().mockResolvedValue([]),
+      findStudentsByTeacher: jest.fn().mockResolvedValue(alunos),
+      markStudentsPendingTeacher: jest.fn().mockResolvedValue(0),
+    };
+    const userRepository = {
+      findById: jest.fn().mockResolvedValue(teacher),
+      save: jest.fn(),
+      update: jest.fn(),
+      delete: jest.fn().mockResolvedValue(undefined),
+    };
+    const authService = {
+      createAccount: jest.fn(),
+      deleteAccount: jest.fn().mockResolvedValue(undefined),
+      sendPasswordReset: jest.fn(),
+    };
+    const service = new TeacherService(
+      teacherRepository as any,
+      userRepository as any,
+      authService as any,
+      { notifyTeacherAssigned: jest.fn() } as any,
+    );
+    return { service, userRepository, authService };
+  }
+
+  const convitePendente = new User({
+    id: 't-9',
+    email: 'errado@x.com',
+    role: ROLES.TEACHER,
+    active: true,
+  });
+
+  it('apaga o documento e a conta de quem nunca entrou', async () => {
+    const { service, userRepository, authService } = build(convitePendente);
+
+    await service.deleteInvite('t-9');
+
+    expect(userRepository.delete).toHaveBeenCalledWith('t-9');
+    // Sem isto sobraria uma conta órfã capaz de pedir redefinição de senha.
+    expect(authService.deleteAccount).toHaveBeenCalledWith('t-9');
+  });
+
+  it('recusa quem já concluiu o cadastro', async () => {
+    const { service, userRepository } = build(
+      new User({
+        ...convitePendente,
+        fullName: 'Carla',
+        onboardedAt: '2026-08-01T10:00:00.000Z',
+      }),
+    );
+
+    await expect(service.deleteInvite('t-9')).rejects.toThrow(/desativar/i);
+    expect(userRepository.delete).not.toHaveBeenCalled();
+  });
+
+  it('recusa professora antiga, anterior ao carimbo', async () => {
+    // O caso perigoso: toda a base é anterior ao `onboardedAt`, e uma regra
+    // que olhasse só para ele deixaria apagar professora em atividade.
+    const { service, userRepository } = build(
+      new User({ ...convitePendente, fullName: 'Bárbara', onboardedAt: undefined }),
+    );
+
+    await expect(service.deleteInvite('t-9')).rejects.toThrow(/desativar/i);
+    expect(userRepository.delete).not.toHaveBeenCalled();
+  });
+
+  it('recusa a gerente', async () => {
+    const { service, userRepository } = build(
+      new User({ id: 'm-1', email: 'g@x.com', role: ROLES.MANAGER }),
+    );
+
+    await expect(service.deleteInvite('m-1')).rejects.toThrow(/gerente/i);
+    expect(userRepository.delete).not.toHaveBeenCalled();
+  });
+
+  it('recusa convite que, por algum motivo, já tem aluno vinculado', async () => {
+    // Apagar deixaria alunos apontando para uma professora que sumiu, sem o
+    // `pendingTeacher` que a desativação marca.
+    const { service, userRepository } = build(convitePendente, [
+      new User({ id: 'a-1' }),
+    ]);
+
+    await expect(service.deleteInvite('t-9')).rejects.toThrow(/alunos/i);
+    expect(userRepository.delete).not.toHaveBeenCalled();
+  });
+});

@@ -1155,6 +1155,7 @@ o DTO público entrega apenas nome e, se a professora permitir, telefone.
 | `PATCH` | `/teachers/students/:studentId` | `manager` | Config do aluno: `{ teacherId?, lessonsPerWeek?, makeupSlot?, meetUrl? }` |
 | `POST` | `/teachers/invite` | `manager` | **Convite só com o e-mail** (spec 018). Body `{ email }` |
 | `POST` | `/teachers/:id/invite/resend` | `manager` | Reenvia o e-mail de entrada. Mesma trava de 60s |
+| `DELETE` | `/teachers/:id` | `manager` | **Só convite pendente**: apaga documento e conta de quem nunca preencheu nada (o e-mail digitado errado). Recusa quem já entrou, quem tem aluno vinculado e a gerente |
 | `GET` | `/teachers/me` | `manager`, `teacher` | Perfil próprio + `missingOnboarding` |
 | `PATCH` | `/teachers/me` | `manager`, `teacher` | **Edição do próprio perfil**: `{ fullName?, phone?, cpf?, pixKey?, profileImageUrl?, bio? }` |
 | `PATCH` | `/teachers/me/phone-visibility` | `manager`, `teacher` | Body `{ visible }` |
@@ -1169,6 +1170,13 @@ o DTO público entrega apenas nome e, se a professora permitir, telefone.
 > em silêncio, aparecendo só no fim do mês. A gerente segue corrigindo por
 > `PUT /teachers/:id`: muda a fonte, não a permissão. O **valor-hora** continua fora — é
 > remuneração combinada, não dado pessoal.
+
+> **Excluir vs. desativar.** `DELETE /teachers/:id` existe para o convite errado e só
+> para ele: a régua é `!onboardedAt` **e** `!fullName`, ou seja, quem nunca preencheu
+> absolutamente nada. Olhar só para o carimbo deixaria apagar professora em atividade,
+> porque a coluna é nova e toda a base anterior está sem ela. Quem já entrou tem aula
+> dada e histórico de repasse: para essa existe `PATCH /:id/active`, que preserva o
+> passado e marca os alunos como `pendingTeacher`.
 
 > **Onboarding (spec 018).** `GET /teachers/me` devolve `missingOnboarding: string[]` com
 > o que falta entre nome, celular, CPF e chave PIX — mesmo campo e formato do `/users/me`,

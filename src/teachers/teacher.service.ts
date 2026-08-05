@@ -12,7 +12,10 @@ import { CreateTeacherDto } from './dto/CreateTeacher.dto';
 import { UpdateTeacherDto } from './dto/UpdateTeacher.dto';
 import { UpdateTeacherProfileDto } from '../users/dto/UpdateProfile.dto';
 import { pickDefined } from '../common/patch';
-import { onboardingCompletedAt } from '../users/onboarding';
+import {
+  isInvitePending,
+  onboardingCompletedAt,
+} from '../users/onboarding';
 import { ROLES, resolveRole, isStaff } from '../types/role';
 import { NotificationService } from '../notifications/notification.service';
 
@@ -71,6 +74,42 @@ export class TeacherService {
       await this.authService.deleteAccount(uid);
       throw error;
     }
+  }
+
+  /**
+   * Apaga um convite que ninguém respondeu (spec 018 Task 130).
+   *
+   * **Só convite pendente.** Professora que entrou tem aula dada, aluno
+   * vinculado e histórico de repasse — para essa existe `PATCH /:id/active`,
+   * que a tira do ar preservando o passado. Aqui o alvo é o erro de digitação
+   * no e-mail do convite, que hoje só se resolvia no console do Firebase.
+   *
+   * As três recusas abaixo são deliberadas, e cada uma cobre um jeito
+   * diferente de apagar a pessoa errada.
+   */
+  async deleteInvite(id: string): Promise<void> {
+    const teacher = await this.findById(id);
+
+    if (resolveRole(teacher) === ROLES.MANAGER) {
+      throw new BadRequestException('A gerente não pode ser excluída');
+    }
+    if (!isInvitePending(teacher)) {
+      throw new BadRequestException(
+        'Só um convite pendente pode ser excluído. Para tirar do ar quem já entrou, use desativar.',
+      );
+    }
+    // Rede de segurança: convite pendente não deveria ter aluno vinculado, mas
+    // se tiver, apagar deixaria alunos apontando para uma professora que sumiu
+    // — e o `pendingTeacher` que a desativação cuida nunca seria marcado.
+    const alunos = await this.teacherRepository.findStudentsByTeacher(id);
+    if (alunos.length > 0) {
+      throw new BadRequestException(
+        'Esta professora tem alunos vinculados. Desative em vez de excluir.',
+      );
+    }
+
+    await this.userRepository.delete(id);
+    await this.authService.deleteAccount(id);
   }
 
   /** Reenvia o convite de quem ainda não concluiu (spec 018 Task 122). */

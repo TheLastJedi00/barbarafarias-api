@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   Param,
   Patch,
@@ -138,6 +139,16 @@ export class TeacherController {
   @Post(':id/invite/resend')
   async resendInvite(@Param('id') id: string): Promise<void> {
     return this.service.resendInvite(id);
+  }
+
+  /**
+   * Apaga um convite que ninguém respondeu (Task 130) — o e-mail digitado
+   * errado, tipicamente. Quem já entrou não é excluída: para essa existe
+   * `PATCH /:id/active`, que preserva aulas e histórico de repasse.
+   */
+  @Delete(':id')
+  async deleteInvite(@Param('id') id: string): Promise<void> {
+    return this.service.deleteInvite(id);
   }
 
   @Put(':id')
