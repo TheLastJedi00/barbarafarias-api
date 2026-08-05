@@ -50,6 +50,29 @@ export class BaseProfileDto {
 /** O que o aluno edita. O CPF entra aqui porque é ele quem paga. */
 export class UpdateProfileDto extends BaseProfileDto {
   /**
+   * O objetivo é do aluno, então é ele quem escreve (spec 018 decisão nº 1).
+   *
+   * `level` e `prognosis` continuam **fora** desta whitelist: o nível escolhe o
+   * material que o sistema gera e o prognóstico é avaliação pedagógica — os
+   * dois são da gerente/professora, e deixá-los passar por aqui seria o aluno
+   * definindo a própria trilha.
+   */
+  @IsString()
+  @IsOptional()
+  @MaxLength(600)
+  objective?: string;
+
+  /**
+   * Apresentação do aluno, exibida à professora na ficha (spec 018 Task 110).
+   * Opcional em todos os sentidos: não entra no onboarding, porque é
+   * apresentação e não requisito de entrada.
+   */
+  @IsString()
+  @IsOptional()
+  @MaxLength(600, { message: 'Bio deve ter no máximo 600 caracteres' })
+  bio?: string;
+
+  /**
    * Opcional no DTO de propósito, mesmo sendo obrigatório para assinar: este
    * `PATCH` é parcial e serve também ao upload de avatar, que manda só
    * `profileImageUrl`. Quem exige o CPF é o checkout (Task 45.3) e o

@@ -53,6 +53,36 @@ interface ResolvedCoupon {
   remaining: number | null;
 }
 
+/** Mensagem única do bloqueio — a tela repete exatamente esta frase. */
+export const PIX_INSTALLMENT_BLOCKED =
+  'O parcelamento está disponível apenas no cartão de crédito.';
+
+/**
+ * PIX não fecha plano parcelado (spec 018 Task 114).
+ *
+ * **O que se está evitando é parcela futura de um compromisso já fechado sem
+ * cobrança automática** — não recorrência. Por isso a régua é `installments`, e
+ * não `recurring`: o Mensal continua aceitando PIX, porque ele não tem parcela
+ * futura, tem renovação, e o aluno que não quiser renovar simplesmente não
+ * paga o próximo QR. Já o Semestral e o Anual comprometem o aluno com 6 ou 12
+ * cobranças que dependeriam dele lembrar de pagar uma a uma.
+ *
+ * Tecnicamente o PIX parcelado **funciona** hoje (o gateway emite um QR por
+ * parcela); a decisão é de negócio, e vive aqui — no serviço, não na tela —
+ * porque há duas portas de entrada para o método de pagamento.
+ */
+export function assertMethodAllowed(
+  plan: SubscriptionPlan,
+  method: PaymentMethod,
+): void {
+  if (
+    method === PAYMENT_METHODS.PIX_RECURRING &&
+    planConfig(plan).installments > 1
+  ) {
+    throw new BadRequestException(PIX_INSTALLMENT_BLOCKED);
+  }
+}
+
 @Injectable()
 export class SubscriptionService {
   private readonly logger = new Logger(SubscriptionService.name);
@@ -82,6 +112,7 @@ export class SubscriptionService {
       throw new NotFoundException('Aluno não encontrado');
     }
     this.assertPayableProfile(student);
+    assertMethodAllowed(dto.plan, dto.paymentMethod);
 
     const existing = await this.subscriptions.findByStudent(studentId);
     if (existing && existing.status === SUBSCRIPTION_STATUS.ACTIVE) {
@@ -136,6 +167,9 @@ export class SubscriptionService {
     if (subscription.status === SUBSCRIPTION_STATUS.CANCELLED) {
       throw new BadRequestException('Plano cancelado. Contrate um novo plano.');
     }
+    // A mesma regra da contratação: sem isto, bastaria contratar no cartão e
+    // trocar para PIX em seguida para furar o bloqueio (spec 018 Task 114).
+    assertMethodAllowed(subscription.plan, dto.paymentMethod);
     if (subscription.paymentMethod === dto.paymentMethod) {
       return {
         subscription: new SubscriptionDto(subscription),

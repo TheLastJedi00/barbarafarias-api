@@ -458,6 +458,39 @@ Cria um novo usuário (aluno ou professor).
 
 ---
 
+#### `POST /users/invite` e `POST /users/:id/invite/resend`
+
+Convite de aluno **só com o e-mail** (spec 018). Convive com o cadastro completo
+acima: a gerente que já tem a ficha na mão matricula direto; a que só tem o contato
+convida e o aluno preenche o resto.
+
+| Propriedade | Valor |
+|---|---|
+| **Autenticação** | 🔒 Requerida |
+| **Roles** | `manager` |
+
+**Request Body:** `{ "email": "novo@aluno.com" }`
+
+O que acontece:
+
+1. Cria a conta no Firebase com uma senha **aleatória e descartável** — ninguém a vê
+   e ninguém a guarda
+2. Grava o documento mínimo em `users` (`role: student`, `isPaying: false`, **sem**
+   `onboardedAt`)
+3. Dispara o **e-mail de redefinição de senha**, que é como o aluno entra
+
+> Por que a senha é lixo proposital: o Admin SDK cria a conta mas não valida senha nem
+> envia e-mail, e o envio de verificação do cadastro normal faz login com a senha para
+> obter um ID Token — o que não faria sentido aqui. Não se perde nada, porque o Firebase
+> marca o endereço como verificado quando a redefinição termina, provando a posse do
+> e-mail do mesmo jeito.
+
+O reenvio passa pela **mesma trava de 60s** dos outros e-mails (`EMAIL_COOLDOWN_SECONDS`):
+clicar duas vezes devolve `429`. Aluno que já concluiu o onboarding devolve `400` — não
+há convite a reenviar.
+
+---
+
 #### `GET /users`
 
 Retorna os usuários cadastrados. Aceita o query param opcional `role` para
@@ -621,6 +654,8 @@ Perfil do **aluno logado** e a edição que ele mesmo faz dele (spec 011 RF14).
   "fullName": "João Silva",
   "phone": "11999999999",
   "cpf": "12345678909",
+  "objective": "Reuniões de trabalho em inglês",
+  "bio": "Trabalho com comércio exterior há seis anos.",
   "profileImageUrl": "https://firebasestorage.../avatars/uid.jpg"
 }
 ```
@@ -628,6 +663,16 @@ Perfil do **aluno logado** e a edição que ele mesmo faz dele (spec 011 RF14).
 > A whitelist é intencional e **não** é a mesma do `PUT /users/:id`. Papel, professora
 > responsável, nível e situação de pagamento continuam exclusivos da gerente — sem esse
 > recorte, um aluno poderia se promover ou trocar de professora pelo próprio painel.
+> O `objective` entrou na spec 018 porque o objetivo é do aluno; `level` e `prognosis`
+> **não** entraram, porque o nível escolhe o material que o sistema gera e o prognóstico
+> é avaliação pedagógica.
+
+> **Onboarding (spec 018).** O `GET /users/me` devolve `missingOnboarding: string[]` —
+> o que ainda falta preencher entre nome, celular, CPF e objetivo. É a régua que o
+> front usa para reter o aluno na tela de boas-vindas, derivada no servidor de
+> propósito: duplicá-la no Angular garantiria que as duas divergissem no primeiro campo
+> novo. Quando a lista esvazia, o `PATCH` grava `onboardedAt` **uma vez** — é registro
+> de quando aconteceu, não flag de completude, e não é reescrito depois.
 
 > **CPF e telefone (spec 013).** Ambos chegam **só com dígitos** — a máscara é assunto da
 > tela, e o `@Transform` do DTO limpa o que vier formatado. O CPF é validado pelos dois

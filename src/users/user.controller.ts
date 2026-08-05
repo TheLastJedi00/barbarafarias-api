@@ -17,7 +17,8 @@ import { Roles } from '../decorators/roles.decorator';
 import { CurrentUser } from '../decorators/current-user.decorator';
 import type { AuthenticatedUser } from '../decorators/current-user.decorator';
 import { ResponseUserDto } from './dto/ResponseUser.dto';
-import { UserService } from './user.service';
+import { InviteUserDto } from './dto/InviteUser.dto';
+import { UserService, missingOnboardingFields } from './user.service';
 import { ROLES } from '../types/role';
 import type { Role } from '../types/role';
 
@@ -30,6 +31,24 @@ export class UserController {
   @Roles(ROLES.MANAGER)
   async createUser(@Body() user: CreateUserDto): Promise<ResponseUserDto> {
     return this.service.createUser(user);
+  }
+
+  /**
+   * Convite de aluno só com o e-mail (spec 018 Task 101). Convive com o
+   * cadastro completo acima: a gerente que já tem a ficha na mão matricula
+   * direto, sem esperar o aluno preencher.
+   */
+  @Post('invite')
+  @Roles(ROLES.MANAGER)
+  async invite(@Body() dto: InviteUserDto): Promise<ResponseUserDto> {
+    return this.service.inviteUser(dto.email);
+  }
+
+  /** Reenvia o e-mail de entrada de quem ainda não concluiu (Task 103). */
+  @Post(':id/invite/resend')
+  @Roles(ROLES.MANAGER)
+  async resendInvite(@Param('id') id: string): Promise<void> {
+    return this.service.resendInvite(id);
   }
 
   /**
@@ -53,7 +72,14 @@ export class UserController {
     // `emailVerified` vem do próprio token que o guard já decodificou (spec 016
     // Task 78) — sem consulta extra ao Firebase, e sem virar campo do documento,
     // que sairia de sincronia no dia em que o e-mail fosse verificado.
-    return Object.assign(profile, { emailVerified: user.emailVerified });
+    //
+    // `missingOnboarding` é derivado aqui, e não no front (spec 018 Task 107):
+    // é a mesma regra que decide gravar o `onboardedAt`, e duplicá-la no
+    // Angular garantiria que as duas divergissem no primeiro campo novo.
+    return Object.assign(profile, {
+      emailVerified: user.emailVerified,
+      missingOnboarding: missingOnboardingFields(profile),
+    });
   }
 
   /** Edição que o próprio aluno faz: nome, telefone e foto (spec 011 RF14). */
