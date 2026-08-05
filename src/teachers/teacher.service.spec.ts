@@ -15,6 +15,7 @@ describe('TeacherService', () => {
   let authService: {
     createAccount: jest.Mock;
     deleteAccount: jest.Mock;
+    sendPasswordReset: jest.Mock;
   };
 
   const teacher = new User({
@@ -40,6 +41,7 @@ describe('TeacherService', () => {
     authService = {
       createAccount: jest.fn().mockResolvedValue(undefined),
       deleteAccount: jest.fn().mockResolvedValue(undefined),
+      sendPasswordReset: jest.fn().mockResolvedValue(undefined),
     };
     service = new TeacherService(
       teacherRepository as any,
@@ -176,5 +178,114 @@ describe('DTOs de professora', () => {
 
     const visible = new User({ ...full, phoneVisibleToStudent: true });
     expect(new PublicTeacherDto(visible).phone).toBe('11999');
+  });
+});
+
+describe('TeacherService — convite (spec 018 Fase 7)', () => {
+  function build() {
+    const teacherRepository = {
+      findAllStaff: jest.fn().mockResolvedValue([]),
+      findStudentsByTeacher: jest.fn().mockResolvedValue([]),
+      markStudentsPendingTeacher: jest.fn().mockResolvedValue(0),
+    };
+    const userRepository = {
+      findById: jest.fn(),
+      save: jest.fn().mockResolvedValue('t-9'),
+      update: jest.fn().mockResolvedValue(undefined),
+    };
+    const authService = {
+      createAccount: jest.fn().mockResolvedValue(undefined),
+      deleteAccount: jest.fn().mockResolvedValue(undefined),
+      sendPasswordReset: jest.fn().mockResolvedValue(undefined),
+    };
+    const notifications = { notifyTeacherAssigned: jest.fn() };
+    const service = new TeacherService(
+      teacherRepository as any,
+      userRepository as any,
+      authService as any,
+      notifications as any,
+    );
+    return { service, userRepository, authService };
+  }
+
+  it('cria a conta com senha descartável e manda o e-mail de entrada', async () => {
+    const { service, userRepository, authService } = build();
+
+    await service.invite('nova@x.com');
+
+    const conta = authService.createAccount.mock.calls[0][0];
+    expect(conta.role).toBe(ROLES.TEACHER);
+    expect(conta.sendVerification).toBe(false);
+    expect(conta.password).toEqual(expect.any(String));
+
+    const [gravada] = userRepository.save.mock.calls[0];
+    expect(gravada.email).toBe('nova@x.com');
+    expect(gravada.isTeacher).toBe(true);
+    expect(gravada.active).toBe(true);
+    // Ausência do carimbo é o que marca o convite como pendente.
+    expect(gravada.onboardedAt).toBeUndefined();
+    expect(gravada.pixKey).toBeUndefined();
+
+    expect(authService.sendPasswordReset).toHaveBeenCalledWith('nova@x.com');
+  });
+
+  it('não deixa conta órfã quando a gravação falha', async () => {
+    const { service, userRepository, authService } = build();
+    userRepository.save.mockRejectedValue(new Error('firestore down'));
+
+    await expect(service.invite('nova@x.com')).rejects.toThrow('firestore down');
+
+    expect(authService.deleteAccount).toHaveBeenCalledTimes(1);
+    expect(authService.sendPasswordReset).not.toHaveBeenCalled();
+  });
+
+  it('recusa reenvio para quem já concluiu', async () => {
+    const { service, userRepository, authService } = build();
+    userRepository.findById.mockResolvedValue(
+      new User({
+        id: 't-9',
+        email: 'ana@x.com',
+        role: ROLES.TEACHER,
+        onboardedAt: '2026-08-01T10:00:00.000Z',
+      }),
+    );
+
+    await expect(service.resendInvite('t-9')).rejects.toThrow(/já concluiu/i);
+    expect(authService.sendPasswordReset).not.toHaveBeenCalled();
+  });
+
+  it('carimba a conclusão quando a chave PIX — o último campo — chega', async () => {
+    const { service, userRepository } = build();
+    userRepository.findById.mockResolvedValue(
+      new User({
+        id: 't-9',
+        email: 'ana@x.com',
+        role: ROLES.TEACHER,
+        fullName: 'Ana',
+        phone: '11999999999',
+        cpf: '39053344705',
+      }),
+    );
+
+    const updated = await service.updateOwnProfile('t-9', {
+      pixKey: 'ana@x.com',
+    } as any);
+
+    expect(updated.onboardedAt).toEqual(expect.any(String));
+  });
+
+  it('não carimba a gerente, que não passa por onboarding', async () => {
+    // Ela é quem conserta o que trava: retê-la seria trancar a chave dentro
+    // de casa (decisão nº 9).
+    const { service, userRepository } = build();
+    userRepository.findById.mockResolvedValue(
+      new User({ id: 'm-1', email: 'g@x.com', role: ROLES.MANAGER }),
+    );
+
+    const updated = await service.updateOwnProfile('m-1', {
+      fullName: 'Bárbara',
+    } as any);
+
+    expect(updated.onboardedAt).toBeUndefined();
   });
 });

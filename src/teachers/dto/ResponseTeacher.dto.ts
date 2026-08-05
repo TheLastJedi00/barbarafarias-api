@@ -24,6 +24,14 @@ export class ResponseTeacherDto {
   bio?: string;
   /** Vem do token, não do documento (spec 016 Task 78). */
   emailVerified?: boolean;
+  /**
+   * O que falta para a professora concluir o onboarding (spec 018 Task 123).
+   * Preenchido só em `GET /teachers/me`, com o mesmo nome e formato do
+   * `/users/me` — o guard do front lê um campo só, venha de onde vier.
+   */
+  missingOnboarding?: string[];
+  /** Quando concluiu. Ausente numa professora = convite pendente. */
+  onboardedAt?: string;
 
   constructor(user: User, studentsCount?: number) {
     this.id = user.id!;
@@ -41,6 +49,7 @@ export class ResponseTeacherDto {
     this.studentsCount = studentsCount;
     this.profileImageUrl = user.profileImageUrl;
     this.bio = user.bio;
+    this.onboardedAt = user.onboardedAt;
   }
 }
 
