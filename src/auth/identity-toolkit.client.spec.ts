@@ -6,7 +6,8 @@ import {
 import {
   ConflictException,
   HttpException,
-  InternalServerErrorException,
+  Logger,
+  ServiceUnavailableException,
   UnauthorizedException,
 } from '@nestjs/common';
 
@@ -29,6 +30,32 @@ describe('IdentityToolkitClient', () => {
       ok: false,
       status,
       json: async () => ({ error: { code: status, message: code } }),
+    };
+  }
+
+  /**
+   * Recusa de configuração, no formato real do Google: o motivo legível por
+   * máquina não está na `message` — está em `details[].reason` (spec 017).
+   */
+  function refusar(reason: string, message = 'Requests from referer <empty> are blocked.') {
+    return {
+      ok: false,
+      status: 403,
+      json: async () => ({
+        error: {
+          code: 403,
+          message,
+          status: 'PERMISSION_DENIED',
+          details: [
+            {
+              '@type': 'type.googleapis.com/google.rpc.ErrorInfo',
+              reason,
+              domain: 'googleapis.com',
+              metadata: { service: 'identitytoolkit.googleapis.com' },
+            },
+          ],
+        },
+      }),
     };
   }
 
@@ -158,6 +185,65 @@ describe('IdentityToolkitClient', () => {
     });
   });
 
+  describe('recusa por configuração (spec 017)', () => {
+    // O bug que originou a spec: a chave tinha restrição de HTTP referrer e o
+    // backend chama sem `Referer`. O código vinha da `message` inteira
+    // ("Requests from referer <empty> are blocked."), não batia com nada e o
+    // login virava um 500 que mandava "tente novamente" — conselho errado,
+    // porque nenhuma tentativa ia passar.
+    it('reconhece chave bloqueada por restrição de aplicativo', async () => {
+      fetchMock.mockResolvedValue(refusar('API_KEY_HTTP_REFERRER_BLOCKED'));
+
+      const erro = await capturarErro();
+
+      expect(erro.code).toBe('CONFIG_API_KEY_BLOCKED');
+      expect(erro.message).not.toMatch(/senha/i);
+    });
+
+    it('reconhece os demais motivos que o Google devolve em details[].reason', async () => {
+      const casos: Record<string, string> = {
+        API_KEY_IP_ADDRESS_BLOCKED: 'CONFIG_API_KEY_BLOCKED',
+        API_KEY_INVALID: 'CONFIG_API_KEY_INVALID',
+        // A restrição de API que a spec passou a recomendar tem o seu próprio
+        // jeito de dar errado: chave certa, API de fora da lista.
+        API_KEY_SERVICE_BLOCKED: 'CONFIG_API_KEY_SERVICE_BLOCKED',
+        SERVICE_DISABLED: 'CONFIG_API_DISABLED',
+      };
+      for (const [reason, esperado] of Object.entries(casos)) {
+        fetchMock.mockResolvedValue(refusar(reason));
+        expect((await capturarErro(reason)).code).toBe(esperado);
+      }
+    });
+
+    it('cai num código próprio quando o PERMISSION_DENIED não traz motivo conhecido', async () => {
+      fetchMock.mockResolvedValue(refusar('MOTIVO_QUE_AINDA_NAO_EXISTE'));
+
+      expect((await capturarErro()).code).toBe('CONFIG_PERMISSION_DENIED');
+    });
+
+    it('registra no log a variável a conferir, e não só o corpo cru', async () => {
+      const logger = jest
+        .spyOn(Logger.prototype, 'error')
+        .mockImplementation(() => undefined);
+      fetchMock.mockResolvedValue(refusar('API_KEY_HTTP_REFERRER_BLOCKED'));
+
+      await capturarErro();
+
+      // Sem o nome da variável, o log diz o que aconteceu mas não onde mexer.
+      expect(logger).toHaveBeenCalledWith(
+        expect.stringContaining('FIREBASE_WEB_API_KEY'),
+      );
+      expect(logger).toHaveBeenCalledWith(expect.stringContaining('referer'));
+      logger.mockRestore();
+    });
+
+    it('não confunde credencial recusada com problema de configuração', async () => {
+      fetchMock.mockResolvedValue(fail('INVALID_LOGIN_CREDENTIALS'));
+
+      expect((await capturarErro()).code).toBe('INVALID_LOGIN_CREDENTIALS');
+    });
+  });
+
   it('falha claro quando a chave da Web API não está configurada', async () => {
     const semChave = new IdentityToolkitClient({ get: () => undefined } as any);
 
@@ -190,12 +276,28 @@ describe('toHttpException', () => {
     );
   });
 
-  it('sobe como 500 o que não é culpa do usuário', () => {
+  it('trata erro de configuração como 503, não como 500 com "tente novamente"', () => {
     // Chave errada, projeto sem provedor de senha, API fora: engolir isso como
     // "senha incorreta" esconderia um erro de configuração atrás de uma tela
-    // de login que simplesmente nunca funciona.
-    expect(
-      toHttpException(new IdentityToolkitError('CONFIGURATION_NOT_FOUND', 'm')),
-    ).toBeInstanceOf(InternalServerErrorException);
+    // de login que simplesmente nunca funciona. E 500 "tente novamente" é pior
+    // que inútil aqui — instrui a repetir uma ação que não tem como passar
+    // enquanto ninguém mexer na configuração (spec 017).
+    for (const code of [
+      'CONFIG_API_KEY_BLOCKED',
+      'CONFIG_API_KEY_INVALID',
+      'CONFIG_API_KEY_SERVICE_BLOCKED',
+      'CONFIG_API_DISABLED',
+      'CONFIG_PERMISSION_DENIED',
+      'CONFIGURATION_NOT_FOUND',
+    ]) {
+      expect(
+        toHttpException(new IdentityToolkitError(code, 'm')),
+      ).toBeInstanceOf(ServiceUnavailableException);
+      expect(status(code)).toBe(503);
+    }
+  });
+
+  it('mantém em 500 o que não se sabe classificar', () => {
+    expect(status('UM_CODIGO_NOVO_DO_GOOGLE')).toBe(500);
   });
 });

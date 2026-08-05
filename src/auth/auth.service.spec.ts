@@ -1,6 +1,8 @@
 import {
   BadRequestException,
   ConflictException,
+  Logger,
+  ServiceUnavailableException,
   UnauthorizedException,
 } from '@nestjs/common';
 import { AuthService } from './auth.service';
@@ -103,6 +105,28 @@ describe('AuthService', () => {
       });
       expect(identity.refresh).toHaveBeenCalledWith('refresh-token');
       expect(result.access_token).toBe('id-token-2');
+    });
+
+    it('acusa descasamento de projeto quando o Admin SDK recusa o token recém-emitido', async () => {
+      // Login aceito pelo Identity Toolkit e token recusado logo em seguida só
+      // acontece por um motivo: a FIREBASE_WEB_API_KEY é de um projeto e o
+      // service account é de outro, então o `aud` não bate. Foi assim que a
+      // spec 017 começou, e sem esta mensagem o erro reaparece como
+      // "Token inválido" — que manda procurar no lugar errado.
+      const logger = jest
+        .spyOn(Logger.prototype, 'error')
+        .mockImplementation(() => undefined);
+      auth.verifyIdToken.mockRejectedValueOnce(
+        new Error('Firebase ID token has incorrect "aud" (audience) claim.'),
+      );
+
+      await expect(service.login('a@b.com', 'senha')).rejects.toBeInstanceOf(
+        ServiceUnavailableException,
+      );
+      expect(logger).toHaveBeenCalledWith(
+        expect.stringContaining('FIREBASE_SERVICE_ACCOUNT_BASE64'),
+      );
+      logger.mockRestore();
     });
 
     it('resolve o papel pelo isTeacher legado quando users não tem role', async () => {
