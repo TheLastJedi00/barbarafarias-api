@@ -9,6 +9,7 @@ import {
   IdentityToolkitError,
   toHttpException,
 } from './identity-toolkit.client';
+import { EmailCooldownService } from './email-cooldown.service';
 import { FIREBASE_AUTH } from '../firestore/firebase-auth.module';
 import { Role, resolveRole } from '../types/role';
 import type { AuthenticatedUser } from '../decorators/current-user.decorator';
@@ -32,6 +33,7 @@ export class AuthService {
     private readonly authRepository: AuthRepository,
     private readonly bcryptService: BcryptService,
     private readonly userRepository: UserRepository,
+    private readonly cooldown: EmailCooldownService,
   ) {}
 
   /**
@@ -111,6 +113,7 @@ export class AuthService {
    * bem-sucedido, e ninguém notaria que o botão parou de funcionar.
    */
   async sendPasswordReset(email: string): Promise<void> {
+    await this.cooldown.enforce(email);
     try {
       await this.identity.sendPasswordResetEmail(email);
     } catch (error) {

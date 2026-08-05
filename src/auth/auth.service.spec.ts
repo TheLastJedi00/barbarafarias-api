@@ -15,6 +15,7 @@ describe('AuthService', () => {
     sendPasswordResetEmail: jest.Mock;
   };
   let userRepository: { findById: jest.Mock };
+  let cooldown: { enforce: jest.Mock };
 
   const sessao = {
     idToken: 'id-token',
@@ -40,12 +41,14 @@ describe('AuthService', () => {
       sendPasswordResetEmail: jest.fn().mockResolvedValue(undefined),
     };
     userRepository = { findById: jest.fn().mockResolvedValue(null) };
+    cooldown = { enforce: jest.fn().mockResolvedValue(undefined) };
     service = new AuthService(
       auth as any,
       identity as any,
       { save: jest.fn(), delete: jest.fn() } as any,
       { transform: jest.fn(), compare: jest.fn() } as any,
       userRepository as any,
+      cooldown as any,
     );
   });
 
@@ -156,6 +159,13 @@ describe('AuthService', () => {
     it('pede o e-mail ao Firebase', async () => {
       await service.sendPasswordReset('a@b.com');
       expect(identity.sendPasswordResetEmail).toHaveBeenCalledWith('a@b.com');
+    });
+
+    it('respeita o intervalo por endereço antes de enviar', async () => {
+      cooldown.enforce.mockRejectedValue(new Error('429'));
+
+      await expect(service.sendPasswordReset('a@b.com')).rejects.toBeDefined();
+      expect(identity.sendPasswordResetEmail).not.toHaveBeenCalled();
     });
 
     it('responde igual para e-mail inexistente', async () => {
