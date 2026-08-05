@@ -9,7 +9,11 @@ describe('AuthService', () => {
     setCustomUserClaims: jest.Mock;
     revokeRefreshTokens: jest.Mock;
   };
-  let identity: { signInWithPassword: jest.Mock; refresh: jest.Mock };
+  let identity: {
+    signInWithPassword: jest.Mock;
+    refresh: jest.Mock;
+    sendPasswordResetEmail: jest.Mock;
+  };
   let userRepository: { findById: jest.Mock };
 
   const sessao = {
@@ -33,6 +37,7 @@ describe('AuthService', () => {
     identity = {
       signInWithPassword: jest.fn().mockResolvedValue(sessao),
       refresh: jest.fn().mockResolvedValue({ ...sessao, idToken: 'id-token-2' }),
+      sendPasswordResetEmail: jest.fn().mockResolvedValue(undefined),
     };
     userRepository = { findById: jest.fn().mockResolvedValue(null) };
     service = new AuthService(
@@ -144,6 +149,33 @@ describe('AuthService', () => {
       // tela presa numa saída que, do ponto de vista dela, já aconteceu.
       auth.revokeRefreshTokens.mockRejectedValue(new Error('rede'));
       await expect(service.logout('uid-1')).resolves.toBeUndefined();
+    });
+  });
+
+  describe('sendPasswordReset', () => {
+    it('pede o e-mail ao Firebase', async () => {
+      await service.sendPasswordReset('a@b.com');
+      expect(identity.sendPasswordResetEmail).toHaveBeenCalledWith('a@b.com');
+    });
+
+    it('responde igual para e-mail inexistente', async () => {
+      // Responder diferente aqui transformaria a rota num verificador de quem
+      // tem conta na escola.
+      identity.sendPasswordResetEmail.mockRejectedValue(
+        new IdentityToolkitError('EMAIL_NOT_FOUND', 'E-mail ou senha incorretos.'),
+      );
+
+      await expect(service.sendPasswordReset('nao@existe.com')).resolves.toBeUndefined();
+    });
+
+    it('deixa a falha de infraestrutura subir', async () => {
+      // Chave errada engolida como sucesso seria um botão que nunca funciona e
+      // nunca reclama.
+      identity.sendPasswordResetEmail.mockRejectedValue(
+        new IdentityToolkitError('CONFIGURATION_NOT_FOUND', 'Falha na autenticação.'),
+      );
+
+      await expect(service.sendPasswordReset('a@b.com')).rejects.toBeDefined();
     });
   });
 

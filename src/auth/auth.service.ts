@@ -101,6 +101,32 @@ export class AuthService {
     };
   }
 
+  /**
+   * Pede ao Firebase o e-mail de redefinição (spec 016 Task 75).
+   *
+   * **Nunca revela se o e-mail existe.** Uma resposta diferente por caso
+   * transformaria a rota num verificador de quem estuda aqui, e é justamente
+   * quem não tem conta que descobriria isso primeiro. Erro de infraestrutura,
+   * por outro lado, sobe: uma chave errada ficaria indistinguível de um envio
+   * bem-sucedido, e ninguém notaria que o botão parou de funcionar.
+   */
+  async sendPasswordReset(email: string): Promise<void> {
+    try {
+      await this.identity.sendPasswordResetEmail(email);
+    } catch (error) {
+      if (
+        error instanceof IdentityToolkitError &&
+        (error.code === 'EMAIL_NOT_FOUND' || error.code === 'INVALID_EMAIL')
+      ) {
+        this.logger.debug(`Redefinição pedida para e-mail inexistente.`);
+        return;
+      }
+      throw error instanceof IdentityToolkitError
+        ? toHttpException(error)
+        : error;
+    }
+  }
+
   async registerCredentials(data: Partial<AuthUser>) {
     const hashedPassword = await this.bcryptService.transform(data.password!);
     const authUser = new AuthUser({
