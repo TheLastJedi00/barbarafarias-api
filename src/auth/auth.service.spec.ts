@@ -1,130 +1,179 @@
 import { UnauthorizedException } from '@nestjs/common';
 import { AuthService } from './auth.service';
-import { AuthUser } from './entities/auth-user.entity';
+import { IdentityToolkitError } from './identity-toolkit.client';
 
 describe('AuthService', () => {
   let service: AuthService;
-  let jwtService: { verify: jest.Mock; sign: jest.Mock };
-  let authRepository: { findByEmail: jest.Mock; save: jest.Mock };
-  let bcryptService: { transform: jest.Mock; compare: jest.Mock };
+  let auth: {
+    verifyIdToken: jest.Mock;
+    setCustomUserClaims: jest.Mock;
+    revokeRefreshTokens: jest.Mock;
+  };
+  let identity: { signInWithPassword: jest.Mock; refresh: jest.Mock };
   let userRepository: { findById: jest.Mock };
 
+  const sessao = {
+    idToken: 'id-token',
+    refreshToken: 'refresh-token',
+    expiresIn: 3600,
+    localId: 'uid-1',
+  };
+
   beforeEach(() => {
-    jwtService = { verify: jest.fn(), sign: jest.fn() };
-    authRepository = { findByEmail: jest.fn(), save: jest.fn() };
-    bcryptService = { transform: jest.fn(), compare: jest.fn() };
+    auth = {
+      verifyIdToken: jest.fn().mockResolvedValue({
+        uid: 'uid-1',
+        email: 'a@b.com',
+        role: 'student',
+        email_verified: true,
+      }),
+      setCustomUserClaims: jest.fn().mockResolvedValue(undefined),
+      revokeRefreshTokens: jest.fn().mockResolvedValue(undefined),
+    };
+    identity = {
+      signInWithPassword: jest.fn().mockResolvedValue(sessao),
+      refresh: jest.fn().mockResolvedValue({ ...sessao, idToken: 'id-token-2' }),
+    };
     userRepository = { findById: jest.fn().mockResolvedValue(null) };
     service = new AuthService(
-      jwtService as any,
-      authRepository as any,
-      bcryptService as any,
+      auth as any,
+      identity as any,
+      { save: jest.fn(), delete: jest.fn() } as any,
+      { transform: jest.fn(), compare: jest.fn() } as any,
       userRepository as any,
     );
   });
 
   describe('login', () => {
-    it('retorna access_token quando as credenciais são válidas', async () => {
-      authRepository.findByEmail.mockResolvedValue(
-        new AuthUser({ id: '1', email: 'a@b.com', password: 'hash', role: 'teacher' }),
-      );
-      bcryptService.compare.mockResolvedValue(true);
-      jwtService.sign.mockReturnValue('token-123');
-
+    it('devolve a sessão do Firebase', async () => {
       const result = await service.login('a@b.com', 'senha');
 
-      expect(result).toEqual({ access_token: 'token-123' });
-      expect(jwtService.sign).toHaveBeenCalledWith({
-        email: 'a@b.com',
-        sub: '1',
-        role: 'teacher',
+      expect(identity.signInWithPassword).toHaveBeenCalledWith('a@b.com', 'senha');
+      expect(result).toEqual({
+        access_token: 'id-token',
+        refresh_token: 'refresh-token',
+        expires_in: 3600,
       });
     });
 
-    it('o papel de users manda sobre o de credentials', async () => {
-      authRepository.findByEmail.mockResolvedValue(
-        new AuthUser({ id: '1', email: 'a@b.com', password: 'hash', role: 'teacher' }),
+    it('traduz credencial recusada em 401 com a mensagem da tela', async () => {
+      identity.signInWithPassword.mockRejectedValue(
+        new IdentityToolkitError(
+          'INVALID_LOGIN_CREDENTIALS',
+          'E-mail ou senha incorretos.',
+        ),
       );
-      // promovida em users, credencial ainda com o papel antigo
-      userRepository.findById.mockResolvedValue({ id: '1', role: 'manager' });
-      bcryptService.compare.mockResolvedValue(true);
-      jwtService.sign.mockReturnValue('token-123');
 
-      await service.login('a@b.com', 'senha');
-
-      expect(jwtService.sign).toHaveBeenCalledWith(
-        expect.objectContaining({ role: 'manager' }),
-      );
-    });
-
-    it('usa credentials como ponte enquanto users ainda não tem papel', async () => {
-      authRepository.findByEmail.mockResolvedValue(
-        new AuthUser({ id: '1', email: 'a@b.com', password: 'hash', role: 'manager' }),
-      );
-      userRepository.findById.mockResolvedValue({ id: '1' }); // sem role
-      bcryptService.compare.mockResolvedValue(true);
-      jwtService.sign.mockReturnValue('token-123');
-
-      await service.login('a@b.com', 'senha');
-
-      expect(jwtService.sign).toHaveBeenCalledWith(
-        expect.objectContaining({ role: 'manager' }),
-      );
-    });
-
-    it('cai no isTeacher legado quando não há papel em lugar nenhum', async () => {
-      authRepository.findByEmail.mockResolvedValue(
-        new AuthUser({ id: '1', email: 'a@b.com', password: 'hash' }),
-      );
-      userRepository.findById.mockResolvedValue({ id: '1', isTeacher: true });
-      bcryptService.compare.mockResolvedValue(true);
-      jwtService.sign.mockReturnValue('token-123');
-
-      await service.login('a@b.com', 'senha');
-
-      expect(jwtService.sign).toHaveBeenCalledWith(
-        expect.objectContaining({ role: 'teacher' }),
-      );
-    });
-
-    it('sem nenhuma pista, cai no menor privilégio', async () => {
-      authRepository.findByEmail.mockResolvedValue(
-        new AuthUser({ id: '1', email: 'a@b.com', password: 'hash' }),
-      );
-      userRepository.findById.mockResolvedValue(null);
-      bcryptService.compare.mockResolvedValue(true);
-      jwtService.sign.mockReturnValue('token-123');
-
-      await service.login('a@b.com', 'senha');
-
-      expect(jwtService.sign).toHaveBeenCalledWith(
-        expect.objectContaining({ role: 'student' }),
-      );
-    });
-
-    it('lança Unauthorized quando o usuário não existe', async () => {
-      authRepository.findByEmail.mockResolvedValue(null);
-      await expect(service.login('x@y.com', 'senha')).rejects.toBeInstanceOf(
+      await expect(service.login('a@b.com', 'errada')).rejects.toBeInstanceOf(
         UnauthorizedException,
       );
     });
 
-    it('lança Unauthorized quando a senha não confere', async () => {
-      authRepository.findByEmail.mockResolvedValue(
-        new AuthUser({ id: '1', email: 'a@b.com', password: 'hash', role: 'student' }),
+    it('grava o papel ausente e reemite o token, em vez de devolvê-lo sem papel', async () => {
+      // Um token sem a claim passaria pelo AuthGuard e morreria no RolesGuard,
+      // com 403 em toda tela e nenhuma pista do motivo.
+      auth.verifyIdToken.mockResolvedValueOnce({ uid: 'uid-1', email: 'a@b.com' });
+      userRepository.findById.mockResolvedValue({ id: 'uid-1', role: 'manager' });
+
+      const result = await service.login('a@b.com', 'senha');
+
+      expect(auth.setCustomUserClaims).toHaveBeenCalledWith('uid-1', {
+        role: 'manager',
+      });
+      expect(identity.refresh).toHaveBeenCalledWith('refresh-token');
+      expect(result.access_token).toBe('id-token-2');
+    });
+
+    it('resolve o papel pelo isTeacher legado quando users não tem role', async () => {
+      auth.verifyIdToken.mockResolvedValueOnce({ uid: 'uid-1', email: 'a@b.com' });
+      userRepository.findById.mockResolvedValue({ id: 'uid-1', isTeacher: true });
+
+      await service.login('a@b.com', 'senha');
+
+      expect(auth.setCustomUserClaims).toHaveBeenCalledWith('uid-1', {
+        role: 'teacher',
+      });
+    });
+
+    it('sem nenhuma pista, cai no menor privilégio', async () => {
+      auth.verifyIdToken.mockResolvedValueOnce({ uid: 'uid-1', email: 'a@b.com' });
+      userRepository.findById.mockResolvedValue(null);
+
+      await service.login('a@b.com', 'senha');
+
+      expect(auth.setCustomUserClaims).toHaveBeenCalledWith('uid-1', {
+        role: 'student',
+      });
+    });
+
+    it('não toca no banco quando o token já traz o papel', async () => {
+      await service.login('a@b.com', 'senha');
+
+      expect(userRepository.findById).not.toHaveBeenCalled();
+      expect(auth.setCustomUserClaims).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('refresh', () => {
+    it('troca o refresh token por uma sessão nova', async () => {
+      const result = await service.refresh('refresh-token');
+
+      expect(identity.refresh).toHaveBeenCalledWith('refresh-token');
+      expect(result.access_token).toBe('id-token-2');
+    });
+
+    it('devolve 401 quando o refresh token já não vale', async () => {
+      identity.refresh.mockRejectedValue(
+        new IdentityToolkitError('TOKEN_EXPIRED', 'Sessão expirada. Entre novamente.'),
       );
-      bcryptService.compare.mockResolvedValue(false);
-      await expect(service.login('a@b.com', 'errada')).rejects.toBeInstanceOf(
+
+      await expect(service.refresh('velho')).rejects.toBeInstanceOf(
         UnauthorizedException,
       );
     });
   });
 
-  describe('verifyToken', () => {
-    it('lança Unauthorized quando o token é inválido', () => {
-      jwtService.verify.mockImplementation(() => {
-        throw new Error('invalid');
+  describe('logout', () => {
+    it('revoga todas as sessões da pessoa', async () => {
+      await service.logout('uid-1');
+      expect(auth.revokeRefreshTokens).toHaveBeenCalledWith('uid-1');
+    });
+
+    it('não falha quando a revogação falha', async () => {
+      // O front já descartou os tokens: transformar isso em erro deixaria a
+      // tela presa numa saída que, do ponto de vista dela, já aconteceu.
+      auth.revokeRefreshTokens.mockRejectedValue(new Error('rede'));
+      await expect(service.logout('uid-1')).resolves.toBeUndefined();
+    });
+  });
+
+  describe('verifyIdToken', () => {
+    it('monta o usuário do request a partir das claims', async () => {
+      const user = await service.verifyIdToken('id-token');
+
+      expect(user).toEqual({
+        sub: 'uid-1',
+        email: 'a@b.com',
+        role: 'student',
+        emailVerified: true,
       });
-      expect(() => service.verifyToken('bad')).toThrow(UnauthorizedException);
+    });
+
+    it('resolve o papel pelo banco quando a claim falta', async () => {
+      auth.verifyIdToken.mockResolvedValue({ uid: 'uid-1', email: 'a@b.com' });
+      userRepository.findById.mockResolvedValue({ id: 'uid-1', role: 'teacher' });
+
+      const user = await service.verifyIdToken('id-token');
+
+      expect(user.role).toBe('teacher');
+    });
+
+    it('lança Unauthorized quando o token é inválido', async () => {
+      auth.verifyIdToken.mockRejectedValue(new Error('expired'));
+
+      await expect(service.verifyIdToken('bad')).rejects.toBeInstanceOf(
+        UnauthorizedException,
+      );
     });
   });
 });

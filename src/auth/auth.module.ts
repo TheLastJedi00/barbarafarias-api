@@ -10,6 +10,10 @@ import { UserRepository } from '../users/user.repository';
 
 @Module({
   imports: [
+    // Explícito, e não herdado do `isGlobal` do app: o `IdentityToolkitClient`
+    // depende do ConfigService, e sem isto o módulo só falha ao ser montado
+    // fora do AppModule — em teste, ou no dia em que o `isGlobal` mudar.
+    ConfigModule,
     JwtModule.registerAsync({
       imports: [ConfigModule],
       inject: [ConfigService],
