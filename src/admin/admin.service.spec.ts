@@ -8,6 +8,13 @@ describe('AdminService.migrateRoles', () => {
     mergeAll: jest.Mock;
     moveAll: jest.Mock;
   };
+  let auth: { getUser: jest.Mock; setCustomUserClaims: jest.Mock };
+
+  /**
+   * Contas do Firebase por uid. `undefined` = conta ausente, que é o caso de
+   * quem ainda não passou pela migração da Task 83.
+   */
+  let contas: Record<string, { customClaims?: Record<string, any> } | undefined>;
 
   function setup(users: any[], credentials: any[], agenda: any[] = []) {
     repository = {
@@ -19,7 +26,20 @@ describe('AdminService.migrateRoles', () => {
       mergeAll: jest.fn().mockResolvedValue(undefined),
       moveAll: jest.fn().mockResolvedValue(undefined),
     };
-    service = new AdminService(repository as any);
+    contas = Object.fromEntries(users.map((u) => [u.id, { customClaims: {} }]));
+    auth = {
+      getUser: jest.fn(async (uid: string) => {
+        const conta = contas[uid];
+        if (!conta) {
+          throw Object.assign(new Error('not found'), {
+            code: 'auth/user-not-found',
+          });
+        }
+        return conta;
+      }),
+      setCustomUserClaims: jest.fn().mockResolvedValue(undefined),
+    };
+    service = new AdminService(repository as any, auth as any);
   }
 
   function updatesFor(collection: string) {
@@ -29,7 +49,7 @@ describe('AdminService.migrateRoles', () => {
     return call ? call[1] : [];
   }
 
-  it('migra isTeacher para role em users e credentials', async () => {
+  it('migra isTeacher para role em users e grava a claim de cada conta', async () => {
     setup(
       [
         { id: 'u1', data: { isTeacher: true } },
@@ -46,13 +66,32 @@ describe('AdminService.migrateRoles', () => {
     expect(report).toMatchObject({
       totalUsers: 2,
       updatedUsers: 2,
-      updatedCredentials: 2,
-      missingCredentials: [],
+      updatedClaims: 2,
+      missingAccounts: [],
     });
     expect(updatesFor('users')).toEqual([
       { id: 'u1', data: { role: ROLES.TEACHER } },
       { id: 'u2', data: { role: ROLES.STUDENT } },
     ]);
+    expect(auth.setCustomUserClaims).toHaveBeenCalledWith('u1', {
+      role: ROLES.TEACHER,
+    });
+    expect(auth.setCustomUserClaims).toHaveBeenCalledWith('u2', {
+      role: ROLES.STUDENT,
+    });
+  });
+
+  it('não escreve mais na coleção legada de credenciais', async () => {
+    // A partir da spec 016 quem manda no token é a Custom Claim; continuar
+    // gravando em `credentials` daria duas fontes de papel outra vez.
+    setup(
+      [{ id: 'u1', data: { isTeacher: true } }],
+      [{ id: 'u1', data: { role: undefined } }],
+    );
+
+    await service.migrateRoles();
+
+    expect(updatesFor('credentials')).toEqual([]);
   });
 
   it('é idempotente: nada a fazer quando tudo já está sincronizado', async () => {
@@ -60,12 +99,14 @@ describe('AdminService.migrateRoles', () => {
       [{ id: 'u1', data: { isTeacher: true, role: ROLES.TEACHER } }],
       [{ id: 'u1', data: { role: ROLES.TEACHER } }],
     );
+    contas['u1'] = { customClaims: { role: ROLES.TEACHER } };
 
     const report = await service.migrateRoles();
 
     expect(report.updatedUsers).toBe(0);
-    expect(report.updatedCredentials).toBe(0);
+    expect(report.updatedClaims).toBe(0);
     expect(updatesFor('users')).toEqual([]);
+    expect(auth.setCustomUserClaims).not.toHaveBeenCalled();
   });
 
   it('respeita o ajuste manual da gerente em credentials e não rebaixa para teacher', async () => {
@@ -74,25 +115,29 @@ describe('AdminService.migrateRoles', () => {
       [{ id: 'm1', data: { role: ROLES.MANAGER } }],
     );
 
-    const report = await service.migrateRoles();
+    await service.migrateRoles();
 
     expect(updatesFor('users')).toEqual([
       { id: 'm1', data: { role: ROLES.MANAGER } },
     ]);
-    expect(report.updatedCredentials).toBe(0);
+    expect(auth.setCustomUserClaims).toHaveBeenCalledWith('m1', {
+      role: ROLES.MANAGER,
+    });
   });
 
-  it('propaga o papel de users para a credencial fora de sincronia', async () => {
+  it('corrige a claim fora de sincronia com users', async () => {
     setup(
       [{ id: 'm1', data: { role: ROLES.MANAGER, isTeacher: true } }],
       [{ id: 'm1', data: { role: ROLES.TEACHER } }],
     );
+    contas['m1'] = { customClaims: { role: ROLES.TEACHER } };
 
-    await service.migrateRoles();
+    const report = await service.migrateRoles();
 
-    expect(updatesFor('credentials')).toEqual([
-      { id: 'm1', data: { role: ROLES.MANAGER } },
-    ]);
+    expect(auth.setCustomUserClaims).toHaveBeenCalledWith('m1', {
+      role: ROLES.MANAGER,
+    });
+    expect(report.updatedClaims).toBe(1);
   });
 
   describe('migração dos slots de agenda', () => {
@@ -153,12 +198,15 @@ describe('AdminService.migrateRoles', () => {
     });
   });
 
-  it('reporta usuários sem credencial em vez de falhar', async () => {
+  it('reporta quem ainda não tem conta no Firebase em vez de falhar', async () => {
+    // É o estado esperado antes de `/admin/migrate-auth` rodar: a lista diz
+    // exatamente quem ficou de fora, em vez de a migração inteira parar.
     setup([{ id: 'u1', data: { isTeacher: false } }], []);
+    contas['u1'] = undefined;
 
     const report = await service.migrateRoles();
 
-    expect(report.missingCredentials).toEqual(['u1']);
-    expect(report.updatedCredentials).toBe(0);
+    expect(report.missingAccounts).toEqual(['u1']);
+    expect(report.updatedClaims).toBe(0);
   });
 });

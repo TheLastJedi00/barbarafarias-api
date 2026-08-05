@@ -1,11 +1,8 @@
 import { Module } from '@nestjs/common';
-import { JwtModule } from '@nestjs/jwt';
-import { ConfigModule, ConfigService } from '@nestjs/config';
+import { ConfigModule } from '@nestjs/config';
 import { ThrottlerModule } from '@nestjs/throttler';
 import { AuthService } from './auth.service';
-import { BcryptService } from './bcrypt.service';
 import { AuthController } from './auth.controller';
-import { AuthRepository } from './auth.repository';
 import { IdentityToolkitClient } from './identity-toolkit.client';
 import { EmailCooldownService } from './email-cooldown.service';
 import { UserRepository } from '../users/user.repository';
@@ -21,20 +18,10 @@ import { UserRepository } from '../users/user.repository';
     // fosse, os webhooks de pagamento tomariam 429 numa rajada legítima de
     // eventos, e o efeito seria pagamento não processado.
     ThrottlerModule.forRoot([{ ttl: 60_000, limit: 10 }]),
-    JwtModule.registerAsync({
-      imports: [ConfigModule],
-      inject: [ConfigService],
-      useFactory: async (configService: ConfigService) => ({
-        secret: configService.get<string>('JWT_SECRET'),
-        signOptions: { expiresIn: '3h' },
-      }),
-    }),
   ],
   controllers: [AuthController],
   providers: [
     AuthService,
-    BcryptService,
-    AuthRepository,
     IdentityToolkitClient,
     EmailCooldownService,
     // Provido aqui, e não via UserModule, porque UserModule já importa
