@@ -1,4 +1,8 @@
-import { UnauthorizedException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  UnauthorizedException,
+} from '@nestjs/common';
 import { AuthService } from './auth.service';
 import { IdentityToolkitError } from './identity-toolkit.client';
 
@@ -8,13 +12,17 @@ describe('AuthService', () => {
     verifyIdToken: jest.Mock;
     setCustomUserClaims: jest.Mock;
     revokeRefreshTokens: jest.Mock;
+    createUser: jest.Mock;
+    deleteUser: jest.Mock;
+    updateUser: jest.Mock;
   };
   let identity: {
     signInWithPassword: jest.Mock;
     refresh: jest.Mock;
     sendPasswordResetEmail: jest.Mock;
+    sendVerificationEmail: jest.Mock;
   };
-  let userRepository: { findById: jest.Mock };
+  let userRepository: { findById: jest.Mock; update: jest.Mock };
   let cooldown: { enforce: jest.Mock };
 
   const sessao = {
@@ -34,19 +42,24 @@ describe('AuthService', () => {
       }),
       setCustomUserClaims: jest.fn().mockResolvedValue(undefined),
       revokeRefreshTokens: jest.fn().mockResolvedValue(undefined),
+      createUser: jest.fn().mockResolvedValue({ uid: 'uid-1' }),
+      deleteUser: jest.fn().mockResolvedValue(undefined),
+      updateUser: jest.fn().mockResolvedValue(undefined),
     };
     identity = {
       signInWithPassword: jest.fn().mockResolvedValue(sessao),
       refresh: jest.fn().mockResolvedValue({ ...sessao, idToken: 'id-token-2' }),
       sendPasswordResetEmail: jest.fn().mockResolvedValue(undefined),
+      sendVerificationEmail: jest.fn().mockResolvedValue(undefined),
     };
-    userRepository = { findById: jest.fn().mockResolvedValue(null) };
+    userRepository = {
+      findById: jest.fn().mockResolvedValue(null),
+      update: jest.fn().mockResolvedValue(undefined),
+    };
     cooldown = { enforce: jest.fn().mockResolvedValue(undefined) };
     service = new AuthService(
       auth as any,
       identity as any,
-      { save: jest.fn(), delete: jest.fn() } as any,
-      { transform: jest.fn(), compare: jest.fn() } as any,
       userRepository as any,
       cooldown as any,
     );
@@ -186,6 +199,140 @@ describe('AuthService', () => {
       );
 
       await expect(service.sendPasswordReset('a@b.com')).rejects.toBeDefined();
+    });
+  });
+
+  describe('createAccount', () => {
+    const conta = {
+      uid: 'uid-1',
+      email: 'a@b.com',
+      password: 'segredo',
+      role: 'student' as const,
+    };
+
+    it('cria a conta com o papel na claim e dispara a verificação', async () => {
+      await service.createAccount(conta);
+
+      expect(auth.createUser).toHaveBeenCalledWith({
+        uid: 'uid-1',
+        email: 'a@b.com',
+        password: 'segredo',
+      });
+      expect(auth.setCustomUserClaims).toHaveBeenCalledWith('uid-1', {
+        role: 'student',
+      });
+      expect(identity.sendVerificationEmail).toHaveBeenCalledWith('id-token');
+    });
+
+    it('recusa e-mail já usado com 409, em vez de deixar o erro cru subir', async () => {
+      // A coleção `credentials` aceitava duplicata calada; o Firebase não. Sem
+      // esta tradução, a tela de cadastro mostraria um erro do SDK.
+      auth.createUser.mockRejectedValue({ code: 'auth/email-already-exists' });
+
+      await expect(service.createAccount(conta)).rejects.toBeInstanceOf(
+        ConflictException,
+      );
+    });
+
+    it('recusa senha curta com 400', async () => {
+      auth.createUser.mockRejectedValue({ code: 'auth/invalid-password' });
+
+      await expect(service.createAccount(conta)).rejects.toBeInstanceOf(
+        BadRequestException,
+      );
+    });
+
+    it('não derruba o cadastro quando o e-mail de verificação falha', async () => {
+      // A gerente cadastrando um aluno na frente dele não pode perder o
+      // cadastro porque o e-mail não saiu.
+      identity.sendVerificationEmail.mockRejectedValue(new Error('smtp'));
+
+      await expect(service.createAccount(conta)).resolves.toBeUndefined();
+      expect(auth.createUser).toHaveBeenCalled();
+    });
+  });
+
+  describe('deleteAccount', () => {
+    it('apaga a conta', async () => {
+      await service.deleteAccount('uid-1');
+      expect(auth.deleteUser).toHaveBeenCalledWith('uid-1');
+    });
+
+    it('trata conta já ausente como sucesso', async () => {
+      // É chamada tanto no rollback quanto na exclusão: nos dois casos o que
+      // importa é a conta não existir no fim.
+      auth.deleteUser.mockRejectedValue({ code: 'auth/user-not-found' });
+
+      await expect(service.deleteAccount('uid-1')).resolves.toBeUndefined();
+    });
+
+    it('deixa subir qualquer outra falha', async () => {
+      auth.deleteUser.mockRejectedValue({ code: 'auth/internal-error' });
+
+      await expect(service.deleteAccount('uid-1')).rejects.toBeDefined();
+    });
+  });
+
+  describe('changeEmail', () => {
+    it('confere a senha, atualiza os dois lados e pede verificação', async () => {
+      await service.changeEmail('uid-1', 'velho@b.com', 'novo@b.com', 'segredo');
+
+      expect(identity.signInWithPassword).toHaveBeenCalledWith(
+        'velho@b.com',
+        'segredo',
+      );
+      expect(auth.updateUser).toHaveBeenCalledWith('uid-1', {
+        email: 'novo@b.com',
+        emailVerified: false,
+      });
+      expect(userRepository.update).toHaveBeenCalledWith(
+        expect.objectContaining({ id: 'uid-1', email: 'novo@b.com' }),
+      );
+    });
+
+    it('recusa quando a senha atual não confere', async () => {
+      identity.signInWithPassword.mockRejectedValue(
+        new IdentityToolkitError(
+          'INVALID_LOGIN_CREDENTIALS',
+          'E-mail ou senha incorretos.',
+        ),
+      );
+
+      await expect(
+        service.changeEmail('uid-1', 'velho@b.com', 'novo@b.com', 'errada'),
+      ).rejects.toBeInstanceOf(UnauthorizedException);
+      expect(auth.updateUser).not.toHaveBeenCalled();
+    });
+
+    it('recusa e-mail já usado por outra conta', async () => {
+      auth.updateUser.mockRejectedValue({ code: 'auth/email-already-exists' });
+
+      await expect(
+        service.changeEmail('uid-1', 'velho@b.com', 'novo@b.com', 'segredo'),
+      ).rejects.toBeInstanceOf(ConflictException);
+    });
+
+    it('desfaz no Firebase quando o documento não grava', async () => {
+      // Sem este rollback, `users.email` ficaria apontando para um endereço
+      // com o qual ninguém consegue entrar — a pessoa trancada fora da conta.
+      userRepository.update.mockRejectedValue(new Error('firestore fora'));
+
+      await expect(
+        service.changeEmail('uid-1', 'velho@b.com', 'novo@b.com', 'segredo'),
+      ).rejects.toThrow('firestore fora');
+      expect(auth.updateUser).toHaveBeenLastCalledWith('uid-1', {
+        email: 'velho@b.com',
+        emailVerified: true,
+      });
+    });
+  });
+
+  describe('resendVerification', () => {
+    it('reenvia usando o id token de quem pediu', async () => {
+      await service.resendVerification('id-token', 'a@b.com');
+
+      expect(cooldown.enforce).toHaveBeenCalledWith('a@b.com');
+      expect(identity.sendVerificationEmail).toHaveBeenCalledWith('id-token');
     });
   });
 

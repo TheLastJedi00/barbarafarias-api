@@ -1,8 +1,10 @@
 import {
   Body,
   Controller,
+  Headers,
   HttpCode,
   HttpStatus,
+  Patch,
   Post,
   UseGuards,
 } from '@nestjs/common';
@@ -10,6 +12,7 @@ import { Throttle, ThrottlerGuard } from '@nestjs/throttler';
 import { AuthService, SessionResponse } from './auth.service';
 import { LoginDto } from './dto/login.dto';
 import { ForgotPasswordDto, RefreshDto } from './dto/session.dto';
+import { ChangeEmailDto } from './dto/change-email.dto';
 import { Public } from '../decorators/public.decorator';
 import { CurrentUser } from '../decorators/current-user.decorator';
 import type { AuthenticatedUser } from '../decorators/current-user.decorator';
@@ -71,5 +74,37 @@ export class AuthController {
   @HttpCode(HttpStatus.NO_CONTENT)
   async forgotPassword(@Body() dto: ForgotPasswordDto): Promise<void> {
     await this.authService.sendPasswordReset(dto.email);
+  }
+
+  /**
+   * Reenvia a verificação de e-mail (Task 78). O próprio bearer token da
+   * requisição é a credencial que o Firebase exige — por isso ele é lido do
+   * header aqui em vez de reconstruído.
+   */
+  @Post('reenviar-verificacao')
+  @Throttle({ default: { limit: 3, ttl: 60_000 } })
+  @HttpCode(HttpStatus.NO_CONTENT)
+  async resendVerification(
+    @CurrentUser() user: AuthenticatedUser,
+    @Headers('authorization') authorization: string,
+  ): Promise<void> {
+    const idToken = authorization.replace(/^Bearer /i, '');
+    await this.authService.resendVerification(idToken, user.email);
+  }
+
+  /** Troca o e-mail da conta, exigindo a senha atual (Task 79). */
+  @Patch('email')
+  @Throttle({ default: { limit: 3, ttl: 60_000 } })
+  @HttpCode(HttpStatus.NO_CONTENT)
+  async changeEmail(
+    @CurrentUser() user: AuthenticatedUser,
+    @Body() dto: ChangeEmailDto,
+  ): Promise<void> {
+    await this.authService.changeEmail(
+      user.sub,
+      user.email,
+      dto.novoEmail,
+      dto.senhaAtual,
+    );
   }
 }

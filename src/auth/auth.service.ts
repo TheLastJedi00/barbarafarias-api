@@ -1,8 +1,12 @@
-import { Inject, Injectable, Logger, UnauthorizedException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  Inject,
+  Injectable,
+  Logger,
+  UnauthorizedException,
+} from '@nestjs/common';
 import { Auth } from 'firebase-admin/auth';
-import { AuthRepository } from './auth.repository';
-import { BcryptService } from './bcrypt.service';
-import { AuthUser } from './entities/auth-user.entity';
 import {
   FirebaseSession,
   IdentityToolkitClient,
@@ -14,6 +18,7 @@ import { FIREBASE_AUTH } from '../firestore/firebase-auth.module';
 import { Role, resolveRole } from '../types/role';
 import type { AuthenticatedUser } from '../decorators/current-user.decorator';
 import { UserRepository } from '../users/user.repository';
+import { User } from '../users/user.entity';
 
 /** O que as rotas de sessão devolvem. `access_token` é o ID Token do Firebase. */
 export interface SessionResponse {
@@ -30,8 +35,6 @@ export class AuthService {
   constructor(
     @Inject(FIREBASE_AUTH) private readonly auth: Auth,
     private readonly identity: IdentityToolkitClient,
-    private readonly authRepository: AuthRepository,
-    private readonly bcryptService: BcryptService,
     private readonly userRepository: UserRepository,
     private readonly cooldown: EmailCooldownService,
   ) {}
@@ -130,17 +133,141 @@ export class AuthService {
     }
   }
 
-  async registerCredentials(data: Partial<AuthUser>) {
-    const hashedPassword = await this.bcryptService.transform(data.password!);
-    const authUser = new AuthUser({
-      ...data,
-      password: hashedPassword,
-    });
-    await this.authRepository.save(authUser);
+  /**
+   * Cria a conta no Firebase com o papel já na Custom Claim (spec 016 Task 77).
+   *
+   * O `uid` é o mesmo id do documento em `users` — é isso que mantém `sub`
+   * sendo a chave de `users/{id}` e evita mexer em toda rota que faz
+   * `findById(user.sub)`.
+   */
+  async createAccount(data: {
+    uid: string;
+    email: string;
+    password: string;
+    role: Role;
+  }): Promise<void> {
+    try {
+      await this.auth.createUser({
+        uid: data.uid,
+        email: data.email,
+        password: data.password,
+      });
+    } catch (error) {
+      throw this.toAccountException(error);
+    }
+
+    await this.auth.setCustomUserClaims(data.uid, { role: data.role });
+    await this.sendVerificationFor(data.email, data.password);
   }
 
-  async removeCredentials(id: string) {
-    await this.authRepository.delete(id);
+  /**
+   * Apaga a conta (spec 016 Task 80). Tolerante à conta já ausente: é chamada
+   * tanto no rollback de um cadastro que falhou quanto na exclusão do aluno, e
+   * nos dois casos o objetivo é o mesmo — a conta não existir no fim.
+   */
+  async deleteAccount(uid: string): Promise<void> {
+    try {
+      await this.auth.deleteUser(uid);
+    } catch (error: any) {
+      if (error?.code === 'auth/user-not-found') {
+        return;
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * Troca o e-mail da conta (spec 016 Task 79).
+   *
+   * **A senha atual é exigida** porque esta é a única operação que muda *quem*
+   * a pessoa é para o sistema: sem re-autenticação, uma aba esquecida aberta
+   * num computador compartilhado bastaria para sequestrar a conta.
+   *
+   * A ordem é deliberada — Firebase primeiro, documento depois, com desfazer
+   * no meio. O inverso deixaria `users.email` apontando para um endereço com o
+   * qual ninguém consegue entrar, que é exatamente o modo de falha que tranca
+   * a pessoa fora da própria conta.
+   */
+  async changeEmail(
+    uid: string,
+    currentEmail: string,
+    novoEmail: string,
+    senhaAtual: string,
+  ): Promise<void> {
+    await this.run(() =>
+      this.identity.signInWithPassword(currentEmail, senhaAtual),
+    );
+
+    try {
+      await this.auth.updateUser(uid, {
+        email: novoEmail,
+        emailVerified: false,
+      });
+    } catch (error) {
+      throw this.toAccountException(error);
+    }
+
+    try {
+      // `update` faz merge, então gravar só o id e o e-mail não apaga o resto
+      // do documento — e não corre com uma edição de perfil em paralelo.
+      await this.userRepository.update(
+        new User({ id: uid, email: novoEmail }),
+      );
+    } catch (error) {
+      await this.auth.updateUser(uid, {
+        email: currentEmail,
+        emailVerified: true,
+      });
+      throw error;
+    }
+
+    // O endereço novo precisa ser verificado, mas o e-mail não sair não desfaz
+    // a troca — que já valeu no Firebase e no documento.
+    await this.sendVerificationFor(novoEmail, senhaAtual);
+  }
+
+  /**
+   * Reenvia a verificação para quem já está logado (spec 016 Task 78). O ID
+   * Token de quem chama é a credencial: é assim que o Firebase garante que
+   * ninguém dispara verificação para a conta de outra pessoa.
+   */
+  async resendVerification(idToken: string, email: string): Promise<void> {
+    await this.cooldown.enforce(email);
+    await this.run(() => this.identity.sendVerificationEmail(idToken));
+  }
+
+  /**
+   * Verificação no cadastro. Precisa de um ID Token, e o único jeito de obtê-lo
+   * aqui é entrar com a senha que acabamos de definir — o Admin SDK só sabe
+   * *gerar* o link, não enviá-lo.
+   *
+   * **Nunca derruba o cadastro:** a gerente cadastrando um aluno na frente dele
+   * não pode perder o cadastro porque o e-mail não saiu.
+   */
+  private async sendVerificationFor(
+    email: string,
+    password: string,
+  ): Promise<void> {
+    try {
+      const session = await this.identity.signInWithPassword(email, password);
+      await this.identity.sendVerificationEmail(session.idToken);
+    } catch (error) {
+      this.logger.warn(`Verificação de e-mail não enviada para ${email}: ${error}`);
+    }
+  }
+
+  /** Erros do Admin SDK ao criar conta, traduzidos para o que a tela mostra. */
+  private toAccountException(error: any): Error {
+    if (error?.code === 'auth/email-already-exists') {
+      return new ConflictException('Já existe uma conta com esse e-mail.');
+    }
+    if (error?.code === 'auth/invalid-password') {
+      return new BadRequestException('A senha precisa ter ao menos 6 caracteres.');
+    }
+    if (error?.code === 'auth/invalid-email') {
+      return new BadRequestException('E-mail inválido.');
+    }
+    return error;
   }
 
   /**
