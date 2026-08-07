@@ -17,7 +17,7 @@ export interface Blueprint {
     id: string;
     title: string;
     context: string;
-    topics: { id: string; prompt: string }[];
+    topics: { id: string; title: string }[];
   }[];
 }
 
@@ -55,7 +55,7 @@ export class CurriculumService {
       order: mi,
       topics: m.topics.map((t, ti) => ({
         id: t.id ?? randomUUID(),
-        prompt: t.prompt,
+        title: t.title,
         order: ti,
       })),
     }));
@@ -67,16 +67,24 @@ export class CurriculumService {
 
   /** Planta baixa: módulos e tópicos ordenados, sem campos de controle. */
   async getBlueprint(level: Level): Promise<Blueprint> {
-    const curriculum = await this.getLevel(level);
+    return this.toBlueprint(await this.getLevel(level));
+  }
+
+  /**
+   * Projeção pura de um nível já carregado. Existe separada do `getBlueprint`
+   * para que a geração, que precisa do prompt do nível E da planta baixa, não
+   * leia o mesmo documento do Firestore duas vezes.
+   */
+  toBlueprint(curriculum: LevelCurriculum): Blueprint {
     return {
-      level,
+      level: curriculum.level,
       modules: this.normalize(curriculum.modules).map((m) => ({
         id: m.id,
         title: m.title,
         context: m.context,
         topics: [...m.topics]
           .sort((a, b) => a.order - b.order)
-          .map((t) => ({ id: t.id, prompt: t.prompt })),
+          .map((t) => ({ id: t.id, title: t.title })),
       })),
     };
   }

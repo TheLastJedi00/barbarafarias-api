@@ -1,9 +1,17 @@
 import { Level } from '../types/student.level';
 
-/** Tópico: unidade mínima de geração. `prompt` é a instrução granular. */
+/**
+ * Tópico: unidade mínima de geração. `title` é o título que a Teacher cadastra
+ * no painel e que chega ao aluno — a geração o usa como âncora do conteúdo, e
+ * não inventa mais o seu próprio.
+ *
+ * Chamava-se `prompt` até a spec 020, herdado de um desenho de "instrução
+ * granular" que a implementação nunca seguiu. Docs gravados antes do rename
+ * ainda têm o campo antigo; a normalização mora no repositório.
+ */
 export interface CurriculumTopic {
   id: string;
-  prompt: string;
+  title: string;
   order: number;
 }
 

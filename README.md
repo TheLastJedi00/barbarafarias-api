@@ -108,7 +108,7 @@ src/
 │   ├── supply.service.ts      # Orquestra esqueleto, tópico e consolidação
 │   ├── supply.repository.ts   # Persistência no Firestore
 │   ├── supply.model.ts        # Model de supply
-│   ├── prompts.ts             # Composição dos prompts (esqueleto/tópico)
+│   ├── prompts.ts             # Composição dos prompts (intros de módulo/tópico)
 │   ├── dtos/
 │   │   ├── SupplyInfo.dto.ts  # DTO { studentId, level } (skeleton)
 │   │   ├── TopicRequest.dto.ts # DTO de geração de um tópico
@@ -122,10 +122,6 @@ src/
 │   ├── video.entity.ts        # Entidade de vídeo (Video, VideoTopic, VideoInfo)
 │   └── dtos/
 │       └── video.dto.ts       # DTOs de vídeo
-├── prompts/               # Módulo de prompts para IA (legado, lido pela geração)
-│   ├── prompt.service.ts      # Busca de prompts por nível
-│   ├── prompt.repository.ts   # Persistência no Firestore
-│   └── prompt.model.ts        # Model de prompt
 ├── curriculum/            # Painel de prompts + estrutura curricular (Spec 008)
 │   ├── curriculum.controller.ts # /curriculum (principal, nível, blueprint)
 │   ├── curriculum.service.ts    # Normalização de ordem + projeção de blueprint
@@ -703,12 +699,25 @@ Materiais didáticos personalizados gerados por **IA (Google Gemini)** para cada
 > O cliente envia `POST /supplies/consolidate/module` por módulo e fecha com
 > `POST /supplies/consolidate/finish`. O `POST /supplies/consolidate` de uma tacada
 > segue existindo para materiais pequenos.
+>
+> **Fonte dos prompts (spec 020):** a geração lê a coleção **`curriculum`**, a
+> mesma que o painel `/prompt-manager` edita. O prompt-base é o **Prompt
+> Principal** (`curriculum/principal`) concatenado ao **prompt do nível**
+> (`curriculum/<level>`). A coleção `prompts`, que a geração lia antes e que
+> nenhum endpoint alimentava, foi **removida** — era a causa do erro
+> "Prompt not found" em produção.
 
 #### `POST /supplies/skeleton`
 
-Etapa 1 — gera a **planta baixa** do material: módulos com título/introdução e a
-lista de títulos de tópicos, sem o conteúdo pesado. Cada tópico recebe um `id`
-estável (`m{i}_t{j}`) usado pelo cliente para chavear a UI e o retry.
+Etapa 1 — monta a **planta baixa** do material a partir do currículo cadastrado
+pela Teacher: os módulos, os títulos dos tópicos e seus `id` (uuid do currículo)
+vêm de `curriculum/<level>`, não da IA. À IA cabe apenas escrever a `text` de
+cada módulo — uma introdução dirigida ao aluno, dizendo o que o módulo aborda,
+ancorada nos títulos dos tópicos, nos objetivos do aluno e no prognóstico.
+
+> Até a spec 020 a IA inventava a estrutura inteira e os ids eram posicionais
+> (`m{i}_t{j}`). Quantos módulos existem, com que nomes e em que ordem passou a
+> ser decisão da Teacher no painel.
 
 | Propriedade | Valor |
 |---|---|
@@ -725,14 +734,15 @@ estável (`m{i}_t{j}`) usado pelo cliente para chavear a UI e o retry.
   "modules": [
     {
       "title": "Título do Módulo",
-      "text": "Introdução do módulo",
-      "topics": [{ "id": "m0_t0", "topic": "Greetings" }]
+      "text": "Introdução do módulo, escrita para o aluno",
+      "topics": [{ "id": "b7f1c2a4-…", "topic": "Greetings" }]
     }
   ]
 }
 ```
 
-**Erros:** `404` aluno não encontrado · `500` prompt ausente ou IA em formato inválido
+**Erros:** `404` aluno não encontrado · `422` nível sem currículo configurado
+(prompt do nível e módulos vazios no `/prompt-manager`) · `500` IA em formato inválido
 
 ---
 
@@ -1664,19 +1674,23 @@ que alimenta a geração de material: prompt principal (global), prompt por nív
         "title": "Rotina Diária",
         "context": "Diretriz temática do módulo",
         "topics": [
-          { "id": "opcional", "prompt": "Gere um diálogo pedindo o menu" }
+          { "id": "opcional", "title": "Pedindo o menu no restaurante" }
         ]
       }
     ]
   }
   ```
-- **Blueprint (`GET /levels/:level/blueprint`)** retorna `{ level, modules: [{ id, title, context, topics: [{ id, prompt }] }] }`, já ordenado.
-- **Composição do prompt final** (na geração paralela, uma requisição por tópico):
-  `[Prompt Principal] + [Prompt do Nível] + [Contexto do Módulo] + [Prompt do Tópico] + [Dados do Aluno]`.
-  Variáveis de interpolação previstas: `{{nome_aluno}}`, `{{objetivos}}`, `{{prognostico}}`.
-  > A **integração do fluxo de geração** com este blueprint é da geração granular (Spec 006) e
-  > será conectada quando aquela spec for mesclada; a coleção `curriculum` é intencionalmente
-  > **desacoplada** da coleção legada `prompts` (consumida hoje por `SupplyService`).
+- **`topics[].title` chamava-se `prompt` até a spec 020.** O nome vinha da ideia de
+  "instrução granular de geração", mas o painel sempre gravou ali o **título do tópico**.
+  A leitura aceita os dois campos (`title ?? prompt`), então docs anteriores ao rename
+  continuam válidos e migram no primeiro salvamento — não há script de migração.
+- **Blueprint (`GET /levels/:level/blueprint`)** retorna `{ level, modules: [{ id, title, context, topics: [{ id, title }] }] }`, já ordenado.
+- **Composição do prompt final** (spec 020, uma requisição por tópico):
+  `[Prompt Principal] + [Prompt do Nível] + [Dados do Aluno] + [Título do Módulo] + [Contexto do Módulo] + [Título do Tópico]`.
+  > Este é o **contrato vivo** da geração: `SupplyService` lê esta coleção, e só ela.
+  > A dívida que a spec 008 deixou registrada ("integração deferida até a 006 mesclar")
+  > foi paga na **spec 020**, junto com a remoção da coleção legada `prompts` — que
+  > nenhum endpoint alimentava e cuja ausência produzia `Prompt not found` em produção.
 
 ---
 
@@ -1876,15 +1890,11 @@ Armazena os módulos de vídeos, agrupados por nível.
 }
 ```
 
-### 5. `prompts`
-Armazena os templates de prompt utilizados pela integração do Gemini, categorizados por nível.
-- **Doc ID:** UUID automático ou Identificador de Nível
-```json
-{
-  "level": "string (ex: 'A1')",
-  "prompt": "string (texto do prompt base)"
-}
-```
+### 5. `prompts` — **removida (spec 020)**
+Guardava um prompt-base por nível para a geração. Nenhum endpoint jamais escreveu
+nela: a Teacher editava o painel `/prompt-manager`, que grava em `curriculum`, e a
+geração lia esta aqui — que ficou vazia em dev e em produção e passou a responder
+`Prompt not found`. A fonte dos prompts de geração agora é **`curriculum`** (§8).
 
 ### 6. `turmas`
 Grupos nomeados de alunos.
@@ -1940,14 +1950,18 @@ Planta baixa editável de prompts/estrutura curricular (Spec 008).
       "context": "string (diretriz temática do módulo)",
       "order": "number (índice)",
       "topics": [
-        { "id": "string", "prompt": "string (instrução granular)", "order": "number" }
+        { "id": "string", "title": "string (título do tópico)", "order": "number" }
       ]
     }
   ]
 }
 ```
-> Coleção **desacoplada** da legada `prompts`: a `curriculum` é a fonte do painel e do
-> blueprint; a `prompts` continua sendo lida pela geração atual até a integração da Spec 006.
+> **Fonte única dos prompts de geração desde a spec 020.** `SupplyService` lê esta
+> coleção — prompt-base (`principal` + nível) e estrutura (módulos/tópicos) — e a
+> coleção legada `prompts` deixou de existir.
+>
+> `topics[].title` chamava-se `prompt` até a spec 020; a leitura aceita os dois campos,
+> então docs anteriores seguem válidos e migram no primeiro salvamento do painel.
 
 ### 9. `articles`
 Material de apoio em Markdown (spec 011). Substitui a antiga página do IPA.
