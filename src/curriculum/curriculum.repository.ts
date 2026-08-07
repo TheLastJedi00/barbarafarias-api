@@ -3,10 +3,20 @@ import { Firestore } from 'firebase-admin/firestore';
 import { FIRESTORE } from '../firestore/firestore.module';
 import { Level } from '../types/student.level';
 import {
+  CurriculumModule,
   LevelCurriculum,
   PRINCIPAL_DOC_ID,
   PrincipalPrompt,
 } from './curriculum.model';
+
+/** Forma bruta do módulo no Firestore: `topics[].prompt` é o nome pré-020. */
+interface StoredModule {
+  id: string;
+  title: string;
+  context?: string;
+  order: number;
+  topics?: { id: string; order: number; title?: string; prompt?: string }[];
+}
 
 @Injectable()
 export class CurriculumRepository {
@@ -37,8 +47,27 @@ export class CurriculumRepository {
     return {
       level,
       prompt: data.prompt ?? '',
-      modules: data.modules ?? [],
+      modules: this.readModules(data.modules),
     };
+  }
+
+  /**
+   * Aceita os docs gravados antes da spec 020, quando o título do tópico morava
+   * num campo chamado `prompt`. Evita script de migração: o doc antigo continua
+   * legível e passa a gravar `title` no primeiro salvamento do painel.
+   */
+  private readModules(stored: StoredModule[] | undefined): CurriculumModule[] {
+    return (stored ?? []).map((module) => ({
+      id: module.id,
+      title: module.title,
+      context: module.context ?? '',
+      order: module.order,
+      topics: (module.topics ?? []).map((topic) => ({
+        id: topic.id,
+        title: topic.title ?? topic.prompt ?? '',
+        order: topic.order,
+      })),
+    }));
   }
 
   async upsertLevel(data: LevelCurriculum): Promise<void> {

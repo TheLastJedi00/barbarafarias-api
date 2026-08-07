@@ -10,6 +10,10 @@ import {
  * Tópico enviado pelo painel. A `order` NÃO vem do cliente — o backend a deriva
  * da posição no array (fonte única de verdade da ordem). O `id` é gerado no FE;
  * se ausente, o backend gera um.
+ *
+ * `title` chamava-se `prompt` até a spec 020. O nome vinha da ideia original de
+ * "instrução granular de geração", mas o painel sempre gravou ali o título do
+ * tópico — e o título é o que a geração usa. Renomeado para descrever o dado.
  */
 export class TopicInputDto {
   @IsOptional()
@@ -17,7 +21,7 @@ export class TopicInputDto {
   id?: string;
 
   @IsString()
-  prompt!: string;
+  title!: string;
 }
 
 export class ModuleInputDto {

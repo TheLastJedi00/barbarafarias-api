@@ -17,7 +17,7 @@ export interface Blueprint {
     id: string;
     title: string;
     context: string;
-    topics: { id: string; prompt: string }[];
+    topics: { id: string; title: string }[];
   }[];
 }
 
@@ -55,7 +55,7 @@ export class CurriculumService {
       order: mi,
       topics: m.topics.map((t, ti) => ({
         id: t.id ?? randomUUID(),
-        prompt: t.prompt,
+        title: t.title,
         order: ti,
       })),
     }));
@@ -76,7 +76,7 @@ export class CurriculumService {
         context: m.context,
         topics: [...m.topics]
           .sort((a, b) => a.order - b.order)
-          .map((t) => ({ id: t.id, prompt: t.prompt })),
+          .map((t) => ({ id: t.id, title: t.title })),
       })),
     };
   }
