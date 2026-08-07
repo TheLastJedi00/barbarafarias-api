@@ -46,14 +46,14 @@ describe('CurriculumService', () => {
             title: 'B',
             context: '',
             order: 5,
-            topics: [{ id: 't2', prompt: 'x', order: 9 }],
+            topics: [{ id: 't2', title: 'x', order: 9 }],
           },
           {
             id: 'm1',
             title: 'A',
             context: '',
             order: 1,
-            topics: [{ id: 't1', prompt: 'y', order: 3 }],
+            topics: [{ id: 't1', title: 'y', order: 3 }],
           },
         ],
       });
@@ -74,7 +74,7 @@ describe('CurriculumService', () => {
           {
             title: 'Mod 1',
             context: 'ctx',
-            topics: [{ prompt: 'topico 1' }, { id: 'fixo', prompt: 'topico 2' }],
+            topics: [{ title: 'topico 1' }, { id: 'fixo', title: 'topico 2' }],
           },
         ],
       });
@@ -102,8 +102,8 @@ describe('CurriculumService', () => {
             context: 'ctx',
             order: 0,
             topics: [
-              { id: 't2', prompt: 'segundo', order: 1 },
-              { id: 't1', prompt: 'primeiro', order: 0 },
+              { id: 't2', title: 'segundo', order: 1 },
+              { id: 't1', title: 'primeiro', order: 0 },
             ],
           },
         ],
@@ -116,8 +116,8 @@ describe('CurriculumService', () => {
         title: 'Rotina',
         context: 'ctx',
         topics: [
-          { id: 't1', prompt: 'primeiro' },
-          { id: 't2', prompt: 'segundo' },
+          { id: 't1', title: 'primeiro' },
+          { id: 't2', title: 'segundo' },
         ],
       });
     });

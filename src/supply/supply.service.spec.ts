@@ -3,6 +3,7 @@ import {
   ConflictException,
   InternalServerErrorException,
   NotFoundException,
+  UnprocessableEntityException,
 } from '@nestjs/common';
 import { SupplyService } from './supply.service';
 
@@ -17,9 +18,34 @@ const VALID_TOPIC = {
   music: { title: 'Hello', artist: 'Adele', youtube: 'https://y.tube/x' },
 };
 
-const VALID_SKELETON = [
-  { title: 'Módulo 1', text: 'Intro', topics: [{ topic: 'Greetings' }] },
-];
+/** Currículo cadastrado pela Teacher — fonte da estrutura desde a spec 020. */
+const BLUEPRINT = {
+  level: 'A1',
+  modules: [
+    {
+      id: 'uuid-m1',
+      title: 'Módulo 1',
+      context: 'Foco em situações do dia a dia',
+      topics: [{ id: 'uuid-t1', title: 'Greetings' }],
+    },
+  ],
+};
+
+function makeCurriculum() {
+  return {
+    level: 'A1',
+    prompt: 'Prompt do nível A1',
+    modules: [
+      {
+        id: 'uuid-m1',
+        title: 'Módulo 1',
+        context: 'Foco em situações do dia a dia',
+        order: 0,
+        topics: [{ id: 'uuid-t1', title: 'Greetings', order: 0 }],
+      },
+    ],
+  };
+}
 
 const VALID_MODULE = {
   title: 'Módulo 1',
@@ -48,7 +74,11 @@ describe('SupplyService (fluxo granular)', () => {
     findHeadersByStudentId: jest.Mock;
   };
   let userService: { findById: jest.Mock };
-  let promptService: { getPromptByLevel: jest.Mock };
+  let curriculumService: {
+    getPrincipal: jest.Mock;
+    getLevel: jest.Mock;
+    toBlueprint: jest.Mock;
+  };
   let genAi: { generateJson: jest.Mock };
 
   const dto = { studentId: 's1', level: 'A1' } as any;
@@ -70,30 +100,80 @@ describe('SupplyService (fluxo granular)', () => {
       findHeadersByStudentId: jest.fn().mockResolvedValue([]),
     };
     userService = { findById: jest.fn().mockResolvedValue(makeStudent()) };
-    promptService = {
-      getPromptByLevel: jest.fn().mockResolvedValue({ prompt: 'Gere módulos' }),
+    curriculumService = {
+      getPrincipal: jest.fn().mockResolvedValue({ prompt: 'Você é a Teacher' }),
+      getLevel: jest.fn().mockResolvedValue(makeCurriculum()),
+      toBlueprint: jest.fn().mockReturnValue(BLUEPRINT),
     };
     genAi = { generateJson: jest.fn() };
     service = new SupplyService(
       supplyRepository as any,
       userService as any,
-      promptService as any,
+      curriculumService as any,
       genAi as any,
     );
   });
 
   describe('generateSkeleton', () => {
-    it('devolve os módulos com ids estáveis de tópico', async () => {
-      genAi.generateJson.mockResolvedValue(VALID_SKELETON);
+    it('monta os módulos a partir do currículo, com os ids cadastrados', async () => {
+      genAi.generateJson.mockResolvedValue(['Intro do módulo']);
       const result = await service.generateSkeleton(dto);
-      expect(result.modules[0].topics[0].id).toBe('m0_t0');
+
+      expect(result.modules[0].title).toBe('Módulo 1');
+      expect(result.modules[0].topics[0].id).toBe('uuid-t1');
       expect(result.modules[0].topics[0].topic).toBe('Greetings');
+    });
+
+    it('usa a intro escrita pela IA como texto do módulo', async () => {
+      genAi.generateJson.mockResolvedValue(['Nesta etapa você vai...']);
+      const result = await service.generateSkeleton(dto);
+      expect(result.modules[0].text).toBe('Nesta etapa você vai...');
+    });
+
+    /**
+     * A estrutura vem do currículo, então a IA não tem mais como inventar
+     * módulos: o que ela devolver além das intros é ignorado por construção.
+     */
+    it('ignora intros sobrando e não cria módulos além dos cadastrados', async () => {
+      genAi.generateJson.mockResolvedValue(['a', 'b', 'c']);
+      const result = await service.generateSkeleton(dto);
+      expect(result.modules).toHaveLength(1);
     });
 
     it('propaga NotFound quando o aluno não existe', async () => {
       userService.findById.mockResolvedValue(null);
       await expect(service.generateSkeleton(dto)).rejects.toBeInstanceOf(
         NotFoundException,
+      );
+    });
+
+    /**
+     * O bug da spec 020: sem currículo o serviço devolvia 500 "Prompt not
+     * found", que parecia falha de servidor. Agora é 422 e diz o que fazer.
+     */
+    it('devolve 422 quando o nível não tem currículo configurado', async () => {
+      curriculumService.getLevel.mockResolvedValue({
+        level: 'A1',
+        prompt: '',
+        modules: [],
+      });
+      await expect(service.generateSkeleton(dto)).rejects.toBeInstanceOf(
+        UnprocessableEntityException,
+      );
+    });
+
+    it('devolve 422 quando o nível tem prompt mas nenhum módulo', async () => {
+      curriculumService.getLevel.mockResolvedValue({
+        level: 'A1',
+        prompt: 'prompt do nível',
+        modules: [],
+      });
+      curriculumService.toBlueprint.mockReturnValue({
+        level: 'A1',
+        modules: [],
+      });
+      await expect(service.generateSkeleton(dto)).rejects.toBeInstanceOf(
+        UnprocessableEntityException,
       );
     });
   });
@@ -104,6 +184,31 @@ describe('SupplyService (fluxo granular)', () => {
       const result = await service.generateTopic(topicDto);
       expect(result.topic).toBe('Greetings');
       expect(result.words[0].english).toBe('hello');
+    });
+
+    /** A diretriz temática do módulo é o que dá coesão entre os tópicos. */
+    it('injeta o context do módulo no prompt enviado à IA', async () => {
+      genAi.generateJson.mockResolvedValue(VALID_TOPIC);
+      await service.generateTopic(topicDto);
+
+      const prompt = genAi.generateJson.mock.calls[0][0] as string;
+      expect(prompt).toContain('Foco em situações do dia a dia');
+      expect(prompt).toContain('Prompt do nível A1');
+      expect(prompt).toContain('Você é a Teacher');
+    });
+
+    /**
+     * Currículo editado no meio de uma geração: o módulo some do blueprint. O
+     * tópico ainda deve sair, só que sem a diretriz — falhar aqui perderia o
+     * material inteiro por causa de uma edição no painel.
+     */
+    it('gera o tópico mesmo quando o módulo não casa no currículo', async () => {
+      genAi.generateJson.mockResolvedValue(VALID_TOPIC);
+      const result = await service.generateTopic({
+        ...topicDto,
+        moduleTitle: 'Módulo renomeado',
+      });
+      expect(result.topic).toBe('Greetings');
     });
 
     it('propaga 500 quando a IA retorna formato inválido', async () => {

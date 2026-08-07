@@ -6,6 +6,7 @@ import {
   InternalServerErrorException,
   Logger,
   NotFoundException,
+  UnprocessableEntityException,
 } from '@nestjs/common';
 import { ZodError } from 'zod';
 import { SupplyInfoDto } from './dtos/SupplyInfo.dto';
@@ -17,18 +18,18 @@ import { StudentInfo } from '../types/student.info';
 import { Level } from '../types/student.level';
 import { UserService } from '../users/user.service';
 import { SupplyHeader, SupplyRepository } from './supply.repository';
-import { PromptService } from '../prompts/prompt.service';
+import { Blueprint, CurriculumService } from '../curriculum/curriculum.service';
 import { GeminiProvider } from './gemini/gemini.service';
 import { Supply } from './supply.model';
 import {
+  ModuleIntrosSchema,
   ModuleSchema,
   SkeletonModuleWithId,
-  SkeletonSchema,
   SupplyModulesSchema,
   TopicSchema,
   type Topic,
 } from '../types/student.supply';
-import { buildSkeletonPrompt, buildTopicPrompt } from './prompts';
+import { buildModuleIntrosPrompt, buildTopicPrompt } from './prompts';
 
 @Injectable()
 export class SupplyService {
@@ -36,58 +37,100 @@ export class SupplyService {
   constructor(
     private readonly supplyRepository: SupplyRepository,
     private readonly userService: UserService,
-    private readonly promptService: PromptService,
+    private readonly curriculumService: CurriculumService,
     private readonly genAi: GeminiProvider,
   ) {}
 
   /**
-   * Reidrata o par (aluno + prompt-base do nível) usado por skeleton e topic.
-   * 404 se o aluno não existe; 500 se não há prompt para o nível.
+   * Reidrata o trio (aluno + prompt-base do nível + currículo) usado por
+   * skeleton e topic.
+   *
+   * O prompt-base é a concatenação do Prompt Principal (persona, formato e
+   * diretrizes universais) com o prompt do nível, ambos escritos pela Teacher
+   * no painel `/prompt-manager`. Até a spec 020 isto vinha da coleção `prompts`,
+   * que nenhum endpoint alimentava: a Teacher editava o painel e a geração lia
+   * outro lugar, o que produzia "Prompt not found" em produção.
+   *
+   * 404 se o aluno não existe; 422 se o nível ainda não foi configurado.
    */
   private async loadContext(
     studentId: string,
     level: Level,
-  ): Promise<{ studentInfo: StudentInfo; basePrompt: string }> {
+  ): Promise<{
+    studentInfo: StudentInfo;
+    basePrompt: string;
+    blueprint: Blueprint;
+  }> {
     const student = await this.userService.findById(studentId);
     if (!student) {
       throw new NotFoundException('Student not found');
     }
-    const prompt = await this.promptService.getPromptByLevel(level);
-    if (!prompt) {
-      throw new InternalServerErrorException('Prompt not found');
+
+    const [principal, curriculum] = await Promise.all([
+      this.curriculumService.getPrincipal(),
+      this.curriculumService.getLevel(level),
+    ]);
+
+    if (!curriculum.prompt.trim() && curriculum.modules.length === 0) {
+      throw new UnprocessableEntityException(
+        `O nível ${level} ainda não tem currículo configurado. ` +
+          'Preencha o prompt do nível e os módulos em Prompts e Estrutura Curricular antes de gerar o material.',
+      );
     }
+
+    const basePrompt = [principal.prompt, curriculum.prompt]
+      .map((part) => part.trim())
+      .filter(Boolean)
+      .join('\n\n');
+
     const studentInfo: StudentInfo = {
       firstName: student.fullName.split(' ')[0],
       objectives: student.objective,
       prognosis: student.prognosis,
     };
-    return { studentInfo, basePrompt: prompt.prompt };
+    return {
+      studentInfo,
+      basePrompt,
+      blueprint: this.curriculumService.toBlueprint(curriculum),
+    };
   }
 
   /**
-   * Etapa 1 — Esqueleto: a IA devolve só a estrutura (módulos + títulos de
-   * tópicos). O backend atribui um `id` estável a cada tópico (`m{i}_t{j}`)
-   * para o cliente chavear a UI e o retry granular.
+   * Etapa 1 — Esqueleto: a estrutura vem do currículo que a Teacher cadastrou
+   * no painel (módulos, títulos de tópicos e ids), não mais da IA. Quantos
+   * módulos existem, com que nomes e em que ordem passa a ser decisão dela.
+   *
+   * A IA continua na etapa, mas com um único trabalho: escrever a intro de cada
+   * módulo, personalizada para o aluno. Os ids dos tópicos são os do currículo
+   * (uuid estável) em vez dos `m{i}_t{j}` posicionais, então o retry granular do
+   * cliente continua funcionando sem mudança de contrato.
    */
   async generateSkeleton(
     dto: SupplyInfoDto,
   ): Promise<{ modules: SkeletonModuleWithId[] }> {
     try {
-      const { studentInfo, basePrompt } = await this.loadContext(
+      const { studentInfo, basePrompt, blueprint } = await this.loadContext(
         dto.studentId,
         dto.level,
       );
-      const prompt = buildSkeletonPrompt(basePrompt, studentInfo);
-      const skeleton = await this.genAi.generateJson(prompt, SkeletonSchema);
 
-      const modules: SkeletonModuleWithId[] = skeleton.map((mod, mi) => ({
-        title: mod.title,
-        text: mod.text,
-        topics: mod.topics.map((t, ti) => ({
-          id: `m${mi}_t${ti}`,
-          topic: t.topic,
-        })),
-      }));
+      if (blueprint.modules.length === 0) {
+        throw new UnprocessableEntityException(
+          `O nível ${dto.level} não tem nenhum módulo cadastrado. ` +
+            'Monte a estrutura em Prompts e Estrutura Curricular antes de gerar o material.',
+        );
+      }
+
+      const prompt = buildModuleIntrosPrompt(basePrompt, studentInfo, blueprint);
+      const intros = await this.genAi.generateJson(prompt, ModuleIntrosSchema);
+
+      const modules: SkeletonModuleWithId[] = blueprint.modules.map(
+        (mod, mi) => ({
+          title: mod.title,
+          text: intros[mi] ?? '',
+          topics: mod.topics.map((t) => ({ id: t.id, topic: t.title })),
+        }),
+      );
       return { modules };
     } catch (error) {
       throw this.rethrow('gerar esqueleto', error);
@@ -101,15 +144,21 @@ export class SupplyService {
    */
   async generateTopic(dto: TopicRequestDto): Promise<Topic> {
     try {
-      const { studentInfo, basePrompt } = await this.loadContext(
+      const { studentInfo, basePrompt, blueprint } = await this.loadContext(
         dto.studentId,
         dto.level,
       );
+      // O título do módulo é o que a Teacher cadastrou e o cliente devolve
+      // verbatim do esqueleto, então casar por ele dispensa um id no payload.
+      // Sem correspondência (currículo editado no meio da geração), gera-se o
+      // tópico sem a diretriz em vez de falhar.
+      const module = blueprint.modules.find((m) => m.title === dto.moduleTitle);
       const prompt = buildTopicPrompt(
         basePrompt,
         studentInfo,
         dto.moduleTitle,
         dto.topicTitle,
+        module?.context ?? '',
       );
       return await this.genAi.generateJson(prompt, TopicSchema);
     } catch (error) {
