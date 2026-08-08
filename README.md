@@ -232,9 +232,28 @@ ser lida.
 3. **ActivePlanGuard (Global)** — inalterado (spec 012 RF13).
 
 **Validade e renovação.** O ID Token dura **1 hora** e isso não é configurável no Firebase.
-Por isso o login devolve também um `refresh_token`, e existe `POST /auth/refresh`. O front
-guarda o refresh token no `localStorage` e o ID Token só em memória; `POST /auth/logout`
-revoga os refresh tokens da pessoa em **todos** os aparelhos.
+Por isso existe `POST /auth/refresh`. O ID Token vive só em memória no front; o **refresh
+token vai num cookie `httpOnly`** gravado por esta API (spec 021) e **não aparece no corpo de
+nenhuma resposta** — o corpo era a única via pela qual o JavaScript o alcançaria.
+`POST /auth/logout` limpa o cookie e revoga os refresh tokens em **todos** os aparelhos.
+
+O cookie (`src/auth/session-cookie.ts`) é gravado, lido e limpo num lugar só, porque
+`clearCookie` só apaga se os atributos baterem com os do `cookie` que o criou — divergindo,
+"sair" deixa de sair:
+
+| Atributo | Valor | Por quê |
+|---|---|---|
+| `HttpOnly` | sempre | fora do alcance de qualquer script na página |
+| `Secure` | salvo com `DEV_MODE=true` | padrão seguro; o inseguro exige opt-in explícito. `NODE_ENV` não é lida neste backend, e se viesse vazia o cookie sairia sem `Secure` em produção, em silêncio |
+| `SameSite` | `Lax` | front e API são *same-site* nos três ambientes; é o que dispensa token de CSRF |
+| `Path` | `/auth` | só `/auth/refresh` e `/auth/logout` precisam dele |
+| `Domain` | ausente | *host-only*: com `Domain` o cookie iria para qualquer subdomínio |
+| `Max-Age` | 30 dias, renovado a cada refresh | **política de sessão, não proteção** — o refresh token do Firebase não expira nem rotaciona, então um token exfiltrado vale para sempre com ou sem este prazo |
+
+> ⚠️ **Bug conhecido, herdado da spec 016:** depois de `POST /auth/logout`, todo login novo do
+> mesmo usuário recebe por **~90 s** um refresh token que o `securetoken` do Google rejeita com
+> `TOKEN_EXPIRED`. O login funciona; a pessoa só é expulsa no F5 seguinte. Medido em
+> 2026-08-08 (`+0s/16s/32s/49s/65s/81s` → 401; `+97s` → 201).
 
 **Claim só entra em token novo.** Mudar o papel de alguém logado só surte efeito no próximo
 login ou refresh — vale para `/admin/migrate-roles` e para edição manual.
@@ -323,9 +342,13 @@ Authorization: Bearer <firebase_id_token>
 ### Fluxo de Login (Firebase)
 
 `POST /auth/login` repassa e-mail e senha ao **Identity Toolkit** (a REST API de identidade
-do Firebase — o Admin SDK cria e verifica contas, mas não valida senha) e devolve o ID Token,
-o refresh token e a validade. A senha não passa por nenhuma lógica nossa e não é armazenada
-em lugar nenhum deste sistema.
+do Firebase — o Admin SDK cria e verifica contas, mas não valida senha). Devolve o ID Token e
+a validade no corpo, e o **refresh token no cookie `httpOnly`**. A senha não passa por nenhuma
+lógica nossa e não é armazenada em lugar nenhum deste sistema.
+
+> O cliente precisa enviar as requisições **com credenciais** (`withCredentials`/
+> `credentials: "include"`), senão o navegador não anexa o cookie e a renovação falha com a
+> sessão perfeitamente válida do outro lado.
 
 ---
 
@@ -335,9 +358,9 @@ em lugar nenhum deste sistema.
 
 | Rota | Auth | Descrição |
 |---|---|---|
-| `POST` | `/auth/login` | 🔓 | E-mail e senha → sessão do Firebase |
-| `POST` | `/auth/refresh` | 🔓 | Refresh token → ID Token novo |
-| `POST` | `/auth/logout` | 🔒 | Revoga os refresh tokens em todos os aparelhos (204) |
+| `POST` | `/auth/login` | 🔓 | E-mail e senha → ID Token no corpo + refresh no cookie `httpOnly` |
+| `POST` | `/auth/refresh` | 🔓 | Cookie de sessão → ID Token novo |
+| `POST` | `/auth/logout` | 🔒 | Limpa o cookie e revoga os refresh tokens em todos os aparelhos (204) |
 | `POST` | `/auth/recuperar-senha` | 🔓 | Firebase envia o link de redefinição (204 sempre) |
 | `POST` | `/auth/reenviar-verificacao` | 🔒 | Firebase reenvia a verificação do e-mail (204) |
 | `PATCH` | `/auth/email` | 🔒 | Troca o e-mail, exigindo a senha atual (204) |
@@ -358,14 +381,17 @@ em lugar nenhum deste sistema.
 }
 ```
 
-**Response (200):**
+**Response (201):**
 
 ```json
 {
   "access_token": "eyJhbGciOiJSUzI1NiIsImtpZCI6...",
-  "refresh_token": "AMf-vBz...",
   "expires_in": 3600
 }
+```
+
+```
+Set-Cookie: bf_refresh=AMf-vBz…; Max-Age=2592000; Path=/auth; HttpOnly; SameSite=Lax; Secure
 ```
 
 **Erros:**
@@ -378,8 +404,21 @@ em lugar nenhum deste sistema.
 
 #### `POST /auth/refresh`
 
-Mesmo corpo de resposta do login. Recebe `{ "refresh_token": "…" }`. Erro do Firebase
-(expirado, revogado, conta desativada) vira `401` — o sinal para o front deslogar de vez.
+Mesmo corpo de resposta do login, e regrava o cookie renovando o `Max-Age`. Lê o token do
+cookie `bf_refresh`; **corpo vazio** é o uso normal.
+
+Aceita também `{ "refresh_token": "…" }` no corpo, com **o cookie tendo precedência**. Esse
+caminho é transitório (spec 021 §7.2): mantém o front da release anterior funcionando durante a
+virada e é por onde o `bf.refresh` que ficou no `localStorage` das pessoas vira cookie, uma vez
+só. Sai na Task 8, uma release depois.
+
+> O campo é `@IsOptional()` **de propósito**. O `ValidationPipe` global roda com `whitelist` e
+> `forbidNonWhitelisted`, então ele corta dos dois lados: obrigatório derruba o front novo com
+> 400; removido derruba o front antigo com 400. Em ambos o sintoma é logout geral, porque 400
+> escapa do tratamento de 401 do interceptor.
+
+Sem token em nenhuma das duas fontes, ou erro do Firebase (expirado, revogado, conta
+desativada), responde **`401`** — nunca 400 — que é o sinal para o front deslogar de vez.
 
 #### `POST /auth/recuperar-senha`
 
