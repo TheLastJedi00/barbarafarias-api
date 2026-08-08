@@ -1,6 +1,7 @@
 import { NestFactory } from '@nestjs/core';
 import { NestExpressApplication } from '@nestjs/platform-express';
 import { json, urlencoded } from 'express';
+import cookieParser from 'cookie-parser';
 import { AppModule } from './app.module';
 import { Logger, ValidationPipe } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
@@ -55,6 +56,11 @@ async function bootstrap() {
     }),
   );
   app.use(urlencoded({ extended: true, limit: BODY_LIMIT }));
+
+  // Preenche `req.cookies`, de onde o `/auth/refresh` lê o refresh token
+  // (spec 021). Sem assinatura: o valor é o token opaco do Firebase, que já é
+  // verificado pelo Identity Toolkit — não há segredo de cookie neste projeto.
+  app.use(cookieParser());
 
   app.useGlobalPipes(
     new ValidationPipe({
