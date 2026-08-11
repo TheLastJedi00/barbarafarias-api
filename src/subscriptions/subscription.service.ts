@@ -38,6 +38,7 @@ import {
   addMonths,
   grantsAccess,
   paidAccessUntil,
+  payerAmountsOf,
   planConfig,
 } from './subscription.entity';
 import type { PaymentMethod, SubscriptionPlan } from './subscription.entity';
@@ -331,6 +332,7 @@ export class SubscriptionService {
     acceptance: PlanAcceptanceDto,
   ): Promise<void> {
     const config = planConfig(subscription.plan);
+    const acordado = payerAmountsOf(subscription);
     await this.acceptances.create(
       new PlanAcceptance({
         id: randomUUID(),
@@ -339,9 +341,13 @@ export class SubscriptionService {
         studentEmail: student.email,
         plan: subscription.plan,
         planLabel: config.label,
-        totalAmount: subscription.totalAmount,
+        // **O valor acordado é o do pagador**, com o cupom já aplicado. O
+        // contrato prova com quanto ela concordou, e ela concordou com o total
+        // parcelado que leu na tela — não com a base que cobramos do provedor,
+        // que é conta nossa e nunca apareceu para ela.
+        totalAmount: acordado.total,
         installments: subscription.installments,
-        installmentAmount: subscription.installmentAmount,
+        installmentAmount: acordado.installment,
         termsVersion: acceptance.termsVersion,
         acceptedAt: new Date().toISOString(),
         couponCode: subscription.couponCode,

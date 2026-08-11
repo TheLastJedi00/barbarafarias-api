@@ -176,7 +176,7 @@ describe('SubscriptionService — cronograma de parcelas', () => {
     );
   });
 
-  it('anual gera 12 parcelas de R$ 190', async () => {
+  it('anual gera 12 parcelas de R$ 180', async () => {
     const { service, subscriptions } = build();
 
     await service.choosePlan('aluno-1', {
@@ -187,7 +187,7 @@ describe('SubscriptionService — cronograma de parcelas', () => {
 
     const saved = subscriptions.store.get('aluno-1')!;
     expect(saved.charges).toHaveLength(12);
-    expect(saved.totalAmount).toBe(2280);
+    expect(saved.totalAmount).toBe(2160);
   });
 
   it('as parcelas vencem mês a mês a partir de hoje', async () => {
@@ -540,9 +540,12 @@ describe('SubscriptionService — aceite dos termos', () => {
       planLabel: 'Anual',
       // Congelados, não referenciados: o catálogo muda de preço e o contrato
       // assinado não muda junto.
-      totalAmount: 2280,
+      //
+      // E são os valores **do pagador**: é com o total parcelado que ela
+      // concordou, não com a base que cobramos do provedor.
+      totalAmount: 2637.58,
       installments: 12,
-      installmentAmount: 190,
+      installmentAmount: 219.8,
       termsVersion: '2026-08-1',
     });
     // ISO **com hora**: "concordou em 10/08" não responde a mesma pergunta que
@@ -585,8 +588,11 @@ describe('SubscriptionService — aceite dos termos', () => {
 
     const gravado = acceptances.create.mock.calls[0][0];
     expect(gravado.couponCode).toBe('BEMVINDA');
-    // O total congelado é o **descontado**, que é o que foi acordado.
-    expect(gravado.totalAmount).toBe(900);
+    // O total congelado é o **descontado**, que é o que foi acordado: os juros
+    // do parcelamento incidem sobre o que sobrou do cupom, não sobre a tabela.
+    // Congelar o valor de tabela cobraria juros sobre dinheiro que ninguém
+    // pagou e apagaria o desconto justamente de onde ele prova alguma coisa.
+    expect(gravado.totalAmount).toBe(1028.88);
   });
 
   it('falhar ao gravar o aceite derruba a contratação, e nada é cobrado', async () => {
@@ -639,7 +645,7 @@ describe('SubscriptionService — pagamento', () => {
     expect(card.createCheckout).not.toHaveBeenCalled();
     expect(pix.createPixCharge).not.toHaveBeenCalled();
     expect(response.card).toEqual({
-      amount: 2280,
+      amount: 2160,
       installments: 12,
       chargeIndex: 1,
     });
@@ -660,7 +666,7 @@ describe('SubscriptionService — pagamento', () => {
         installments: 12,
         // O total do catálogo, não a parcela: é **uma** cobrança que o emissor
         // divide, não doze cobranças mensais.
-        amount: 2280,
+        amount: 2160,
         recurring: { cycles: 12 },
       }),
     );

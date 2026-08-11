@@ -19,6 +19,7 @@ import {
   PAYMENT_METHODS,
   SUBSCRIPTION_PLANS,
   Subscription,
+  payerAmountsOf,
   planConfig,
 } from '../subscription.entity';
 import type {
@@ -191,6 +192,16 @@ export class SubscriptionDto {
    * conferir contra o que pagou.
    */
   accessUntil?: string;
+  /**
+   * O total que a aluna paga, com os juros do parcelamento e o cupom já
+   * aplicados — o número que ela reconhece da fatura.
+   *
+   * `totalAmount` continua sendo o que **cobramos**, porque é dele que sai a
+   * receita por competência. São perguntas diferentes, e a tela que mostrar a
+   * errada faz a aluna procurar um valor que não existe no extrato dela.
+   */
+  payerTotal!: number;
+  payerInstallment!: number;
   couponCode?: string;
   couponDiscount?: number;
   couponRemainingCharges?: number | null;
@@ -202,5 +213,9 @@ export class SubscriptionDto {
     Object.assign(this, subscription);
     this.planLabel = config.label;
     this.recurring = config.recurring;
+
+    const pagador = payerAmountsOf(subscription);
+    this.payerTotal = pagador.total;
+    this.payerInstallment = pagador.installment;
   }
 }

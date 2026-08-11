@@ -7,6 +7,7 @@ import {
   CHARGE_STATUS,
   SUBSCRIPTION_STATUS,
   Subscription,
+  netOfGatewayFee,
 } from '../subscriptions/subscription.entity';
 import { monthsOfYear } from './infra-expense.entity';
 import {
@@ -169,12 +170,21 @@ export class ManagerFinanceService {
  * Parcelas de um mês entre várias assinaturas. Cobrança já paga continua
  * contando: ela é receita **daquele** mês, e retirá-la faria o faturamento
  * passado encolher conforme o tempo passa.
+ *
+ * **O que entra aqui é líquido da taxa do gateway** (spec 023): o painel
+ * responde "quanto entrou no caixa", e o bruto responde outra pergunta. A taxa
+ * é aplicada **na soma**, não em cada parcela, porque arredondar doze vezes
+ * acumula centavos que ninguém consegue explicar depois.
+ *
+ * Os juros que a aluna paga ao parcelar **não** aparecem: eles ficam com o
+ * provedor e nunca chegam ao caixa. Contá-los infla o faturamento em quase
+ * quinhentos reais por plano Anual.
  */
 function sumScheduledCharges(
   subscriptions: Subscription[],
   month: string,
 ): number {
-  return round2(
+  return netOfGatewayFee(
     sum(
       subscriptions.flatMap((subscription) =>
         subscription.charges

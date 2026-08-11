@@ -7,6 +7,7 @@ import {
   SUBSCRIPTION_PLANS,
   SUBSCRIPTION_STATUS,
   Subscription,
+  netOfGatewayFee,
 } from '../subscriptions/subscription.entity';
 import type { Charge } from '../subscriptions/subscription.entity';
 
@@ -42,12 +43,14 @@ function subscription(
   });
 }
 
-function build(options: {
-  subscriptions?: Subscription[];
-  closings?: { isManager: boolean; total: number }[];
-  infraByMonth?: number;
-  goal?: Partial<RevenueGoal>;
-} = {}) {
+function build(
+  options: {
+    subscriptions?: Subscription[];
+    closings?: { isManager: boolean; total: number }[];
+    infraByMonth?: number;
+    goal?: Partial<RevenueGoal>;
+  } = {},
+) {
   const billingSummary = {
     summary: jest.fn().mockResolvedValue(options.closings ?? []),
   };
@@ -83,29 +86,33 @@ describe('ManagerFinanceService — visão mensal', () => {
     const { service } = build({
       subscriptions: [
         subscription('a1', 'MONTHLY', charges('2026-08', 6, 240)),
-        subscription('a2', 'ANNUAL', charges('2026-08', 12, 190)),
+        subscription('a2', 'ANNUAL', charges('2026-08', 12, 180)),
         subscription('a3', 'SEMIANNUAL', charges('2026-08', 6, 200)),
       ],
     });
 
     const overview = await service.getMonthlyOverview('2026-08');
 
-    // 240 + 190 + 200 — o valor da parcela, não o total dos planos.
-    expect(overview.revenue).toBe(630);
+    // 240 + 180 + 200 = 620 de parcelas — o valor da parcela, não o total dos
+    // planos —, e o que entra no caixa é isso menos a taxa do gateway. O
+    // painel responde "quanto entrou", não "quanto foi faturado".
+    expect(overview.revenue).toBe(netOfGatewayFee(620));
     expect(overview.activeStudents).toBe(3);
   });
 
   it('não conta parcela de outro mês', async () => {
     const { service } = build({
-      subscriptions: [subscription('a1', 'ANNUAL', charges('2026-08', 12, 190))],
+      subscriptions: [
+        subscription('a1', 'ANNUAL', charges('2026-08', 12, 180)),
+      ],
     });
 
-    await expect(
-      service.getMonthlyOverview('2026-09'),
-    ).resolves.toMatchObject({ revenue: 190 });
-    await expect(
-      service.getMonthlyOverview('2027-09'),
-    ).resolves.toMatchObject({ revenue: 0 });
+    await expect(service.getMonthlyOverview('2026-09')).resolves.toMatchObject({
+      revenue: netOfGatewayFee(180),
+    });
+    await expect(service.getMonthlyOverview('2027-09')).resolves.toMatchObject({
+      revenue: 0,
+    });
   });
 
   it('parcela já paga continua sendo receita do mês dela', async () => {
@@ -119,14 +126,16 @@ describe('ManagerFinanceService — visão mensal', () => {
       ],
     });
 
-    await expect(
-      service.getMonthlyOverview('2026-08'),
-    ).resolves.toMatchObject({ revenue: 240 });
+    await expect(service.getMonthlyOverview('2026-08')).resolves.toMatchObject({
+      revenue: netOfGatewayFee(240),
+    });
   });
 
   it('as horas da gerente ficam fora da despesa (RF11)', async () => {
     const { service } = build({
-      subscriptions: [subscription('a1', 'MONTHLY', charges('2026-08', 1, 240))],
+      subscriptions: [
+        subscription('a1', 'MONTHLY', charges('2026-08', 1, 240)),
+      ],
       closings: [
         { isManager: false, total: 600 },
         { isManager: true, total: 900 },
@@ -136,7 +145,9 @@ describe('ManagerFinanceService — visão mensal', () => {
     const overview = await service.getMonthlyOverview('2026-08');
 
     expect(overview.teacherExpenses).toBe(600);
-    expect(overview.profit).toBe(240 - 600);
+    // O lucro parte do que **entrou**, não do faturado: a taxa do gateway sai
+    // antes de qualquer despesa nossa.
+    expect(overview.profit).toBe(netOfGatewayFee(240) - 600);
   });
 
   it('soma a infraestrutura vigente e fecha o lucro', async () => {
@@ -151,7 +162,9 @@ describe('ManagerFinanceService — visão mensal', () => {
     const overview = await service.getMonthlyOverview('2026-08');
 
     expect(overview.infraExpenses).toBe(150);
-    expect(overview.profit).toBe(450);
+    // `toBeCloseTo` porque o serviço arredonda o lucro e a conta do teste não:
+    // exigir igualdade binária aqui testaria o ponto flutuante, não a regra.
+    expect(overview.profit).toBeCloseTo(netOfGatewayFee(1000) - 400 - 150, 2);
   });
 
   it('traz a meta do mês quando a gerente definiu uma', async () => {
@@ -159,17 +172,17 @@ describe('ManagerFinanceService — visão mensal', () => {
       goal: { annualTarget: 60000, monthlyTargets: { '08': 7000 } },
     });
 
-    await expect(
-      service.getMonthlyOverview('2026-08'),
-    ).resolves.toMatchObject({ goalTarget: 7000 });
+    await expect(service.getMonthlyOverview('2026-08')).resolves.toMatchObject({
+      goalTarget: 7000,
+    });
   });
 
   it('mês sem meta própria vem sem alvo', async () => {
     const { service } = build({ goal: { annualTarget: 60000 } });
 
-    await expect(
-      service.getMonthlyOverview('2026-08'),
-    ).resolves.toMatchObject({ goalTarget: undefined });
+    await expect(service.getMonthlyOverview('2026-08')).resolves.toMatchObject({
+      goalTarget: undefined,
+    });
   });
 });
 
@@ -177,7 +190,7 @@ describe('ManagerFinanceService — visão anual', () => {
   it('devolve os doze meses com totais consolidados', async () => {
     const { service } = build({
       subscriptions: [
-        subscription('a1', 'ANNUAL', charges('2026-01', 12, 190)),
+        subscription('a1', 'ANNUAL', charges('2026-01', 12, 180)),
       ],
       closings: [{ isManager: false, total: 100 }],
       infraByMonth: 50,
@@ -187,9 +200,15 @@ describe('ManagerFinanceService — visão anual', () => {
     const annual = await service.getAnnualOverview(2026);
 
     expect(annual.months).toHaveLength(12);
-    expect(annual.totalRevenue).toBe(190 * 12);
+    // Cada mês é arredondado antes de somar, então o total anual não é o
+    // produto exato — pedir igualdade em centavos aqui é pedir para o teste
+    // quebrar com qualquer reajuste.
+    expect(annual.totalRevenue).toBeCloseTo(netOfGatewayFee(180) * 12, 2);
     expect(annual.totalExpenses).toBe((100 + 50) * 12);
-    expect(annual.totalProfit).toBe(190 * 12 - 150 * 12);
+    expect(annual.totalProfit).toBeCloseTo(
+      netOfGatewayFee(180) * 12 - 150 * 12,
+      2,
+    );
     expect(annual.annualTarget).toBe(30000);
   });
 
@@ -214,7 +233,7 @@ describe('ManagerFinanceService — dados do gráfico (RF12)', () => {
   it('separa as despesas em categorias empilhadas e põe a receita como linha', async () => {
     const { service } = build({
       subscriptions: [
-        subscription('a1', 'ANNUAL', charges('2026-01', 12, 190)),
+        subscription('a1', 'ANNUAL', charges('2026-01', 12, 180)),
       ],
       closings: [{ isManager: false, total: 100 }],
       infraByMonth: 50,
@@ -230,7 +249,7 @@ describe('ManagerFinanceService — dados do gráfico (RF12)', () => {
     expect(infra).toMatchObject({ label: 'Infraestrutura', stack: 'despesas' });
     expect(teachers.colorToken).not.toBe(infra.colorToken);
     expect(revenue).toMatchObject({ label: 'Receita', kind: 'line' });
-    expect(revenue.data[0]).toBe(190);
+    expect(revenue.data[0]).toBe(netOfGatewayFee(180));
   });
 });
 

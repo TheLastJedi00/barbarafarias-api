@@ -340,11 +340,11 @@ describe('MercadoPagoGateway — o que a antifraude precisa', () => {
       title: 'Plano Anual',
       category_id: 'learnings',
       quantity: 1,
-      unit_price: '2280.00',
+      unit_price: '2160.00',
     });
   });
 
-  it('o item é UM, pelo total — não doze de R$ 190', async () => {
+  it('o item é UM, pelo total — não doze de R$ 180', async () => {
     const { gateway, clients } = build();
 
     await gateway.createCheckout(pedidoDeCartao('ANNUAL') as any);
@@ -353,7 +353,7 @@ describe('MercadoPagoGateway — o que a antifraude precisa', () => {
     // Quem divide é o emissor. Descrever "12 unidades" diria ao provedor uma
     // coisa que não é verdade, e ainda desalinharia item e `total_amount`.
     expect(item.quantity).toBe(1);
-    expect(item.unit_price).toBe('2280.00');
+    expect(item.unit_price).toBe('2160.00');
   });
 
   it('manda o descritor que aparece na fatura', async () => {
@@ -420,7 +420,7 @@ describe('MercadoPagoGateway — o que o log conta', () => {
     // `errors[].details`, que ele descarta. Sem o pedido ao lado, um 400 exige
     // reproduzir a chamada à mão — foi o que custou uma rodada de teste.
     const linha = log.mock.calls[0][0] as string;
-    expect(linha).toContain('valor=2280.00');
+    expect(linha).toContain('valor=2160.00');
     expect(linha).toContain('parcelas=12');
     expect(linha).toContain('emailDominio=example.com');
     expect(linha).toContain('doc=3 dígitos');
