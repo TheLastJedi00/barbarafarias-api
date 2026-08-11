@@ -2,15 +2,24 @@ import { Inject, Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { createHash } from 'node:crypto';
 import { MercadoPagoConfig, Order, PreApproval } from 'mercadopago';
-import { MPRateLimitError } from 'mercadopago/dist/utils/errors';
+import {
+  MPNotFoundError,
+  MPRateLimitError,
+} from 'mercadopago/dist/utils/errors';
 import type { OrderResponse } from 'mercadopago/dist/clients/order/commonTypes';
 import {
+  CHARGE_OUTCOMES,
+  CardGateway,
+  CardTokenRef,
   ChargeRequest,
+  CheckoutRequest,
+  CheckoutResult,
+  GATEWAY_PROVIDERS,
   PIX_EXPIRATION_SECONDS,
-  PaymentGateway,
   PixChargeResult,
   PixGateway,
 } from './payment.gateway';
+import { PREAPPROVAL_STATUS, outcomeOfOrder } from './mercadopago.status';
 
 /**
  * Token dos clientes do Mercado Pago. Os clientes são construídos pelo módulo,
@@ -103,7 +112,7 @@ export class GatewayBusyError extends Error {
  *    extrato.
  */
 @Injectable()
-export class MercadoPagoGateway extends PaymentGateway implements PixGateway {
+export class MercadoPagoGateway extends CardGateway implements PixGateway {
   protected readonly logger = new Logger(MercadoPagoGateway.name);
 
   constructor(
@@ -224,6 +233,184 @@ export class MercadoPagoGateway extends PaymentGateway implements PixGateway {
     return Promise.resolve(false);
   }
 
+  // ---------------------------------------------------------------- cartão
+
+  /**
+   * Cobra no cartão. Qual produto do Mercado Pago é usado sai de
+   * `recurring.cycles`, que é a mesma régua que monta o cronograma:
+   *
+   * - **número de ciclos** (Semestral, Anual) → uma order parcelada, aqui;
+   * - **`null`** (Mensal) → uma assinatura recorrente (`preapproval`).
+   */
+  async createCheckout(request: CheckoutRequest): Promise<CheckoutResult> {
+    const cycles = request.recurring?.cycles ?? null;
+    if (cycles === null) {
+      throw new Error(
+        'Plano recorrente ainda não implementado neste gateway (Task 9)',
+      );
+    }
+    return this.createInstallmentOrder(request);
+  }
+
+  /**
+   * Semestral e Anual: **uma** cobrança, parcelada pelo emissor.
+   *
+   * É a correção do bug de origem desta spec. O que antes eram seis
+   * assinaturas mensais que podiam falhar na quarta passa a ser um débito só,
+   * e o parcelamento inteiro é o campo `installments` — sem catálogo de preço,
+   * sem teto de ciclos, sem as duas redes de segurança que existiam para
+   * impedir a cobrança a mais.
+   *
+   * Três detalhes que a doc fixa e que somem em silêncio se forem ignorados:
+   * valores vão como **string**, o `X-Idempotency-Key` é **obrigatório**, e o
+   * `429` é caminho previsto (vira `GatewayBusyError`, não 500).
+   */
+  private async createInstallmentOrder(
+    request: CheckoutRequest,
+  ): Promise<CheckoutResult> {
+    const card = this.requireCard(request);
+    // **Nunca do que o front mandou.** A trava do formulário é conveniência;
+    // esta linha é a régua (falha silenciosa 18).
+    const installments = this.requireInstallments(request);
+    const amount = toAmountString(request.amount);
+
+    try {
+      const order = await this.require().orders.create({
+        body: {
+          type: 'online',
+          processing_mode: 'automatic',
+          total_amount: amount,
+          external_reference: request.externalId,
+          description: describeCharge(request),
+          payer: { email: request.customer.email },
+          transactions: {
+            payments: [
+              {
+                amount,
+                payment_method: {
+                  id: card.paymentMethodId,
+                  type: 'credit_card',
+                  token: card.token,
+                  installments,
+                },
+              },
+            ],
+          },
+        },
+        requestOptions: {
+          idempotencyKey: idempotencyKeyFor(request.externalId),
+        },
+      });
+
+      return this.resultOfOrder(order);
+    } catch (error) {
+      this.rethrow(error, 'Cartão parcelado');
+    }
+  }
+
+  /** Traduz a order para o desfecho que a regra de negócio entende. */
+  protected resultOfOrder(order: OrderResponse): CheckoutResult {
+    const payment = order.transactions?.payments?.[0];
+    const outcome = outcomeOfOrder(order);
+
+    if (outcome === CHARGE_OUTCOMES.REJECTED) {
+      this.logger.warn(
+        `Order ${order.id} recusada: ${order.status}/${order.status_detail}`,
+      );
+    }
+
+    return {
+      id: order.id ?? '',
+      provider: GATEWAY_PROVIDERS.MERCADOPAGO,
+      outcome,
+      challengeUrl:
+        payment?.payment_method?.transaction_security?.url ??
+        payment?.payment_method?.redirect_url,
+      detail: order.status_detail,
+    };
+  }
+
+  /**
+   * Encerra a assinatura recorrente: `PUT /preapproval/{id}` com status
+   * `cancelled`. Não há endpoint de exclusão — cancelar é mudar de estado.
+   *
+   * Tolerante a já estar encerrada, como o gateway anterior: o cancelamento
+   * pela tela e o cancelamento automático do Mercado Pago (§9.7) chegam em
+   * qualquer ordem e caminham para o mesmo destino.
+   */
+  async cancelSubscription(subscriptionId: string): Promise<void> {
+    try {
+      await this.require().subscriptions.update({
+        id: subscriptionId,
+        body: { status: PREAPPROVAL_STATUS.CANCELLED },
+      });
+    } catch (error) {
+      if (error instanceof MPNotFoundError) {
+        this.logger.warn(
+          `Assinatura ${subscriptionId} já não existe no Mercado Pago.`,
+        );
+        return;
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * **Não faz nada, e é de propósito.**
+   *
+   * Semestral e Anual deixaram de ser assinaturas com teto de ciclos: são uma
+   * cobrança parcelada, e não existe ciclo para limitar. Era justamente o teto
+   * improvisado que o bug de origem desta spec exigia — e o comentário do
+   * gateway anterior chamava de *"o único ponto desta integração onde uma
+   * falha silenciosa cobra dinheiro a mais"*.
+   *
+   * O método sobrevive só enquanto a porta o exigir; sai na Task 26.
+   */
+  capSubscriptionCycles(): Promise<void> {
+    return Promise.resolve();
+  }
+
+  /**
+   * Acerta o valor do ciclo quando o cupom com prazo acaba (ver a porta).
+   * `currency_id` é obrigatório no corpo mesmo mudando só o valor.
+   */
+  async updateSubscriptionAmount(
+    subscriptionId: string,
+    amount: number,
+  ): Promise<void> {
+    await this.require().subscriptions.update({
+      id: subscriptionId,
+      body: {
+        auto_recurring: { transaction_amount: amount, currency_id: 'BRL' },
+      },
+    });
+  }
+
+  /**
+   * O cartão tokenizado, ou um erro nomeado.
+   *
+   * A porta o declara opcional só até os gateways antigos saírem (Task 24).
+   * Aqui ele é obrigatório de fato: sem token não há o que cobrar, e deixar
+   * `undefined` seguir viagem produziria um 400 do provedor sem dizer o motivo.
+   */
+  private requireCard(request: CheckoutRequest): CardTokenRef {
+    if (!request.card?.token || !request.card.paymentMethodId) {
+      throw new Error('Cobrança de cartão sem token: nada a enviar');
+    }
+    return request.card;
+  }
+
+  /** As parcelas do plano, ou um erro nomeado. Mesma nota de `requireCard`. */
+  private requireInstallments(request: CheckoutRequest): number {
+    const installments = request.installments;
+    if (!installments || installments < 1) {
+      throw new Error(
+        `Cobrança de cartão sem número de parcelas válido: ${installments}`,
+      );
+    }
+    return installments;
+  }
+
   /**
    * Os clientes ou um erro nomeado. Sem isto a chave ausente viraria um
    * `TypeError: Cannot read properties of null` lá adiante, longe da causa.
@@ -264,6 +451,19 @@ export function readPixCodes(
   const method = order.transactions?.payments?.[0]?.payment_method;
   if (!method?.qr_code || !method.qr_code_base64) return undefined;
   return { brCode: method.qr_code, brCodeBase64: method.qr_code_base64 };
+}
+
+/**
+ * A descrição que aparece no painel do Mercado Pago.
+ *
+ * O código do cupom entra **aqui** porque a Orders API não tem campo de
+ * metadata livre, e sem ele um pedido de R$ 1.150 num plano de R$ 1.200 vira
+ * uma divergência sem explicação na hora da conciliação.
+ */
+export function describeCharge(request: CheckoutRequest): string {
+  return request.couponCode
+    ? `${request.description} (cupom ${request.couponCode})`
+    : request.description;
 }
 
 /** `1200` → `"1200.00"`. A Orders API recusa número e aceita string. */

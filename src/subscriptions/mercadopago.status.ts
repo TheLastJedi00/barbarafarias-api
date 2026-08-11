@@ -40,6 +40,8 @@
  * recebe acesso, e nenhum erro é lançado.
  */
 
+import { CHARGE_OUTCOMES, type ChargeOutcome } from './payment.gateway';
+
 /** `status` de uma order. Lista fechada, tirada da tabela oficial. */
 export const ORDER_STATUS = {
   CREATED: 'created',
@@ -66,21 +68,6 @@ export const ORDER_STATUS_DETAIL = {
   /** Criação assíncrona: a order existe, o pagamento ainda não (§4.3). */
   IN_PROCESS: 'in_process',
 } as const;
-
-/** Estado de uma cobrança já traduzido para o nosso domínio. */
-export const CHARGE_OUTCOMES = {
-  /** Dinheiro creditado. **É o único que ativa plano.** */
-  PAID: 'PAID',
-  /** Emitida e no ar; quem conclui é o aluno (PIX) ou o gateway. */
-  PENDING: 'PENDING',
-  /** 3DS: falta o aluno completar o desafio. Não é sucesso (§9.6). */
-  CHALLENGE: 'CHALLENGE',
-  /** Recusada de vez. */
-  REJECTED: 'REJECTED',
-} as const;
-
-export type ChargeOutcome =
-  (typeof CHARGE_OUTCOMES)[keyof typeof CHARGE_OUTCOMES];
 
 /** O par `status`/`status_detail` de uma order, como a API os devolve. */
 export interface OrderStatusPair {

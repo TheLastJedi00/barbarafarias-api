@@ -745,7 +745,10 @@ describe('PIX em plano parcelado (spec 018)', () => {
   /** Contratação com plano e método escolhidos. */
   function contratar(plan: string, method: string) {
     const { service, users } = build();
-    return service.choosePlan('aluno-1', { plan, paymentMethod: method } as any);
+    return service.choosePlan('aluno-1', {
+      plan,
+      paymentMethod: method,
+    } as any);
   }
 
   it('recusa PIX no semestral e no anual', async () => {

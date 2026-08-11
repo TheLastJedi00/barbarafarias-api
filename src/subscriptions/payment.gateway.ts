@@ -38,6 +38,7 @@ export interface ChargeRequest {
 
 /** Quem processou uma cobrança. Guardado na parcela para o webhook se achar. */
 export const GATEWAY_PROVIDERS = {
+  MERCADOPAGO: 'MERCADOPAGO',
   ABACATEPAY: 'ABACATEPAY',
   STRIPE: 'STRIPE',
 } as const;
@@ -46,12 +47,19 @@ export type GatewayProvider =
   (typeof GATEWAY_PROVIDERS)[keyof typeof GATEWAY_PROVIDERS];
 
 /**
+ * Cartão tokenizado **no navegador**. O que trafega é um token de uso único e
+ * validade de 7 dias; PAN e CVC nunca passam pelo backend, que é a garantia
+ * que a spec 014 estabeleceu e esta migração preserva.
+ */
+export interface CardTokenRef {
+  token: string;
+  /** Bandeira resolvida pelo formulário do gateway (`master`, `visa`, …). */
+  paymentMethodId: string;
+}
+
+/**
  * Pedido de checkout de cartão. Estende o pedido de cobrança com o que só o
- * cartão tem: a recorrência e o cupom.
- *
- * O cupom vai **inteiro** para o gateway em vez de já abatido no `amount`
- * porque no Stripe quem aplica o desconto às renovações é ele — mandar o valor
- * pronto acertaria a primeira parcela e cobraria o preço cheio nas seguintes.
+ * cartão tem: as parcelas, a recorrência e o cartão tokenizado.
  */
 export interface CheckoutRequest extends ChargeRequest {
   /** Plano do aluno, para o gateway resolver o produto/preço do catálogo. */
@@ -65,8 +73,38 @@ export interface CheckoutRequest extends ChargeRequest {
   /**
    * Quantos ciclos mensais a assinatura tem. `null` = sem fim (plano mensal);
    * `6`/`12` fecham o semestral e o anual no fim do período.
+   *
+   * É esta a régua que decide **qual produto do gateway é usado**: `null` abre
+   * uma assinatura recorrente; um número vira uma cobrança só, parcelada.
    */
   recurring?: { cycles: number | null };
+  /**
+   * Em quantas vezes o cartão é dividido pelo emissor.
+   *
+   * **Sai do `PLAN_CONFIGS`, nunca do que o cliente mandou.** A trava do
+   * formulário é conveniência; sem esta régua no backend, um aluno decidido
+   * paga em 1x um plano vendido em 12x e nada acusa (falha silenciosa 18).
+   *
+   * Opcional **só no tipo**, e só até a Task 24 apagar os gateways antigos —
+   * que não a leem. Quem a exige de verdade é o gateway, em tempo de execução.
+   */
+  installments?: number;
+  /** Cartão tokenizado. Mesma nota de opcionalidade de `installments`. */
+  card?: CardTokenRef;
+  /**
+   * Código do cupom, **só para constar no painel do gateway**: o desconto já
+   * está abatido no `amount`.
+   *
+   * Foi assim que a decisão virou: o motivo de mandar o cupom inteiro era o
+   * gateway aplicá-lo às renovações. Num pagamento único não há renovação, e
+   * um objeto de desconto no meio do caminho só cria uma segunda fonte de
+   * verdade sobre quanto o aluno deve.
+   */
+  couponCode?: string;
+  /**
+   * @deprecated Cupom como objeto, do tempo em que o gateway o aplicava às
+   * renovações. Sai com o Stripe (Task 24); ninguém novo deve ler daqui.
+   */
   coupon?: {
     code: string;
     /** Abatimento em **reais** por parcela. */
@@ -75,6 +113,27 @@ export interface CheckoutRequest extends ChargeRequest {
     durationMonths: number | null;
   };
 }
+
+/**
+ * Desfecho de uma cobrança, já traduzido do vocabulário do provedor.
+ *
+ * Existe no nível da **porta**, e não dentro de um gateway, porque é o que a
+ * regra de negócio precisa saber: se libera acesso, se espera, se manda o
+ * aluno completar alguma coisa, ou se recusou. O mapeamento de cada provedor
+ * para estes quatro valores é problema da implementação.
+ */
+export const CHARGE_OUTCOMES = {
+  /** Dinheiro creditado. **É o único que ativa plano.** */
+  PAID: 'PAID',
+  /** No ar, aguardando desfecho. Quem conclui é o webhook. */
+  PENDING: 'PENDING',
+  /** Falta o aluno completar uma verificação (3DS). **Não é sucesso.** */
+  CHALLENGE: 'CHALLENGE',
+  REJECTED: 'REJECTED',
+} as const;
+
+export type ChargeOutcome =
+  (typeof CHARGE_OUTCOMES)[keyof typeof CHARGE_OUTCOMES];
 
 export interface PixChargeResult {
   id: string;
@@ -85,18 +144,31 @@ export interface PixChargeResult {
 }
 
 /**
- * Um checkout aberto. Os dois provedores entregam coisas diferentes e as duas
- * são opcionais de propósito: o AbacatePay hospeda a página e devolve `url`
- * (o front redireciona), o Stripe roda incorporado e devolve `clientSecret`
- * (o front monta o formulário na própria tela).
+ * O resultado de uma cobrança de cartão.
+ *
+ * Não há mais `url` nem `clientSecret`: com a tokenização no navegador o
+ * pagamento é **enviado** pelo backend, não delegado a uma página do
+ * provedor. O que volta é um desfecho, e o `challengeUrl` quando o 3DS pede
+ * uma verificação a mais.
  */
 export interface CheckoutResult {
   id: string;
   provider: GatewayProvider;
-  url?: string;
-  clientSecret?: string;
-  /** Id da assinatura no gateway, quando o checkout cria uma. */
+  outcome: ChargeOutcome;
+  /** Para onde mandar o aluno quando `outcome === 'CHALLENGE'`. */
+  challengeUrl?: string;
+  /** Id da assinatura no gateway, quando a cobrança cria uma. */
   subscriptionId?: string;
+  /** Motivo legível da recusa, para a tela dizer algo além de "falhou". */
+  detail?: string;
+  /**
+   * @deprecated Checkout hospedado do AbacatePay. Sai na Task 25.
+   */
+  url?: string;
+  /**
+   * @deprecated Sessão incorporada do Stripe. Sai na Task 24.
+   */
+  clientSecret?: string;
 }
 
 /**
@@ -139,6 +211,21 @@ export abstract class CardGateway extends PaymentGateway {
   abstract capSubscriptionCycles(
     subscriptionId: string,
     cycles: number,
+  ): Promise<void>;
+  /**
+   * Ajusta o valor cobrado a cada ciclo da assinatura recorrente.
+   *
+   * Existe por causa do **cupom com prazo**. A assinatura lá fora tem um valor
+   * só; um cupom de três meses num plano mensal viraria desconto vitalício se
+   * ninguém corrigisse o valor quando ele acaba — receita perdida sem erro
+   * nenhum, que é a categoria de falha que esta spec inteira persegue.
+   *
+   * Quem dita o valor certo continua sendo o nosso cronograma: a parcela em
+   * aberto já nasce com (ou sem) o abatimento.
+   */
+  abstract updateSubscriptionAmount(
+    subscriptionId: string,
+    amount: number,
   ): Promise<void>;
 }
 
@@ -279,6 +366,8 @@ export class AbacatePayGateway extends PixGateway {
         id: data.id,
         url: data.url,
         provider: GATEWAY_PROVIDERS.ABACATEPAY,
+        // O checkout só abriu; quem confirma é o webhook.
+        outcome: CHARGE_OUTCOMES.PENDING,
       };
     } catch (error: any) {
       throw new Error(`AbacatePay não devolveu o checkout: ${error.message}`);
@@ -467,6 +556,11 @@ export class AbacatePayCardGateway extends CardGateway {
 
   /** Sem assinatura recorrente, não há ciclo para limitar. */
   capSubscriptionCycles(): Promise<void> {
+    return Promise.resolve();
+  }
+
+  /** Idem: sem assinatura lá fora, não há valor de ciclo para acertar. */
+  updateSubscriptionAmount(): Promise<void> {
     return Promise.resolve();
   }
 }

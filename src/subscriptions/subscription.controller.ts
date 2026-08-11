@@ -51,7 +51,9 @@ export class SubscriptionController {
 
   @Get('me')
   @Roles(ROLES.STUDENT)
-  mine(@CurrentUser() user: AuthenticatedUser): Promise<SubscriptionDto | null> {
+  mine(
+    @CurrentUser() user: AuthenticatedUser,
+  ): Promise<SubscriptionDto | null> {
     return this.service.getSubscription(user.sub);
   }
 

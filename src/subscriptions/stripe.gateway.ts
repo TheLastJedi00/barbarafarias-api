@@ -3,6 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import Stripe from 'stripe';
 import { UserRepository } from '../users/user.repository';
 import {
+  CHARGE_OUTCOMES,
   CardGateway,
   CheckoutRequest,
   CheckoutResult,
@@ -170,6 +171,8 @@ export class StripeGateway extends CardGateway {
       id: session.id,
       clientSecret: session.client_secret,
       provider: GATEWAY_PROVIDERS.STRIPE,
+      // A sessão só abriu; quem confirma é o webhook.
+      outcome: CHARGE_OUTCOMES.PENDING,
     };
   }
 
@@ -410,6 +413,15 @@ export class StripeGateway extends CardGateway {
     await stripe.subscriptions.update(subscriptionId, {
       cancel_at: addMonthsToUnix(subscription.start_date, cycles),
     });
+  }
+
+  /**
+   * Aqui quem aplica desconto de cupom às renovações é o próprio Stripe, então
+   * não há valor de ciclo para acertar do nosso lado. Existe só para satisfazer
+   * a porta enquanto esta classe vive (Task 24).
+   */
+  updateSubscriptionAmount(): Promise<void> {
+    return Promise.resolve();
   }
 
   // ------------------------------------------------------------- eventos

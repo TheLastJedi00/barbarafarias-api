@@ -344,6 +344,7 @@ describe('StripeGateway — checkout incorporado (Task 56)', () => {
       id: 'cs_test_1',
       clientSecret: 'cs_test_1_secret',
       provider: 'STRIPE',
+      outcome: 'PENDING',
     });
     expect(payload.ui_mode).toBe('embedded_page');
     expect(payload.mode).toBe('subscription');
