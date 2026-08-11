@@ -3,7 +3,14 @@ import { ConfigService } from '@nestjs/config';
 import { createHash } from 'node:crypto';
 import { MercadoPagoConfig, Order, PreApproval } from 'mercadopago';
 import { MPRateLimitError } from 'mercadopago/dist/utils/errors';
-import { PaymentGateway } from './payment.gateway';
+import type { OrderResponse } from 'mercadopago/dist/clients/order/commonTypes';
+import {
+  ChargeRequest,
+  PIX_EXPIRATION_SECONDS,
+  PaymentGateway,
+  PixChargeResult,
+  PixGateway,
+} from './payment.gateway';
 
 /**
  * Token dos clientes do Mercado Pago. Os clientes são construídos pelo módulo,
@@ -96,7 +103,7 @@ export class GatewayBusyError extends Error {
  *    extrato.
  */
 @Injectable()
-export class MercadoPagoGateway extends PaymentGateway {
+export class MercadoPagoGateway extends PaymentGateway implements PixGateway {
   protected readonly logger = new Logger(MercadoPagoGateway.name);
 
   constructor(
@@ -113,6 +120,108 @@ export class MercadoPagoGateway extends PaymentGateway {
 
   isEnabled(): boolean {
     return !!this.mp;
+  }
+
+  // ------------------------------------------------------------------- PIX
+
+  /**
+   * PIX à vista, por `POST /v1/orders`.
+   *
+   * O bloco de pagamento pede **dois** campos, não um: `id: 'pix'` e
+   * `type: 'bank_transfer'`. Faltando o segundo, a API não sabe que meio é.
+   *
+   * A resposta traz o QR **aninhado** em
+   * `transactions.payments[0].payment_method` — não na raiz, que é onde a
+   * intuição procura. Daí `readPixCodes` existir separado: o mapeamento errado
+   * não dá erro, dá um modal em branco.
+   *
+   * O `PixChargeResult` não muda de forma, então o `pix-payment-modal` do front
+   * nem sabe que o provedor trocou.
+   */
+  async createPixCharge(request: ChargeRequest): Promise<PixChargeResult> {
+    const orders = this.require().orders;
+    const amount = toAmountString(request.amount);
+
+    try {
+      const order = await orders.create({
+        body: {
+          type: 'online',
+          processing_mode: 'automatic',
+          total_amount: amount,
+          external_reference: request.externalId,
+          description: request.description,
+          payer: { email: request.customer.email },
+          transactions: {
+            payments: [
+              {
+                amount,
+                payment_method: { id: 'pix', type: 'bank_transfer' },
+                // Duração ISO 8601, **nunca segundos**: `3600` não é "o padrão
+                // de 24h", é payload inválido — ou, pior, aceito e
+                // interpretado de um jeito que ninguém previu.
+                expiration_time: toIsoDuration(PIX_EXPIRATION_SECONDS),
+              },
+            ],
+          },
+        },
+        requestOptions: {
+          idempotencyKey: idempotencyKeyFor(request.externalId),
+        },
+      });
+
+      return await this.pixResultOf(order);
+    } catch (error) {
+      this.rethrow(error, 'PIX');
+    }
+  }
+
+  /**
+   * Lê o QR da order, **reconsultando quando ele ainda não existe**.
+   *
+   * A doc avisa que a criação do pagamento pode ser assíncrona: *"a order fica
+   * com o status de processando e sem informações"*. Nesse caminho não há
+   * `qr_code` na resposta, e um mapeamento ingênuo devolveria
+   * `brCode: undefined` — que atravessa o backend, a DTO e o modal sem ninguém
+   * reclamar, e termina numa tela em branco sem erro.
+   *
+   * Por isso são duas defesas: uma reconsulta a `GET /v1/orders/{id}`, e um
+   * erro nomeado se nem assim vier. O erro cai no `catch` de `issueCharge`, que
+   * já sabe degradar com `warning` — o aluno lê "tente em instantes" em vez de
+   * encarar um retângulo vazio.
+   */
+  private async pixResultOf(order: OrderResponse): Promise<PixChargeResult> {
+    const id = order.id;
+    if (!id) {
+      throw new Error(`Mercado Pago não devolveu o id da order de PIX`);
+    }
+
+    const codes = readPixCodes(order);
+    if (codes) return { id, ...codes };
+
+    this.logger.warn(
+      `Order ${id} criada de forma assíncrona (sem QR): reconsultando.`,
+    );
+    const refetched = await this.require().orders.get({ id });
+    const retried = readPixCodes(refetched);
+    if (retried) return { id, ...retried };
+
+    throw new Error(
+      `Order ${id} ainda sem QR Code depois da reconsulta (status ${refetched.status})`,
+    );
+  }
+
+  /**
+   * O Mercado Pago **não tem** simulação de pagamento de PIX por API: no
+   * ambiente de teste quem paga é a conta de teste compradora, pelo próprio
+   * QR. Devolver `false` mantém o contrato da porta e deixa o `mockPay` do
+   * `DEV_MODE` confirmar a parcela do nosso lado, que é o que ele já fazia
+   * quando o gateway estava sem chave.
+   */
+  simulatePayment(chargeId: string): Promise<boolean> {
+    this.logger.warn(
+      `Simulação de pagamento não existe no Mercado Pago; ${chargeId} segue pendente lá fora.`,
+    );
+    return Promise.resolve(false);
   }
 
   /**
@@ -138,6 +247,23 @@ export class MercadoPagoGateway extends PaymentGateway {
     }
     throw error;
   }
+}
+
+/**
+ * O copia-e-cola e a imagem do QR, **aninhados** em
+ * `transactions.payments[0].payment_method`.
+ *
+ * `undefined` quando o pagamento ainda não existe (criação assíncrona) — e é
+ * por isso que o retorno é "tudo ou nada" em vez de um objeto com campos
+ * opcionais: meio QR não serve para nada, e um `brCode: undefined` que chega à
+ * tela é a falha silenciosa 16 do catálogo.
+ */
+export function readPixCodes(
+  order: OrderResponse,
+): { brCode: string; brCodeBase64: string } | undefined {
+  const method = order.transactions?.payments?.[0]?.payment_method;
+  if (!method?.qr_code || !method.qr_code_base64) return undefined;
+  return { brCode: method.qr_code, brCodeBase64: method.qr_code_base64 };
 }
 
 /** `1200` → `"1200.00"`. A Orders API recusa número e aceita string. */
