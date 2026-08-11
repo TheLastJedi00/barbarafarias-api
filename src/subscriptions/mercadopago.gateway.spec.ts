@@ -496,18 +496,18 @@ describe('MercadoPagoGateway — plano mensal', () => {
     expect(result.subscriptionId).toBe('preapproval_1');
   });
 
-  it('não manda `back_url`: o fluxo nunca redireciona', async () => {
+  it('manda um `back_url` público, nunca localhost', async () => {
     const { gateway, clients } = build();
 
     await gateway.createCheckout(pedidoDeCartao('MONTHLY') as any);
 
-    // O campo serve ao fluxo em que o aluno sai para autorizar numa página do
-    // provedor — proibido desde a spec 014. Conferido contra a API: sem ele a
-    // criação passa igual. E mandá-lo acoplava o mensal a `APP_BASE_URL`, que
-    // em `localhost` o provedor **recusa** — tornando o plano intestável na
-    // máquina por causa de um campo que não usamos.
+    // O campo é **obrigatório** pela API e **nunca usado** por nós: serve ao
+    // redirecionamento que a spec 014 proibiu. Derivá-lo de `APP_BASE_URL`
+    // punha `localhost` no corpo, que o provedor recusa — e tornava o plano
+    // mensal intestável na máquina por causa de um destino que ninguém visita.
     const { body } = clients.subscriptions.create.mock.calls[0][0];
-    expect(body.back_url).toBeUndefined();
+    expect(body.back_url).toBe('https://barbarafarias.com.br/meu-plano');
+    expect(body.back_url).not.toContain('localhost');
   });
 
   it('criar a assinatura NÃO é ter recebido', async () => {
