@@ -415,6 +415,19 @@ export class SubscriptionService {
           subscription: new SubscriptionDto(subscription),
           outcome: CHARGE_OUTCOMES.CHALLENGE,
           challengeUrl: anterior.challengeUrl,
+          // Reaproveitar sem dizer nada era um beco: quem abandonou a
+          // verificação reencontrava **o mesmo** desafio a cada tentativa, sem
+          // entender por que não avança.
+          //
+          // O texto **não promete prazo**. A doc fala em 40 minutos, mas uma
+          // order abandonada foi observada em `pending_challenge` bem depois
+          // disso — e um prazo que não se cumpre é pior que nenhum. Enquanto
+          // não houver saída de verdade (ver a pendência da spec), o honesto é
+          // dizer que a verificação é a mesma e mandar procurar a gerente.
+          warning:
+            'Você já tem uma verificação do banco em aberto para esta parcela, ' +
+            'e é ela que aparece aqui — não uma cobrança nova. Se não conseguir ' +
+            'concluir, fale com a gente antes de tentar outra vez.',
         };
       }
     } catch (error) {
