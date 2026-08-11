@@ -72,6 +72,7 @@ function pedidoDeCartao(plan: 'SEMIANNUAL' | 'ANNUAL' | 'MONTHLY') {
     description: `${config.label} — parcela 1`,
     externalId: `aluno-1-1-${config.totalAmount * 100}`,
     customer: CLIENTE,
+    product: { key: plan, label: `Plano ${config.label}` },
     plan,
     planLabel: `Plano ${config.label}`,
     studentId: 'aluno-1',
@@ -320,6 +321,83 @@ describe('MercadoPagoGateway — o pagador', () => {
 
     const { body } = clients.orders.create.mock.calls[0][0];
     expect(body.payer.identification).toBeDefined();
+  });
+});
+
+describe('MercadoPagoGateway — o que a antifraude precisa', () => {
+  it('manda um item com título, descrição, categoria e preço', async () => {
+    const { gateway, clients } = build();
+
+    await gateway.createCheckout(pedidoDeCartao('ANNUAL') as any);
+
+    const { body } = clients.orders.create.mock.calls[0][0];
+    // O checklist do provedor cobra `items` como obrigatório, e não é
+    // burocracia: é o que a antifraude lê para decidir entre aprovar, pedir
+    // desafio 3DS e recusar. Recusa indevida é venda perdida sem log nenhum.
+    expect(body.items).toHaveLength(1);
+    expect(body.items[0]).toMatchObject({
+      title: 'Plano Anual',
+      category_id: 'learnings',
+      quantity: 1,
+      unit_price: '2280.00',
+    });
+  });
+
+  it('o item é UM, pelo total — não doze de R$ 190', async () => {
+    const { gateway, clients } = build();
+
+    await gateway.createCheckout(pedidoDeCartao('ANNUAL') as any);
+
+    const [item] = clients.orders.create.mock.calls[0][0].body.items;
+    // Quem divide é o emissor. Descrever "12 unidades" diria ao provedor uma
+    // coisa que não é verdade, e ainda desalinharia item e `total_amount`.
+    expect(item.quantity).toBe(1);
+    expect(item.unit_price).toBe('2280.00');
+  });
+
+  it('manda o descritor que aparece na fatura', async () => {
+    const { gateway, clients } = build();
+
+    await gateway.createCheckout(pedidoDeCartao('ANNUAL') as any);
+
+    // Nome irreconhecível na fatura de um débito de R$ 2.280 sem reembolso é o
+    // roteiro do "não fui eu".
+    expect(clients.orders.create.mock.calls[0][0].body.config).toMatchObject({
+      statement_descriptor: 'BFARIAS',
+    });
+  });
+
+  it('manda o telefone com DDD separado', () => {
+    expect(
+      payerOf({ email: 'a@b.c', cellphone: '(11) 98888-7777' }),
+    ).toMatchObject({ phone: { area_code: '11', number: '988887777' } });
+  });
+
+  it('telefone incompleto some, em vez de ir pela metade', () => {
+    const payer = payerOf({ email: 'a@b.c', cellphone: '9999' });
+    expect(payer.phone).toBeUndefined();
+  });
+
+  it('o PIX também leva item e descritor', async () => {
+    const { gateway, clients } = build();
+    clients.orders.create.mockResolvedValue({
+      id: 'ORD01PIX',
+      transactions: {
+        payments: [{ payment_method: { qr_code: 'x', qr_code_base64: 'y' } }],
+      },
+    });
+
+    await gateway.createPixCharge({
+      amount: 240,
+      description: 'Mensal — parcela 1',
+      externalId: 'aluno-1-1-24000',
+      customer: CLIENTE,
+      product: { key: 'MONTHLY', label: 'Plano Mensal' },
+    });
+
+    const { body } = clients.orders.create.mock.calls[0][0];
+    expect(body.items[0].title).toBe('Plano Mensal');
+    expect(body.config.statement_descriptor).toBe('BFARIAS');
   });
 });
 
