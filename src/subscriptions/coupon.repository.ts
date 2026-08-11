@@ -50,7 +50,9 @@ export class CouponRepository {
   }
 
   async update(coupon: Coupon): Promise<void> {
-    await this.coupons.doc(coupon.id).set(this.toPlain(coupon), { merge: true });
+    await this.coupons
+      .doc(coupon.id)
+      .set(this.toPlain(coupon), { merge: true });
   }
 
   private toPlain(coupon: Coupon): Record<string, unknown> {

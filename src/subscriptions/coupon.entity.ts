@@ -1,7 +1,7 @@
 /**
  * Cupom de desconto criado pela gerente (spec 012 RF15).
  *
- * É um cupom **nosso**, não o do AbacatePay: o desconto precisa ser em reais e
+ * É um cupom **nosso**, não o do gateway: o desconto precisa ser em reais e
  * durar um número de parcelas da assinatura, e o cupom do gateway modela outra
  * coisa (percentual/fixo com limite de resgates, sem noção de duração). Manter
  * o cálculo aqui também deixa o valor da parcela correto antes de a cobrança

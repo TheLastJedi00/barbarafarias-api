@@ -22,16 +22,12 @@ function fakeSubscriptionRepository() {
     findByChargeId: jest.fn(
       async (chargeId: string) =>
         [...store.values()].find((item) =>
-          item.charges.some(
-            (charge) =>
-              charge.gatewayChargeId === chargeId ||
-              charge.abacatePayId === chargeId,
-          ),
+          item.charges.some((charge) => charge.gatewayChargeId === chargeId),
         ) ?? null,
     ),
-    findByStripeSubscriptionId: jest.fn(
+    findByGatewaySubscriptionId: jest.fn(
       async (id: string) =>
-        [...store.values()].find((item) => item.stripeSubscriptionId === id) ??
+        [...store.values()].find((item) => item.gatewaySubscriptionId === id) ??
         null,
     ),
     save: jest.fn(async (subscription: Subscription) => {
@@ -74,34 +70,63 @@ function build(overrides: Record<string, any> = {}) {
   const card = {
     isEnabled: jest.fn().mockReturnValue(true),
     createCheckout: jest.fn().mockResolvedValue({
-      id: 'cs_test_1',
-      clientSecret: 'cs_test_1_secret',
-      provider: 'STRIPE',
+      id: 'ORD01ABC',
+      provider: 'MERCADOPAGO',
+      outcome: 'PAID',
     }),
     cancelSubscription: jest.fn().mockResolvedValue(undefined),
-    capSubscriptionCycles: jest.fn().mockResolvedValue(undefined),
+    updateSubscriptionAmount: jest.fn().mockResolvedValue(undefined),
   };
-  const config = {
-    get: jest.fn((key: string) =>
-      key === 'ABACATEPAY_WEBHOOK_SECRET' ? 'segredo' : undefined,
-    ),
+  const acceptances = {
+    create: jest.fn(async (acceptance: any) => acceptance),
+    findAll: jest.fn().mockResolvedValue([]),
   };
+  const config = { get: jest.fn(() => undefined) };
   Object.assign(config, overrides.config ?? {});
 
   const service = new SubscriptionService(
     subscriptions as any,
     coupons as any,
     users as any,
+    acceptances as any,
     pix as any,
     card as any,
     config as any,
   );
-  return { service, subscriptions, coupons, users, pix, card, config };
+  return {
+    service,
+    subscriptions,
+    coupons,
+    users,
+    acceptances,
+    pix,
+    card,
+    config,
+  };
 }
+
+/**
+ * Notificação de order paga, como o webhook a entrega depois de buscar o
+ * recurso. **O par completo**: `processed` sozinho não confirma nada.
+ */
+function orderPaga(id = 'pix_1') {
+  return {
+    topic: 'order' as const,
+    id,
+    order: { id, status: 'processed', status_detail: 'accredited' },
+  };
+}
+
+/** Cartão como o formulário do gateway o entrega: token, e nada mais. */
+const CARTAO_TOKEN = { token: 'tok_123', paymentMethodId: 'master' };
+
+/** Aceite dos termos, exigido em toda contratação (spec 023 §7.2). */
+const ACEITE = { termsVersion: '2026-08-1', accepted: true };
 
 const PIX = {
   plan: SUBSCRIPTION_PLANS.MONTHLY,
   paymentMethod: PAYMENT_METHODS.PIX_RECURRING,
+  acceptance: ACEITE,
 };
 
 describe('addMonths', () => {
@@ -134,6 +159,7 @@ describe('SubscriptionService — cronograma de parcelas', () => {
     await service.choosePlan('aluno-1', {
       plan: SUBSCRIPTION_PLANS.SEMIANNUAL,
       paymentMethod: PAYMENT_METHODS.CREDIT_CARD,
+      acceptance: ACEITE,
     } as any);
 
     const saved = subscriptions.store.get('aluno-1')!;
@@ -151,6 +177,7 @@ describe('SubscriptionService — cronograma de parcelas', () => {
     await service.choosePlan('aluno-1', {
       plan: SUBSCRIPTION_PLANS.ANNUAL,
       paymentMethod: PAYMENT_METHODS.CREDIT_CARD,
+      acceptance: ACEITE,
     } as any);
 
     const saved = subscriptions.store.get('aluno-1')!;
@@ -164,6 +191,7 @@ describe('SubscriptionService — cronograma de parcelas', () => {
     await service.choosePlan('aluno-1', {
       plan: SUBSCRIPTION_PLANS.SEMIANNUAL,
       paymentMethod: PAYMENT_METHODS.CREDIT_CARD,
+      acceptance: ACEITE,
     } as any);
 
     const { charges, startDate, nextChargeDate } =
@@ -182,10 +210,7 @@ describe('SubscriptionService — cronograma de parcelas', () => {
       SUBSCRIPTION_STATUS.PENDING,
     );
 
-    await service.handleWebhook(
-      { event: 'billing.paid', data: { pixQrCode: { id: 'pix_1' } } },
-      'segredo',
-    );
+    await service.handleMercadoPagoEvent(orderPaga());
 
     const saved = subscriptions.store.get('aluno-1')!;
     expect(saved.status).toBe(SUBSCRIPTION_STATUS.ACTIVE);
@@ -203,6 +228,101 @@ describe('SubscriptionService — cronograma de parcelas', () => {
   });
 });
 
+describe('SubscriptionService — aceite dos termos', () => {
+  it('o aceite é gravado dentro da contratação, com os números congelados', async () => {
+    const { service, acceptances } = build();
+
+    await service.choosePlan('aluno-1', {
+      plan: SUBSCRIPTION_PLANS.ANNUAL,
+      paymentMethod: PAYMENT_METHODS.CREDIT_CARD,
+      acceptance: ACEITE,
+    } as any);
+
+    expect(acceptances.create).toHaveBeenCalledTimes(1);
+    const gravado = acceptances.create.mock.calls[0][0];
+    expect(gravado).toMatchObject({
+      studentId: 'aluno-1',
+      studentName: 'Ana Aluna',
+      studentEmail: 'ana@example.com',
+      plan: 'ANNUAL',
+      planLabel: 'Anual',
+      // Congelados, não referenciados: o catálogo muda de preço e o contrato
+      // assinado não muda junto.
+      totalAmount: 2280,
+      installments: 12,
+      installmentAmount: 190,
+      termsVersion: '2026-08-1',
+    });
+    // ISO **com hora**: "concordou em 10/08" não responde a mesma pergunta que
+    // "concordou às 22h47 de 10/08".
+    expect(gravado.acceptedAt).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/);
+  });
+
+  it('não grava IP nem user-agent', async () => {
+    const { service, acceptances } = build();
+
+    await service.choosePlan('aluno-1', PIX as any);
+
+    // Dado pessoal novo, sem base declarada, para um ganho probatório que
+    // `studentId` autenticado + timestamp já entrega.
+    const gravado = acceptances.create.mock.calls[0][0];
+    expect(gravado.ip).toBeUndefined();
+    expect(gravado.userAgent).toBeUndefined();
+  });
+
+  it('o cupom acordado fica registrado junto', async () => {
+    const { service, acceptances, coupons } = build();
+    coupons.findByCode.mockResolvedValue(
+      new Coupon({
+        id: 'c1',
+        code: 'BEMVINDA',
+        discountAmount: 50,
+        durationMonths: null,
+        active: true,
+        createdAt: '',
+        createdBy: '',
+      }),
+    );
+
+    await service.choosePlan('aluno-1', {
+      plan: SUBSCRIPTION_PLANS.SEMIANNUAL,
+      paymentMethod: PAYMENT_METHODS.CREDIT_CARD,
+      couponCode: 'BEMVINDA',
+      acceptance: ACEITE,
+    } as any);
+
+    const gravado = acceptances.create.mock.calls[0][0];
+    expect(gravado.couponCode).toBe('BEMVINDA');
+    // O total congelado é o **descontado**, que é o que foi acordado.
+    expect(gravado.totalAmount).toBe(900);
+  });
+
+  it('falhar ao gravar o aceite derruba a contratação, e nada é cobrado', async () => {
+    const { service, acceptances, pix, subscriptions } = build();
+    acceptances.create.mockRejectedValue(new Error('firestore fora'));
+
+    await expect(service.choosePlan('aluno-1', PIX as any)).rejects.toThrow();
+
+    // Ao contrário do espelho no usuário e do gateway, que degradam: os dois
+    // são conveniência, este é o registro que autoriza a cobrança.
+    expect(pix.createPixCharge).not.toHaveBeenCalled();
+    expect(subscriptions.store.get('aluno-1')).toBeUndefined();
+  });
+
+  it('cada contratação gera um registro novo, nunca sobrescreve', async () => {
+    const { service, acceptances, subscriptions } = build();
+
+    await service.choosePlan('aluno-1', PIX as any);
+    await service.cancelSubscription('aluno-1');
+    subscriptions.store.delete('aluno-1');
+    await service.choosePlan('aluno-1', PIX as any);
+
+    const ids = acceptances.create.mock.calls.map((call: any[]) => call[0].id);
+    expect(ids).toHaveLength(2);
+    expect(ids[0]).not.toBe(ids[1]);
+  });
+});
+
 describe('SubscriptionService — pagamento', () => {
   it('PIX devolve QR Code e copia-e-cola para o modal', async () => {
     const { service } = build();
@@ -211,68 +331,104 @@ describe('SubscriptionService — pagamento', () => {
 
     expect(response.pixQrCodeUrl).toContain('base64');
     expect(response.pixCopyPaste).toBe('000201...');
-    expect(response.checkoutUrl).toBeUndefined();
   });
 
-  it('cartão devolve o segredo da sessão para o formulário na própria página', async () => {
+  it('contratar no cartão grava o plano e devolve o que o formulário precisa', async () => {
     const { service, pix, card } = build();
 
     const response = await service.choosePlan('aluno-1', {
       plan: SUBSCRIPTION_PLANS.ANNUAL,
       paymentMethod: PAYMENT_METHODS.CREDIT_CARD,
+      acceptance: ACEITE,
     } as any);
 
-    expect(response.clientSecret).toBe('cs_test_1_secret');
-    expect(response.checkoutUrl).toBeUndefined();
-    expect(response.pixCopyPaste).toBeUndefined();
-    expect(card.createCheckout).toHaveBeenCalledTimes(1);
+    // **A cobrança ainda não existe, e é de propósito**: o token do cartão
+    // nasce no navegador, depois desta resposta. Quem cobra é `payWithCard`.
+    expect(card.createCheckout).not.toHaveBeenCalled();
     expect(pix.createPixCharge).not.toHaveBeenCalled();
+    expect(response.card).toEqual({
+      amount: 2280,
+      installments: 12,
+      chargeIndex: 1,
+    });
+    expect(response.pixCopyPaste).toBeUndefined();
   });
 
-  it('o gateway que devolve URL (AbacatePay) continua sendo redirecionamento', async () => {
-    const { service, card } = build();
-    card.createCheckout.mockResolvedValue({
-      id: 'bill_1',
-      url: 'https://pay.example/1',
-      provider: 'ABACATEPAY',
-    });
-
-    const response = await service.choosePlan('aluno-1', {
+  it('o anual vai em 12x e o semestral em 6x, tirados do catálogo', async () => {
+    const anual = build();
+    await anual.service.choosePlan('aluno-1', {
       plan: SUBSCRIPTION_PLANS.ANNUAL,
       paymentMethod: PAYMENT_METHODS.CREDIT_CARD,
+      acceptance: ACEITE,
     } as any);
+    await anual.service.payWithCard('aluno-1', CARTAO_TOKEN as any);
 
-    expect(response.checkoutUrl).toBe('https://pay.example/1');
-    expect(response.clientSecret).toBeUndefined();
-  });
-
-  it('o plano finito informa quantos ciclos tem; o mensal, que não tem fim', async () => {
-    const { service, card } = build();
-
-    await service.choosePlan('aluno-1', {
-      plan: SUBSCRIPTION_PLANS.SEMIANNUAL,
-      paymentMethod: PAYMENT_METHODS.CREDIT_CARD,
-    } as any);
-    expect(card.createCheckout).toHaveBeenCalledWith(
+    expect(anual.card.createCheckout).toHaveBeenCalledWith(
       expect.objectContaining({
-        plan: 'SEMIANNUAL',
-        studentId: 'aluno-1',
-        chargeIndex: 1,
-        recurring: { cycles: 6 },
+        installments: 12,
+        // O total do catálogo, não a parcela: é **uma** cobrança que o emissor
+        // divide, não doze cobranças mensais.
+        amount: 2280,
+        recurring: { cycles: 12 },
       }),
     );
 
-    const mensal = build();
-    await mensal.service.choosePlan('aluno-2', {
-      plan: SUBSCRIPTION_PLANS.MONTHLY,
+    const semestral = build();
+    await semestral.service.choosePlan('aluno-2', {
+      plan: SUBSCRIPTION_PLANS.SEMIANNUAL,
       paymentMethod: PAYMENT_METHODS.CREDIT_CARD,
+      acceptance: ACEITE,
     } as any);
-    expect(mensal.card.createCheckout).toHaveBeenCalledWith(
-      expect.objectContaining({ recurring: { cycles: null } }),
+    await semestral.service.payWithCard('aluno-2', CARTAO_TOKEN as any);
+
+    expect(semestral.card.createCheckout).toHaveBeenCalledWith(
+      expect.objectContaining({ installments: 6, amount: 1200 }),
     );
   });
 
-  it('o cupom vai inteiro para o gateway, não como valor já abatido', async () => {
+  it('o mensal abre assinatura recorrente, não pedido parcelado', async () => {
+    const { service, card } = build();
+    card.createCheckout.mockResolvedValue({
+      id: 'preapproval_1',
+      subscriptionId: 'preapproval_1',
+      provider: 'MERCADOPAGO',
+      outcome: 'PENDING',
+    });
+
+    await service.choosePlan('aluno-1', {
+      plan: SUBSCRIPTION_PLANS.MONTHLY,
+      paymentMethod: PAYMENT_METHODS.CREDIT_CARD,
+      acceptance: ACEITE,
+    } as any);
+    await service.payWithCard('aluno-1', CARTAO_TOKEN as any);
+
+    expect(card.createCheckout).toHaveBeenCalledWith(
+      // `cycles: null` é a régua que manda o gateway abrir `preapproval`.
+      expect.objectContaining({ recurring: { cycles: null }, amount: 240 }),
+    );
+  });
+
+  it('o número de parcelas ignora o que o cliente mandar', async () => {
+    const { service, card } = build();
+    await service.choosePlan('aluno-1', {
+      plan: SUBSCRIPTION_PLANS.ANNUAL,
+      paymentMethod: PAYMENT_METHODS.CREDIT_CARD,
+      acceptance: ACEITE,
+    } as any);
+
+    // A DTO nem tem o campo, mas alguém pode reintroduzi-lo: a trava do
+    // formulário é conveniência, esta assertiva é a régua.
+    await service.payWithCard('aluno-1', {
+      ...CARTAO_TOKEN,
+      installments: 1,
+    } as any);
+
+    expect(card.createCheckout).toHaveBeenCalledWith(
+      expect.objectContaining({ installments: 12 }),
+    );
+  });
+
+  it('o cupom vai abatido no total, com o código ao lado', async () => {
     const { service, card, coupons } = build();
     coupons.findByCode.mockResolvedValue(
       new Coupon({
@@ -290,15 +446,18 @@ describe('SubscriptionService — pagamento', () => {
       plan: SUBSCRIPTION_PLANS.SEMIANNUAL,
       paymentMethod: PAYMENT_METHODS.CREDIT_CARD,
       couponCode: 'BEMVINDA',
+      acceptance: ACEITE,
     } as any);
+    await service.payWithCard('aluno-1', CARTAO_TOKEN as any);
 
+    // 3 parcelas com R$ 50 de desconto: 1200 - 150.
     expect(card.createCheckout).toHaveBeenCalledWith(
-      expect.objectContaining({
-        coupon: { code: 'BEMVINDA', amountOff: 50, durationMonths: 3 },
-        // O valor cheio: quem abate as renovações é o Stripe.
-        amount: 200,
-      }),
+      expect.objectContaining({ amount: 1050, couponCode: 'BEMVINDA' }),
     );
+    // Sem objeto de desconto: num pagamento único não há renovação para o
+    // gateway descontar, e um segundo lugar dizendo quanto o aluno deve é uma
+    // segunda fonte de verdade.
+    expect(card.createCheckout.mock.calls[0][0].coupon).toBeUndefined();
   });
 
   it('PIX não toca a porta de cartão', async () => {
@@ -316,9 +475,10 @@ describe('SubscriptionService — pagamento', () => {
     const response = await service.choosePlan('aluno-1', {
       plan: SUBSCRIPTION_PLANS.ANNUAL,
       paymentMethod: PAYMENT_METHODS.CREDIT_CARD,
+      acceptance: ACEITE,
     } as any);
 
-    expect(response.clientSecret).toBe('cs_test_1_secret');
+    expect(response.card).toBeDefined();
     expect(response.warning).toBeUndefined();
   });
 
@@ -332,48 +492,59 @@ describe('SubscriptionService — pagamento', () => {
     expect(subscriptions.store.get('aluno-1')).toBeDefined();
   });
 
-  it('trocar o método reemite a parcela em aberto e solta a cobrança antiga', async () => {
-    const { service, subscriptions, card } = build();
+  it('trocar de PIX para cartão solta a cobrança antiga antes de reemitir', async () => {
+    const { service, subscriptions } = build();
     await service.choosePlan('aluno-1', PIX as any);
+    expect(subscriptions.store.get('aluno-1')!.charges[0].gatewayChargeId).toBe(
+      'pix_1',
+    );
 
     const response = await service.changePaymentMethod('aluno-1', {
       paymentMethod: PAYMENT_METHODS.CREDIT_CARD,
     });
 
-    expect(response.clientSecret).toBe('cs_test_1_secret');
-    expect(card.createCheckout).toHaveBeenCalledTimes(1);
-    expect(subscriptions.store.get('aluno-1')!.charges[0].gatewayChargeId).toBe(
-      'cs_test_1',
-    );
+    // Sem soltar o vínculo, o webhook do PIX abandonado ainda marcaria a
+    // parcela como paga — e o aluno teria pago no cartão pela mesma coisa.
+    expect(
+      subscriptions.store.get('aluno-1')!.charges[0].gatewayChargeId,
+    ).toBeUndefined();
+    expect(response.card).toBeDefined();
   });
 
   it('o webhook é idempotente: reprocessar não conta a parcela duas vezes', async () => {
     const { service, subscriptions } = build();
     await service.choosePlan('aluno-1', PIX as any);
-    const paid = {
-      event: 'billing.paid',
-      data: { pixQrCode: { id: 'pix_1' } },
-    };
+    const paid = orderPaga();
 
-    await service.handleWebhook(paid, 'segredo');
-    await service.handleWebhook(paid, 'segredo');
+    await service.handleMercadoPagoEvent(paid);
+    await service.handleMercadoPagoEvent(paid);
+    await service.handleMercadoPagoEvent(paid);
 
     expect(subscriptions.store.get('aluno-1')!.paidInstallments).toBe(1);
   });
 
-  it('o webhook recusa segredo errado', async () => {
-    const { service } = build();
-    await expect(service.handleWebhook({}, 'outro')).rejects.toThrow();
+  it('order que não está creditada não confirma parcela nenhuma', async () => {
+    const { service, subscriptions } = build();
+    await service.choosePlan('aluno-1', PIX as any);
+
+    // PIX emitido e ainda não pago. `action_required` é o estado normal de um
+    // QR no ar — tratá-lo como sucesso liberaria acesso sem dinheiro.
+    await service.handleMercadoPagoEvent({
+      topic: 'order',
+      id: 'pix_1',
+      order: { status: 'action_required', status_detail: 'waiting_transfer' },
+    });
+
+    const saved = subscriptions.store.get('aluno-1')!;
+    expect(saved.status).toBe(SUBSCRIPTION_STATUS.PENDING);
+    expect(saved.paidInstallments).toBe(0);
   });
 
   it('pagar uma renovação do mensal projeta a próxima', async () => {
     const { service, subscriptions } = build();
     await service.choosePlan('aluno-1', PIX as any);
 
-    await service.handleWebhook(
-      { event: 'billing.paid', data: { pixQrCode: { id: 'pix_1' } } },
-      'segredo',
-    );
+    await service.handleMercadoPagoEvent(orderPaga());
 
     const saved = subscriptions.store.get('aluno-1')!;
     // 6 pendentes continuam à frente, agora com a paga arquivada atrás.
@@ -403,6 +574,7 @@ describe('SubscriptionService — cupons', () => {
       plan: SUBSCRIPTION_PLANS.SEMIANNUAL,
       paymentMethod: PAYMENT_METHODS.CREDIT_CARD,
       couponCode: 'bemvinda',
+      acceptance: ACEITE,
     } as any);
 
     const saved = subscriptions.store.get('aluno-1')!;
@@ -423,6 +595,7 @@ describe('SubscriptionService — cupons', () => {
       plan: SUBSCRIPTION_PLANS.SEMIANNUAL,
       paymentMethod: PAYMENT_METHODS.CREDIT_CARD,
       couponCode: 'BEMVINDA',
+      acceptance: ACEITE,
     } as any);
 
     const saved = subscriptions.store.get('aluno-1')!;
@@ -468,10 +641,7 @@ describe('SubscriptionService — cancelamento e cobranças', () => {
   it('cancelar guarda a data e apaga as parcelas ainda não pagas', async () => {
     const { service, subscriptions } = build();
     await service.choosePlan('aluno-1', PIX as any);
-    await service.handleWebhook(
-      { event: 'billing.paid', data: { pixQrCode: { id: 'pix_1' } } },
-      'segredo',
-    );
+    await service.handleMercadoPagoEvent(orderPaga());
 
     const cancelled = await service.cancelSubscription('aluno-1');
 
@@ -486,6 +656,7 @@ describe('SubscriptionService — cancelamento e cobranças', () => {
     await service.choosePlan('aluno-1', {
       plan: SUBSCRIPTION_PLANS.SEMIANNUAL,
       paymentMethod: PAYMENT_METHODS.CREDIT_CARD,
+      acceptance: ACEITE,
     } as any);
 
     const upcoming = await service.getUpcomingCharges('aluno-1');
@@ -503,31 +674,51 @@ describe('SubscriptionService — cancelamento e cobranças', () => {
   });
 });
 
-describe('SubscriptionService — ciclo de vida no Stripe (Task 59)', () => {
+describe('SubscriptionService — ciclo de vida da assinatura no gateway', () => {
   const CARTAO = {
     plan: SUBSCRIPTION_PLANS.MONTHLY,
     paymentMethod: PAYMENT_METHODS.CREDIT_CARD,
   };
 
-  /** Assinatura de cartão já paga, como o webhook a deixaria. */
+  /** Assinatura de cartão já ativa, como o webhook a deixaria. */
   async function comAssinaturaAtiva() {
     const context = build();
-    await context.service.choosePlan('aluno-1', CARTAO as any);
+    await context.service.choosePlan('aluno-1', {
+      ...CARTAO,
+      acceptance: ACEITE,
+    } as any);
     const saved = context.subscriptions.store.get('aluno-1')!;
-    saved.stripeSubscriptionId = 'sub_1';
+    saved.gatewaySubscriptionId = 'preapproval_1';
     saved.status = SUBSCRIPTION_STATUS.ACTIVE;
     return context;
   }
 
-  it('cancelar o plano encerra a assinatura no Stripe', async () => {
+  /** Parcela do mensal, como `/authorized_payments/{id}` a devolve. */
+  function parcela(statusDetail?: string) {
+    return {
+      topic: 'subscription_authorized_payment' as const,
+      id: 'ap_1',
+      cycle: {
+        id: 'ap_1',
+        preapproval_id: 'preapproval_1',
+        // `processed` nos dois casos: é o pagamento que desempata.
+        status: 'processed',
+        payment: statusDetail
+          ? { id: 'pay_1', status_detail: statusDetail }
+          : undefined,
+      },
+    };
+  }
+
+  it('cancelar o plano encerra a assinatura no gateway', async () => {
     const { service, card } = await comAssinaturaAtiva();
 
     await service.cancelSubscription('aluno-1');
 
-    expect(card.cancelSubscription).toHaveBeenCalledWith('sub_1');
+    expect(card.cancelSubscription).toHaveBeenCalledWith('preapproval_1');
   });
 
-  it('falhar no Stripe não prende o aluno no plano', async () => {
+  it('falhar no gateway não prende o aluno no plano', async () => {
     const { service, card, subscriptions } = await comAssinaturaAtiva();
     card.cancelSubscription.mockRejectedValue(new Error('rede'));
 
@@ -545,78 +736,98 @@ describe('SubscriptionService — ciclo de vida no Stripe (Task 59)', () => {
 
     await service.cancelSubscription('aluno-1');
 
+    // Deixou de ser detalhe de implementação e virou regra de negócio: no PIX
+    // não existe assinatura lá fora para encerrar.
     expect(card.cancelSubscription).not.toHaveBeenCalled();
   });
 
-  it('a sessão concluída guarda a assinatura, confirma a parcela e ativa o plano', async () => {
+  it('criar a assinatura não confirma parcela: quem confirma é o webhook', async () => {
     const { service, subscriptions, card } = build();
-    await service.choosePlan('aluno-1', CARTAO as any);
-
-    await service.handleStripeEvent({
-      id: 'evt_1',
-      type: 'checkout.session.completed',
-      object: {
-        id: 'cs_test_1',
-        subscription: 'sub_1',
-        metadata: { studentId: 'aluno-1', chargeIndex: '1' },
-      },
+    card.createCheckout.mockResolvedValue({
+      id: 'preapproval_1',
+      subscriptionId: 'preapproval_1',
+      provider: 'MERCADOPAGO',
+      outcome: 'PENDING',
     });
-
-    const saved = subscriptions.store.get('aluno-1')!;
-    expect(saved.stripeSubscriptionId).toBe('sub_1');
-    expect(saved.status).toBe(SUBSCRIPTION_STATUS.ACTIVE);
-    expect(saved.paidInstallments).toBe(1);
-    // Mensal não tem fim: nada de teto de ciclos.
-    expect(card.capSubscriptionCycles).not.toHaveBeenCalled();
-  });
-
-  it('plano finito ganha o teto de ciclos assim que a assinatura existe', async () => {
-    const { service, card } = build();
     await service.choosePlan('aluno-1', {
-      plan: SUBSCRIPTION_PLANS.SEMIANNUAL,
-      paymentMethod: PAYMENT_METHODS.CREDIT_CARD,
+      ...CARTAO,
+      acceptance: ACEITE,
     } as any);
 
-    await service.handleStripeEvent({
-      id: 'evt_1',
-      type: 'checkout.session.completed',
-      object: {
-        id: 'cs_test_1',
-        subscription: 'sub_1',
-        metadata: { studentId: 'aluno-1', chargeIndex: '1', cycles: '6' },
-      },
-    });
+    await service.payWithCard('aluno-1', CARTAO_TOKEN as any);
 
-    expect(card.capSubscriptionCycles).toHaveBeenCalledWith('sub_1', 6);
+    // A primeira cobrança sai em até ~1h. Ativar aqui liberaria acesso antes
+    // de existir dinheiro — e para sempre, se a cobrança falhar.
+    const saved = subscriptions.store.get('aluno-1')!;
+    expect(saved.gatewaySubscriptionId).toBe('preapproval_1');
+    expect(saved.status).toBe(SUBSCRIPTION_STATUS.PENDING);
+    expect(saved.paidInstallments).toBe(0);
   });
 
-  it('o evento do Stripe é idempotente, como o do AbacatePay', async () => {
+  it('cartão creditado na hora ativa o plano', async () => {
     const { service, subscriptions } = build();
-    await service.choosePlan('aluno-1', CARTAO as any);
-    const evento = {
-      id: 'evt_1',
-      type: 'checkout.session.completed',
-      object: {
-        id: 'cs_test_1',
-        subscription: 'sub_1',
-        metadata: { studentId: 'aluno-1', chargeIndex: '1' },
-      },
-    };
+    await service.choosePlan('aluno-1', {
+      plan: SUBSCRIPTION_PLANS.ANNUAL,
+      paymentMethod: PAYMENT_METHODS.CREDIT_CARD,
+      acceptance: ACEITE,
+    } as any);
 
-    await service.handleStripeEvent(evento);
-    await service.handleStripeEvent(evento);
+    const result = await service.payWithCard('aluno-1', CARTAO_TOKEN as any);
 
-    expect(subscriptions.store.get('aluno-1')!.paidInstallments).toBe(1);
+    expect(result.outcome).toBe('PAID');
+    expect(subscriptions.store.get('aluno-1')!.status).toBe(
+      SUBSCRIPTION_STATUS.ACTIVE,
+    );
   });
 
-  it('a renovação paga confirma a próxima parcela e projeta mais uma', async () => {
+  it('desafio 3DS pendente não é sucesso', async () => {
+    const { service, subscriptions, card } = build();
+    card.createCheckout.mockResolvedValue({
+      id: 'ORD01ABC',
+      provider: 'MERCADOPAGO',
+      outcome: 'CHALLENGE',
+      challengeUrl: 'https://mp/challenge',
+    });
+    await service.choosePlan('aluno-1', {
+      plan: SUBSCRIPTION_PLANS.ANNUAL,
+      paymentMethod: PAYMENT_METHODS.CREDIT_CARD,
+      acceptance: ACEITE,
+    } as any);
+
+    const result = await service.payWithCard('aluno-1', CARTAO_TOKEN as any);
+
+    // Dar isto por concluído deixaria o aluno debitado, a tela dizendo
+    // "concluído" e a cobrança nunca completando.
+    expect(result.outcome).toBe('CHALLENGE');
+    expect(result.challengeUrl).toBe('https://mp/challenge');
+    expect(subscriptions.store.get('aluno-1')!.status).toBe(
+      SUBSCRIPTION_STATUS.PENDING,
+    );
+  });
+
+  it('cartão recusado volta como 400, não como plano ativo', async () => {
+    const { service, card } = build();
+    card.createCheckout.mockResolvedValue({
+      id: 'ORD01ABC',
+      provider: 'MERCADOPAGO',
+      outcome: 'REJECTED',
+      detail: 'rejected_by_issuer',
+    });
+    await service.choosePlan('aluno-1', {
+      plan: SUBSCRIPTION_PLANS.ANNUAL,
+      paymentMethod: PAYMENT_METHODS.CREDIT_CARD,
+      acceptance: ACEITE,
+    } as any);
+
+    await expect(
+      service.payWithCard('aluno-1', CARTAO_TOKEN as any),
+    ).rejects.toThrow(BadRequestException);
+  });
+
+  it('a renovação creditada confirma a próxima parcela e projeta mais uma', async () => {
     const { service, subscriptions } = await comAssinaturaAtiva();
 
-    await service.handleStripeEvent({
-      id: 'evt_2',
-      type: 'invoice.paid',
-      object: { id: 'in_1', subscription: 'sub_1' },
-    });
+    await service.handleMercadoPagoEvent(parcela('accredited') as any);
 
     const saved = subscriptions.store.get('aluno-1')!;
     expect(saved.paidInstallments).toBe(1);
@@ -625,32 +836,41 @@ describe('SubscriptionService — ciclo de vida no Stripe (Task 59)', () => {
     ).toHaveLength(6);
   });
 
-  it('pagamento recusado derruba o acesso ao conteúdo', async () => {
+  it('parcela processada com pagamento recusado NÃO confirma nada', async () => {
     const { service, subscriptions, users } = await comAssinaturaAtiva();
 
-    await service.handleStripeEvent({
-      id: 'evt_3',
-      type: 'invoice.payment_failed',
-      object: { id: 'in_1', subscription: 'sub_1' },
-    });
-
-    expect(subscriptions.store.get('aluno-1')!.status).toBe(
-      SUBSCRIPTION_STATUS.PAST_DUE,
+    // Depois da quarta tentativa recusada a parcela também fica `processed`.
+    // Tratar os dois igual dá acesso vitalício de graça para quem nunca pagou.
+    await service.handleMercadoPagoEvent(
+      parcela('cc_rejected_other_reason') as any,
     );
+
+    const saved = subscriptions.store.get('aluno-1')!;
+    expect(saved.paidInstallments).toBe(0);
+    expect(saved.status).toBe(SUBSCRIPTION_STATUS.PAST_DUE);
     expect(users.updateSubscriptionState).toHaveBeenCalledWith(
       'aluno-1',
       expect.objectContaining({ isPaying: false }),
     );
   });
 
-  it('assinatura encerrada no Stripe cancela o plano sem tentar cancelar de volta', async () => {
+  it('parcela sem pagamento associado também não confirma', async () => {
+    const { service, subscriptions } = await comAssinaturaAtiva();
+
+    await service.handleMercadoPagoEvent(parcela() as any);
+
+    expect(subscriptions.store.get('aluno-1')!.paidInstallments).toBe(0);
+  });
+
+  it('assinatura cancelada pelo gateway cancela o plano sem cancelar de volta', async () => {
     const { service, subscriptions, card } = await comAssinaturaAtiva();
 
-    await service.handleStripeEvent({
-      id: 'evt_4',
-      type: 'customer.subscription.deleted',
-      object: { id: 'sub_1' },
-    });
+    // Chega sem ninguém pedir: 3 parcelas recusadas e o gateway cancela.
+    await service.handleMercadoPagoEvent({
+      topic: 'subscription_preapproval',
+      id: 'preapproval_1',
+      status: 'cancelled',
+    } as any);
 
     expect(subscriptions.store.get('aluno-1')!.status).toBe(
       SUBSCRIPTION_STATUS.CANCELLED,
@@ -658,16 +878,18 @@ describe('SubscriptionService — ciclo de vida no Stripe (Task 59)', () => {
     expect(card.cancelSubscription).not.toHaveBeenCalled();
   });
 
-  it('evento que não nos interessa não é erro', async () => {
-    const { service } = build();
+  it('assinatura ainda autorizada não cancela plano nenhum', async () => {
+    const { service, subscriptions } = await comAssinaturaAtiva();
 
-    await expect(
-      service.handleStripeEvent({
-        id: 'evt_5',
-        type: 'payment_intent.created',
-        object: { id: 'pi_1' },
-      }),
-    ).resolves.toBeUndefined();
+    await service.handleMercadoPagoEvent({
+      topic: 'subscription_preapproval',
+      id: 'preapproval_1',
+      status: 'authorized',
+    } as any);
+
+    expect(subscriptions.store.get('aluno-1')!.status).toBe(
+      SUBSCRIPTION_STATUS.ACTIVE,
+    );
   });
 
   it('trocar cartão por PIX encerra a assinatura recorrente', async () => {
@@ -677,10 +899,10 @@ describe('SubscriptionService — ciclo de vida no Stripe (Task 59)', () => {
       paymentMethod: PAYMENT_METHODS.PIX_RECURRING,
     });
 
-    expect(card.cancelSubscription).toHaveBeenCalledWith('sub_1');
+    expect(card.cancelSubscription).toHaveBeenCalledWith('preapproval_1');
     // Sem isto o aluno pagaria nos dois trilhos no mês seguinte.
     expect(
-      subscriptions.store.get('aluno-1')!.stripeSubscriptionId,
+      subscriptions.store.get('aluno-1')!.gatewaySubscriptionId,
     ).toBeUndefined();
   });
 });
@@ -745,7 +967,11 @@ describe('PIX em plano parcelado (spec 018)', () => {
   /** Contratação com plano e método escolhidos. */
   function contratar(plan: string, method: string) {
     const { service, users } = build();
-    return service.choosePlan('aluno-1', { plan, paymentMethod: method } as any);
+    return service.choosePlan('aluno-1', {
+      plan,
+      paymentMethod: method,
+      acceptance: ACEITE,
+    } as any);
   }
 
   it('recusa PIX no semestral e no anual', async () => {
@@ -785,6 +1011,7 @@ describe('PIX em plano parcelado (spec 018)', () => {
     await service.choosePlan('aluno-1', {
       plan: SUBSCRIPTION_PLANS.ANNUAL,
       paymentMethod: PAYMENT_METHODS.CREDIT_CARD,
+      acceptance: ACEITE,
     } as any);
 
     await expect(
@@ -799,6 +1026,7 @@ describe('PIX em plano parcelado (spec 018)', () => {
     await service.choosePlan('aluno-1', {
       plan: SUBSCRIPTION_PLANS.MONTHLY,
       paymentMethod: PAYMENT_METHODS.CREDIT_CARD,
+      acceptance: ACEITE,
     } as any);
 
     await expect(

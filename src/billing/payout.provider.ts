@@ -15,7 +15,7 @@ export interface PayoutResult {
 }
 
 /**
- * Porta de pagamento. Hoje o PIX é manual; trocar por AbacatePay é implementar
+ * Porta de pagamento. Hoje o PIX é manual; automatizá-lo é implementar
  * esta interface e registrar o outro provider no módulo — sem tocar em
  * controller nem em regra de negócio (spec 010 §7.5).
  */

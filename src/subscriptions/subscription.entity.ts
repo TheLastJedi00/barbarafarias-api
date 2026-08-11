@@ -47,7 +47,7 @@ export type ChargeStatus = (typeof CHARGE_STATUS)[keyof typeof CHARGE_STATUS];
 /**
  * Configuração fixa de cada plano (RF2). Os valores vivem em **reais** como no
  * resto do sistema (`hourlyRate`, `total` do fechamento); a conversão para
- * centavos acontece só na fronteira com o AbacatePay.
+ * centavos acontece só na fronteira com o gateway.
  */
 export interface PlanConfig {
   plan: SubscriptionPlan;
@@ -110,17 +110,18 @@ export interface Charge {
   status: ChargeStatus;
   paidAt?: string;
   /**
-   * Id da cobrança no gateway que a emitiu — cobrança do AbacatePay ou sessão
-   * de checkout do Stripe. É por ele que o webhook volta à assinatura.
+   * Id da cobrança no gateway que a emitiu — a order do Mercado Pago. É por
+   * ele que o webhook volta à assinatura.
    */
   gatewayChargeId?: string;
-  gatewayProvider?: GatewayProvider;
   /**
-   * @deprecated Nome anterior de `gatewayChargeId`, de quando só havia o
-   * AbacatePay. Continua sendo lido e gravado pelo repositório para as
-   * assinaturas criadas antes da spec 014 — ninguém deve ler daqui.
+   * Quem processou. O que **gravamos** sai sempre de `GATEWAY_PROVIDERS`, que
+   * hoje tem um valor só; o tipo é aberto porque **parcelas antigas continuam
+   * no Firestore com provedores que não existem mais no código** (spec 023
+   * §6). Apagar gateway é código; apagar histórico seria receita — e o painel
+   * financeiro soma essas parcelas normalmente.
    */
-  abacatePayId?: string;
+  gatewayProvider?: string;
 }
 
 export class Subscription {
@@ -141,11 +142,18 @@ export class Subscription {
   cancelledAt?: string;
 
   /**
-   * Assinatura recorrente no Stripe (`sub_…`), quando o plano é de cartão
-   * (spec 014). É o elo com quem emite as renovações: sem ele, cancelar aqui
-   * deixaria o cartão sendo debitado todo mês lá fora.
+   * Assinatura recorrente no gateway, **só no cartão**.
+   *
+   * É o elo com quem emite as renovações: sem ele, cancelar aqui deixaria o
+   * cartão sendo debitado todo mês lá fora. No PIX fica sempre vazio, e isso
+   * não é omissão — não existe assinatura lá fora para o PIX: cada QR é uma
+   * compra à vista, e "renovar" é o aluno pagar o próximo.
+   *
+   * O nome deixou de citar o fornecedor (era `stripeSubscriptionId`) na spec
+   * 023: um campo batizado por *vendor* obriga a renomear a cada troca, que é
+   * exatamente o trabalho que as portas existem para evitar.
    */
-  stripeSubscriptionId?: string;
+  gatewaySubscriptionId?: string;
 
   // --- cupom aplicado (RF15/RF16) ---
   couponCode?: string;

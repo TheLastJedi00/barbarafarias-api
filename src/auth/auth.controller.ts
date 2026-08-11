@@ -34,7 +34,7 @@ export interface ClientSession {
 
 /**
  * Limite de tentativas só aqui, e não como guard global (spec 016 Task 76):
- * global, ele atingiria os webhooks do Stripe e do AbacatePay, e uma rajada de
+ * global, ele atingiria o webhook do gateway de pagamento, e uma rajada de
  * eventos legítimos viraria pagamento não processado.
  */
 @UseGuards(ThrottlerGuard)

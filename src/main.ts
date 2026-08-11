@@ -42,11 +42,15 @@ async function bootstrap() {
   // enxerga o status real.
   app.enableCors(buildCorsOptions());
 
-  // O corpo cru guardado ao lado do objeto já parseado é exigência do Stripe
-  // (spec 014): `constructEvent` recalcula a assinatura HMAC sobre os bytes
-  // exatos que chegaram, e um `JSON.stringify` do objeto não os reproduz —
-  // ordem de chaves, escapes e espaços mudam. Sem isto **todo** webhook do
-  // Stripe é recusado, inclusive os legítimos.
+  // O corpo cru fica guardado ao lado do objeto já parseado porque conferência
+  // de assinatura de webhook se faz sobre os **bytes que chegaram**: um
+  // `JSON.stringify` do objeto não os reproduz — ordem de chaves, escapes e
+  // espaços mudam.
+  //
+  // O webhook do Mercado Pago assina só os headers e o `data.id` da URL, então
+  // hoje ninguém depende disto; fica porque é barato e porque a próxima
+  // integração que assinar o corpo falharia 100% das vezes sem ele, inclusive
+  // nas notificações legítimas.
   app.use(
     json({
       limit: BODY_LIMIT,

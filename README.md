@@ -61,11 +61,10 @@ npm run start:prod
 | `RESEND_API_KEY` | Chave da [Resend](https://resend.com) para e-mail transacional |
 | `FIREBASE_STORAGE_BUCKET` | *(opcional)* Bucket do Firebase Storage para avatares e capas |
 | `RESEND_FROM` | *(opcional)* Remetente próprio, ex.: `Bárbara Farias <no-reply@barbarafarias.com.br>` |
-| `ABACATEPAY_API_KEY` | Chave da [AbacatePay](https://abacatepay.com) — cobranças **PIX** do aluno (Spec 012) |
-| `ABACATEPAY_WEBHOOK_SECRET` | Segredo conferido no webhook `POST /webhooks/abacatepay` |
-| `STRIPE_SECRET_KEY` | Chave do [Stripe](https://stripe.com) — assinaturas de **cartão** (Spec 014). Prefira uma chave restrita (`rk_`) |
-| `STRIPE_WEBHOOK_SECRET_INSTANTANEO` | Assinatura do endpoint `POST /stripe/webhook/conteudo-instantaneo` |
-| `STRIPE_WEBHOOK_SECRET_MINIMO` | Assinatura do endpoint `POST /stripe/webhook/conteudo-minimo` |
+| `MP_ACCESS_TOKEN_ORDERS` | Token do [Mercado Pago](https://mercadopago.com.br) para a **Orders API** — PIX e cartão parcelado (Spec 023) |
+| `MP_ACCESS_TOKEN_SUBSCRIPTIONS` | Token para **Assinaturas** (`/preapproval`) — plano mensal. Em teste os prefixos divergem (`APP_USR` vs `TEST-`) e os dois valem |
+| `MP_PUBLIC_KEY` | Chave **pública**. O backend não a usa — fica aqui para os dois jogos serem copiados juntos do painel |
+| `MP_WEBHOOK_SECRET` | Assinatura das notificações. **Ausente = webhook recusado**, nunca aceito sem conferir |
 | `DEV_MODE` | `true` libera `POST /subscriptions/dev/mock-pay` (simulação de PIX). **Nunca em produção** |
 | `APP_BASE_URL` | Base do frontend, usada nas URLs de retorno do checkout de cartão |
 
@@ -159,17 +158,20 @@ src/
 │   ├── billing-summary.service.ts # Fechamento mensal por professora
 │   ├── finance.controller.ts    # /finance — faturamento sob a ótica da professora (Spec 011)
 │   ├── teacher-earnings.service.ts # Projeção semanal/mensal por alunos ativos (Spec 011)
-│   └── payout.provider.ts       # Porta de pagamento (ManualPix hoje, AbacatePay depois)
+│   └── payout.provider.ts       # Porta de pagamento (ManualPix hoje)
 ├── subscriptions/         # Assinaturas do aluno (Spec 012 + 014)
-│   ├── subscription.controller.ts # /subscriptions/* + POST /webhooks/abacatepay
+│   ├── subscription.controller.ts # /subscriptions/*, termos e aceites
 │   ├── subscription.service.ts    # Planos, cronograma, cupons, webhook, cancelamento
 │   ├── subscription.repository.ts # Persistência (coleção `subscriptions`)
 │   ├── subscription.entity.ts     # Subscription, Charge, PLAN_CONFIGS
 │   ├── coupon.entity.ts           # Coupon + aplicação do desconto (piso zero)
 │   ├── coupon.repository.ts       # Persistência (coleção `coupons`)
-│   ├── payment.gateway.ts         # Portas PixGateway/CardGateway + AbacatePayGateway
-│   ├── stripe.gateway.ts          # Cartão no Stripe: catálogo, checkout, eventos (Spec 014)
-│   ├── stripe-webhook.controller.ts # /stripe/webhook/conteudo-{instantaneo,minimo}
+│   ├── payment.gateway.ts         # Portas PixGateway/CardGateway (só contrato)
+│   ├── mercadopago.gateway.ts     # PIX + cartão + assinatura no Mercado Pago (Spec 023)
+│   ├── mercadopago.status.ts      # Vocabulário de status por lista fechada (§4.6)
+│   ├── mercadopago-webhook.controller.ts # POST /mercadopago/webhook
+│   ├── plan-terms.ts              # Contrato do plano, montado do catálogo (§7.3)
+│   ├── plan-acceptance.*.ts       # Aceites registrados, nunca sobrescritos
 │   ├── payment-access.service.ts  # Bloqueio de aluno inadimplente (lado professora)
 │   └── dto/subscription.dto.ts    # ChoosePlanDto, CreateCouponDto, SubscriptionDto
 ├── finance/               # Tudo sob o prefixo /finance (Spec 012)
@@ -1390,7 +1392,7 @@ cliente.
 > professora vê a projeção de horas dela; só ao consultar a si mesma é que vem o lucro.
 
 > O pagamento é **PIX manual** (`ManualPixProvider`). A porta `PayoutProvider` existe para
-> trocar por AbacatePay sem tocar em controller nem em regra de negócio.
+> automatizá-lo sem tocar em controller nem em regra de negócio.
 
 
 ---
@@ -1423,9 +1425,10 @@ Status da assinatura: `PENDING` (aguardando o primeiro pagamento) → `ACTIVE` �
 | `GET` | `/subscriptions/me/charges` | `student` | Parcelas ainda não pagas |
 | `POST` | `/subscriptions/dev/mock-pay` | `student` | **Só com `DEV_MODE=true`** — simula a confirmação do PIX |
 | `GET` | `/subscriptions/:studentId` | `manager` | Assinatura de qualquer aluno |
-| `POST` | `/webhooks/abacatepay` | 🔓 pública | Confirmação de pagamento do PIX |
-| `POST` | `/stripe/webhook/conteudo-instantaneo` | 🔓 pública | Eventos do Stripe, payload *snapshot* (Spec 014) |
-| `POST` | `/stripe/webhook/conteudo-minimo` | 🔓 pública | Eventos do Stripe, payload *thin* (Spec 014) |
+| `GET` | `/subscriptions/plans/:plan/terms` | `student` | Contrato do plano, montado do catálogo (Spec 023 §7.3) |
+| `POST` | `/subscriptions/me/card` | `student` | Cobra com o token que o formulário gerou no navegador |
+| `GET` | `/subscriptions/acceptances` | `manager` | Aceites registrados — consulta, sem editar nem apagar |
+| `POST` | `/mercadopago/webhook` | 🔓 pública | Notificações do Mercado Pago (Spec 023) |
 
 **`POST /subscriptions/me`** responde com o que a tela precisa para cobrar:
 
@@ -1435,118 +1438,161 @@ Status da assinatura: `PENDING` (aguardando o primeiro pagamento) → `ACTIVE` �
   "paymentMethod": "PIX_RECURRING",
   "pixQrCodeUrl": "data:image/png;base64,…",  // PIX: QR Code
   "pixCopyPaste": "00020126…",                // PIX: copia-e-cola
-  "clientSecret": "cs_test_…_secret",         // Cartão: Stripe incorporado na página
-  "checkoutUrl": "https://pay.abacatepay…",   // Cartão: checkout hospedado (hoje sem uso)
+  "card": { "amount": 2280, "installments": 12, "chargeIndex": 1 },
+                                              // Cartão: o que o formulário precisa.
+                                              // A cobrança **ainda não existe** — o token
+                                              // nasce no navegador, depois desta resposta
   "warning": "…"                              // gateway indisponível: plano salvo, cobrança não
 }
 ```
 
-#### Arquitetura multi-gateway (Spec 014)
+#### Arquitetura de gateway (Spec 023)
 
 Cada método de pagamento tem a **sua** porta abstrata, e o roteamento é por
-`paymentMethod`:
+`paymentMethod`. Desde a spec 023 as duas apontam para a **mesma instância**: o Mercado
+Pago faz PIX e cartão pela mesma conta.
 
-| Método | Porta | Implementação | Como cobra |
+| Método | Porta | Produto do gateway | Como cobra |
 |---|---|---|---|
-| `PIX_RECURRING` | `PixGateway` | `AbacatePayGateway` | Uma cobrança avulsa por parcela, QR Code transparente |
-| `CREDIT_CARD` | `CardGateway` | `StripeGateway` | Assinatura recorrente + Checkout Session incorporada |
+| `PIX_RECURRING` | `PixGateway` | Orders (`POST /v1/orders`) | Uma order avulsa por parcela, QR Code transparente |
+| `CREDIT_CARD` (Semestral/Anual) | `CardGateway` | Orders (`POST /v1/orders`) | **Uma** cobrança, parcelada pelo emissor (`installments`) |
+| `CREDIT_CARD` (Mensal) | `CardGateway` | Assinaturas (`POST /preapproval`) | Assinatura recorrente, cobrada pelo gateway |
 
-> **Por que os três planos são assinatura no Stripe.** O mensal não tem fim; o semestral e
-> o anual são a mesma assinatura mensal com **teto de ciclos** (6 e 12). É como o nosso
-> `charges[]` já os modela — uma cobrança por mês —, e **não** como parcelado brasileiro
-> (`card.installments`, que dividiria *uma* cobrança no emissor).
+> **As portas continuam separadas, e o motivo mudou.** A justificativa antiga era que
+> nenhum provedor implementava os dois — e o Mercado Pago implementa. O motivo novo é
+> melhor: PIX e cartão não são dois *provedores* do mesmo serviço, são dois **produtos**.
+> Um é compra à vista que o aluno faz quando quer; o outro é assinatura que cobra sozinha
+> até mandarem parar. Ciclo de vida diferente, tela diferente.
+
+> **Por que o parcelado é uma cobrança só.** Até a spec 023 o semestral e o anual eram uma
+> assinatura mensal com teto de ciclos — seis cobranças de R$ 200 que podiam falhar na
+> quarta, deixando as demais sem entrar. Agora o cartão é debitado **pelo total**, de uma
+> vez, e quem divide em 6 ou 12 é o banco emissor. O parcelamento inteiro é o campo
+> `transactions.payments[].payment_method.installments`.
 >
-> O teto não cabe na criação do checkout: `subscription_data` não aceita `cancel_at`, e a
-> assinatura só existe depois do primeiro pagamento. Ele viaja em `metadata.cycles` e é
-> aplicado no `checkout.session.completed`, com rede de segurança no `invoice.paid` — que
-> encerra o plano finito ao completar as parcelas. É o único ponto da integração onde uma
-> falha silenciosa cobraria dinheiro a mais.
+> `auto_recurring.repetitions` existe na API de Assinaturas e **não é usado**: ele
+> reencenaria exatamente o bug acima com outro sotaque.
 
-> **Catálogo do Stripe**, resolvido preguiçosamente e memoizado: um **Product por plano**
-> (`bf-plan-<PLANO>`, id determinístico — `products.search` é eventualmente consistente e
-> duplicaria o produto), e um **Price recorrente mensal por valor**
-> (`lookup_key: bf-<PLANO>-<centavos>`). O valor entra na chave porque cupom e plano mudam
-> a parcela e Price tem preço fixo.
->
-> O `cus_…` fica gravado em `users/{id}.stripeCustomerId`: `customers.create` não deduplica
-> por e-mail, e sem persistir cada contratação criaria um cliente novo.
+> **`installments` sai do `PLAN_CONFIGS`, nunca do cliente.** O formulário trava o seletor
+> (`min === max`), mas isso é conveniência — a régua é o backend. Sem ela, um aluno
+> decidido paga em 1x um plano vendido em 12x e nada acusa.
 
-> **Cupom vai inteiro para o cartão, abatido para o PIX.** No cartão quem desconta as
-> renovações é o Stripe (`Coupon` com `duration: forever | repeating`), então mandamos o
-> valor cheio da parcela e o cupom ao lado; mandar o valor pronto acertaria só a primeira
-> cobrança. No PIX cada cobrança é avulsa e o gateway não tem noção de cupom, então o
-> desconto vai aplicado.
+> **`X-Idempotency-Key` é obrigatório** na Orders API, e a chave é **derivada** do id da
+> cobrança, não sorteada: uma chave nova a cada chamada tem o formato certo e não protege
+> de nada. Dois cliques no botão de pagar precisam produzir a mesma chave.
 
-> **`payment_method_types` nunca é enviado** ao Stripe. Quem decide os métodos aceitos é o
-> painel; fixar no código congelaria o cartão e desligaria os métodos que aumentam
-> conversão. Há teste de regressão para isso.
->
-> **Sem `STRIPE_SECRET_KEY` a aplicação sobe normalmente**, igual ao AbacatePay: o plano é
-> gravado e a resposta traz `warning`.
+> **Valores vão como string** (`"1200.00"`). Mandar `1200` é o tipo de divergência que some
+> no JSON e reaparece no extrato. `expiration_time` do PIX vai como **duração ISO 8601**
+> (`"PT1H"`), nunca em segundos.
 
-#### Webhooks do Stripe
+> **3DS 2.0 ligado** (`validation: on_fraud_risk`, `liability_shift: required`): num produto
+> de até R$ 2.280 sem reembolso, o prejuízo de contestação passa para a bandeira. O preço é
+> um ramo de UX obrigatório — a order pode voltar `action_required`/`pending_challenge`, e
+> tratar isso como sucesso deixaria o aluno debitado com a tela dizendo "concluído".
 
-São **dois endpoints** porque o painel oferece dois estilos de payload — "conteúdo
-instantâneo" (*snapshot*: o evento inteiro vem no corpo) e "conteúdo mínimo" (*thin*: vêm
-só id e tipo, e o objeto é buscado na API). Cada um tem a **sua própria** chave de
-assinatura no Stripe, daí as duas variáveis de ambiente; usar a do outro endpoint falha
-com *"No signatures found"*.
+> **Cupom vai abatido no total, com o código na descrição.** O motivo de mandar o cupom
+> inteiro era o gateway aplicá-lo às renovações; num pagamento único não há renovação. No
+> plano mensal, quando o cupom com prazo acaba, o valor do ciclo é **ajustado** via
+> `PreApproval.update` — sem isso o desconto viraria vitalício, sem erro nenhum.
 
-Os dois verificam separadamente e chamam o **mesmo** `handleStripeEvent`. Separar a regra
-por endpoint deixaria o pagamento dependendo de qual estilo está configurado no painel, e
-uma troca de configuração pararia de ativar planos em silêncio.
+> **Sem as chaves a aplicação sobe normalmente**: o plano é gravado e a resposta traz
+> `warning`. Basta um dos dois tokens faltar para o gateway inteiro nascer desligado — um
+> provedor meio configurado cobraria por um caminho e falharia no outro, e a falha só
+> apareceria quando um aluno de plano mensal aparecesse.
 
-| Evento | Efeito |
+#### O vocabulário de status — a armadilha da migração
+
+Os dois produtos usados aqui usam **a mesma palavra com sentidos opostos**:
+
+| Produto | Valor | O que significa |
+|---|---|---|
+| Orders | `processed` + `accredited` | **pago.** É este o par que ativa |
+| Orders | `action_required` + `waiting_transfer` | PIX emitido, aguardando o aluno |
+| Orders | `action_required` + `pending_challenge` | 3DS pediu verificação |
+| Assinaturas | `processed` | terminou de processar — pago **ou** recusado |
+| Assinaturas | `recycling` | recusado, ainda em retentativa |
+
+A doc de assinaturas: *"caso a parcela não possa ser cobrada na quarta tentativa, ela
+estará automaticamente no status `processed` associada a um pagamento recusado"*. Um
+handler que trate `processed` de forma uniforme dá **acesso vitalício de graça para quem
+nunca pagou**, responde 200 e não loga nada.
+
+Daí as três regras que `mercadopago.status.ts` impõe: ativar exige o **par completo**; em
+assinatura quem decide é o **pagamento associado**; e **nenhum caminho-padrão ativa nada** —
+status desconhecido vira recusa, não permissão.
+
+> `approved` **não existe na Orders API**. É o vocabulário do caminho legado (`/v1/payments`),
+> e um `if (status === 'approved')` sobre uma order nunca é verdadeiro: ninguém recebe
+> acesso e nenhum erro é lançado. Há teste garantindo que a palavra não aparece em código.
+
+#### Webhook do Mercado Pago
+
+Um endpoint, três tópicos. A URL é configurada **no painel**, não por requisição
+(*Suas integrações > Webhooks > Configurar notificações*); salvar é o que gera o segredo.
+
+| Tópico | Efeito |
 |---|---|
-| `checkout.session.completed` | Amarra o `sub_…` ao plano, confirma a 1ª parcela, aplica o teto de ciclos |
-| `invoice.paid` | Confirma a próxima parcela em aberto e projeta a renovação seguinte |
-| `invoice.payment_failed` | `PAST_DUE` — derruba o acesso ao conteúdo (RF13) |
-| `customer.subscription.deleted` | `CANCELLED`, sem tentar cancelar de volta |
+| `order` | `processed`+`accredited` confirma a parcela e ativa o plano; o resto é log |
+| `subscription_authorized_payment` | Ciclo do mensal: confirma se o pagamento associado foi creditado, senão `PAST_DUE` |
+| `subscription_preapproval` | `cancelled` encerra o plano — o gateway cancela sozinho após 3 recusas |
 
 ```
-produção  https://api.barbarafarias.com.br/stripe/webhook/conteudo-instantaneo
-          https://api.barbarafarias.com.br/stripe/webhook/conteudo-minimo
-staging   https://dev-api.barbarafarias.com.br/stripe/webhook/…
-local     stripe listen --forward-to http://localhost:3000/stripe/webhook/conteudo-instantaneo
+produção  https://api.barbarafarias.com.br/mercadopago/webhook
+staging   https://dev-api.barbarafarias.com.br/mercadopago/webhook
+local     ngrok http 3000 → cadastre a URL pública na aba de teste do painel
 ```
 
-> **Assinatura inválida devolve `400`**, não `401`: é o que faz o Stripe parar de reenviar
-> um payload que nunca vai ser aceito. Já uma falha no **processamento** propaga (`500`) de
-> propósito — aí queremos a retentativa, porque o dinheiro entrou e o plano não ativou.
+> **O corpo não decide nada.** Ele traz o id do recurso; o estado vem de uma consulta feita
+> na hora. Confiar no corpo seria aceitar como verdade o que quem chamou disse que era.
+
+> **Assinatura inválida devolve `401`**, seguindo a doc do provedor. Outros gateways pedem
+> `400` no mesmo caso — não há código "certo" universal, e uniformizar faria um reenviar
+> para sempre ou parar cedo demais. Já uma falha no **processamento** propaga (`500`) de
+> propósito: aí queremos a retentativa, porque o dinheiro entrou e o plano não ativou.
+
+> **Segredo ausente = recusa**, nunca "aceita sem conferir": sem a conferência, um POST
+> anônimo vira assinatura ativa. A validação usa o `WebhookSignatureValidator` do SDK, com
+> uma regra a mais que ele não implementa — **`data.id` em minúsculas**. Ids de order são
+> maiúsculos (`ORD01JQ4S…`), então sem isso nenhuma notificação de order validaria.
 >
-> A verificação exige o corpo **cru**: `constructEvent` recalcula o HMAC sobre os bytes que
-> chegaram, e um `JSON.stringify` do objeto parseado não os reproduz. Por isso o `json()`
-> do `main.ts` guarda o buffer em `req.rawBody`.
+> A resposta precisa sair em até **22 segundos** (`X-Socket-Timeout: 22000`).
+
+> **Criar assinatura ≠ receber.** A primeira cobrança do `preapproval` sai em até ~1 hora, e
+> a criação faz uma cobrança de validação de valor mínimo que é **estornada em seguida** —
+> não é bug, mas é pergunta de suporte garantida. Quem ativa o plano é o webhook.
 
 > **Cancelar propaga.** Cancelar o plano ou trocar cartão → PIX encerra a assinatura no
-> Stripe (`Subscription.stripeSubscriptionId`). Falhar lá fora **não** impede o
+> gateway (`Subscription.gatewaySubscriptionId`). Falhar lá fora **não** impede o
 > cancelamento aqui: prender o aluno num plano por erro de rede é pior que uma assinatura
 > órfã no painel, que fica registrada no log de erro.
-
-> **Webhook do AbacatePay.** Autenticado pelo `?webhookSecret=` que o AbacatePay devolve, comparado com
-> `ABACATEPAY_WEBHOOK_SECRET`. O processamento é **idempotente** — o gateway reenvia até
-> receber 200, e reprocessar não conta a mesma parcela duas vezes.
->
-> A URL a cadastrar no painel do AbacatePay (Configurações → Webhooks) leva o segredo na
-> query, porque a rota é pública e é ele quem autentica a chamada:
->
-> ```
-> produção  https://api.barbarafarias.com.br/webhooks/abacatepay?webhookSecret=SEU_SEGREDO
-> staging   https://dev-api.barbarafarias.com.br/webhooks/abacatepay?webhookSecret=SEU_SEGREDO
-> ```
->
-> O gateway não alcança `localhost`: para exercitar o webhook na máquina, exponha a porta com
-> um túnel (`ngrok http 3000`) e cadastre a URL pública dele. Para o desenvolvimento normal
-> não é preciso — `DEV_MODE=true` libera `POST /subscriptions/dev/mock-pay`.
 
 > **Trocar de plano** exige cancelar o atual antes (`400` caso contrário): trocar no meio
 > exigiria pró-rata e estorno da parcela em curso, e arriscaria cobrar o mesmo mês duas vezes.
 
+#### Aceite de termos (Spec 023 §7)
+
+O plano parcelado é um compromisso irreversível de até R$ 2.280 autorizado num clique. O
+aceite é **exigido no `ChoosePlanDto`** e gravado **dentro do `choosePlan`**, na mesma
+operação que cria a assinatura — rota separada permitiria plano sem aceite e aceite sem
+plano, que é o buraco que o mecanismo fecha. Sem ele: `400`, e **nenhuma order criada**.
+
+`planAcceptances` guarda um documento por aceite, **nunca sobrescrito**, com os números
+**congelados**: o catálogo muda de preço e o contrato assinado não muda junto. A
+`termsVersion` diz qual redação foi aceita — sem ela, mudar o texto invalidaria o histórico
+inteiro.
+
+> **Sem IP e sem user-agent**, de propósito: dado pessoal novo, sem base declarada, para um
+> ganho probatório que o par `studentId` autenticado + `acceptedAt` já entrega.
+
+> **A frase "sem juros" não está no texto.** Ela só é verdadeira se o parcelamento sem
+> acréscimo estiver ativo na conta — **para 12 parcelas**, não só 6 —, o que é configuração
+> de painel, fora do código e invisível em diff. Há teste travando isso.
+
 #### Cupons (RF15/RF16)
 
-Cupons são **nossos**, em coleção própria — o cupom do AbacatePay modela percentual/fixo
-com limite de resgates, sem noção de "vale por N parcelas desta assinatura". O desconto é
-em reais, aplicado por parcela, com **piso zero** (nunca fica negativo). `durationMonths:
+Cupons são **nossos**, em coleção própria — o cupom do gateway modela percentual/fixo com
+limite de resgates, sem noção de "vale por N parcelas desta assinatura". O desconto é em
+reais, aplicado por parcela, com **piso zero** (nunca fica negativo). `durationMonths:
 null` = vitalício. Parcela zerada por cupom é confirmada localmente, sem ir ao gateway
 (que exige mínimo de R$ 1).
 
@@ -2052,7 +2098,7 @@ Assinatura do aluno (spec 012). **Uma por aluno** — não há histórico de pla
   "startDate": "string 'YYYY-MM-DD'",
   "nextChargeDate": "string 'YYYY-MM-DD' | ausente",
   "cancelledAt": "string ISO | ausente",
-  "stripeSubscriptionId": "string? — assinatura recorrente no Stripe (spec 014)",
+  "gatewaySubscriptionId": "string? — assinatura recorrente no gateway, só no cartão",
   "couponCode": "string? — cupom aplicado na contratação",
   "couponDiscount": "number? — abatimento em R$ por parcela",
   "couponRemainingCharges": "number | null — por quantas parcelas vale (null = vitalício)",
@@ -2065,12 +2111,14 @@ Assinatura do aluno (spec 012). **Uma por aluno** — não há histórico de pla
 > nosso. A busca varre a coleção em memória — é uma linha por aluno, e `array-contains`
 > não procura dentro de objetos. Renovações do cartão não têm cobrança emitida por nós: a
 > fatura só aponta para a assinatura, então o caminho de volta delas é
-> `stripeSubscriptionId`.
+> `gatewaySubscriptionId`. No PIX ele fica sempre vazio, e isso não é omissão: não existe
+> assinatura lá fora para o PIX — cada QR é uma compra à vista.
 >
-> `abacatePayId` é o nome anterior do campo (spec 014 Task 51). Continua sendo **lido**
-> para as assinaturas criadas antes, e **gravado** quando a cobrança é do AbacatePay — se
-> o deploy for revertido, a versão anterior ainda acha o PIX em aberto. Uma sessão do
-> Stripe não é espelhada ali: o código antigo não saberia o que fazer com ela.
+> `abacatePayId` é o nome anterior do campo. Deixou de ser **gravado** na spec 023, mas
+> continua sendo **lido**: as parcelas antigas do Firestore só têm esse campo, e a leitura
+> é o que impede o histórico de sumir do painel financeiro. Pelo mesmo motivo,
+> `gatewayProvider` é um tipo aberto — parcelas antigas carregam provedores que não
+> existem mais no código. Apagar gateway é código; apagar histórico seria receita.
 >
 > **Cancelar** apaga as parcelas ainda **pendentes** e guarda `cancelledAt`; as pagas
 > continuam no documento como histórico.
