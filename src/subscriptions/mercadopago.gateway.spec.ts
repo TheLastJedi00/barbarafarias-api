@@ -323,6 +323,53 @@ describe('MercadoPagoGateway — o pagador', () => {
   });
 });
 
+describe('MercadoPagoGateway — o que o log conta', () => {
+  it('registra o pedido, já que a resposta do provedor se perde', async () => {
+    const { gateway, clients } = build();
+    clients.orders.create.mockRejectedValue(
+      new MPBadRequestError({ status: 400, message: 'MercadoPago API error' }),
+    );
+    const log = jest
+      .spyOn((gateway as any).logger, 'error')
+      .mockImplementation(() => undefined);
+
+    await expect(
+      gateway.createCheckout(pedidoDeCartao('ANNUAL') as any),
+    ).rejects.toBeDefined();
+
+    // O SDK monta o erro de `message`/`error`/`cause`; a Orders API responde em
+    // `errors[].details`, que ele descarta. Sem o pedido ao lado, um 400 exige
+    // reproduzir a chamada à mão — foi o que custou uma rodada de teste.
+    const linha = log.mock.calls[0][0] as string;
+    expect(linha).toContain('valor=2280.00');
+    expect(linha).toContain('parcelas=12');
+    expect(linha).toContain('emailDominio=example.com');
+    expect(linha).toContain('doc=3 dígitos');
+  });
+
+  it('o log não carrega e-mail inteiro, documento nem cartão', async () => {
+    const { gateway, clients } = build();
+    clients.orders.create.mockRejectedValue(
+      new MPBadRequestError({ status: 400, message: 'x' }),
+    );
+    const log = jest
+      .spyOn((gateway as any).logger, 'error')
+      .mockImplementation(() => undefined);
+
+    await expect(
+      gateway.createCheckout(pedidoDeCartao('ANNUAL') as any),
+    ).rejects.toBeDefined();
+
+    const linha = log.mock.calls[0][0] as string;
+    // Diagnóstico não justifica derramar dado pessoal nem credencial de
+    // pagamento no log: o domínio responde a pergunta do ambiente, e o
+    // tamanho do documento responde a de formato.
+    expect(linha).not.toContain('ana@example.com');
+    expect(linha).not.toContain('tok_1');
+    expect(linha).not.toMatch(/\b390\b/);
+  });
+});
+
 describe('MercadoPagoGateway — diagnóstico de recusa', () => {
   it('loga status e causas antes de repassar o erro', async () => {
     const { gateway, clients } = build();

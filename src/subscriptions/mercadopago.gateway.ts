@@ -286,7 +286,7 @@ export class MercadoPagoGateway extends CardGateway implements PixGateway {
 
       return await this.pixResultOf(order);
     } catch (error) {
-      this.rethrow(error, 'PIX');
+      this.rethrow(error, 'PIX', request);
     }
   }
 
@@ -418,7 +418,7 @@ export class MercadoPagoGateway extends CardGateway implements PixGateway {
         outcome: CHARGE_OUTCOMES.PENDING,
       };
     } catch (error) {
-      this.rethrow(error, 'Assinatura mensal');
+      this.rethrow(error, 'Assinatura mensal', request);
     }
   }
 
@@ -475,7 +475,7 @@ export class MercadoPagoGateway extends CardGateway implements PixGateway {
 
       return this.resultOfOrder(order);
     } catch (error) {
-      this.rethrow(error, 'Cartão parcelado');
+      this.rethrow(error, 'Cartão parcelado', request);
     }
   }
 
@@ -707,7 +707,11 @@ export class MercadoPagoGateway extends CardGateway implements PixGateway {
    * estourando com a mensagem do provedor, porque engolir erro de cobrança é
    * como o bug de origem desta spec passou despercebido.
    */
-  protected rethrow(error: unknown, context: string): never {
+  protected rethrow(
+    error: unknown,
+    context: string,
+    request?: ChargeRequest,
+  ): never {
     if (error instanceof MPRateLimitError) {
       throw new GatewayBusyError(
         `${context}: Mercado Pago pediu para tentar de novo`,
@@ -715,16 +719,24 @@ export class MercadoPagoGateway extends CardGateway implements PixGateway {
       );
     }
 
-    // **Loga antes de repassar, e a razão é experiência de campo.** O erro do
-    // SDK carrega a causa real em `causes`; o `message` sozinho é genérico
-    // ("MercadoPago API error"). Sem esta linha, uma recusa da API chega ao
-    // filtro global como uma frase que não diz nada, o backend não registra
-    // nada, e a única pista disponível é o status HTTP — que é o mesmo para
-    // "faltou um campo" e "o valor está errado".
+    /*
+     * **Loga antes de repassar, e o que loga é o pedido — não a resposta.**
+     *
+     * O SDK monta o erro a partir de `message`, `error` e `cause`. A Orders API
+     * responde em `errors[].details`, que ele **descarta inteiro**: o que chega
+     * aqui é "MercadoPago API error" com causas vazias. Foi assim que um 400 de
+     * e-mail inválido em sandbox custou uma reprodução manual da chamada.
+     *
+     * Como a resposta se perde no caminho, o que resta de útil é registrar o
+     * que **nós** mandamos. Os campos escolhidos são os que costumam ofender —
+     * e nenhum deles é dado de cartão, que não passa por aqui.
+     */
+    const enviado = request ? ` | ${summarizeRequest(request)}` : '';
+
     if (error instanceof MPIdempotencyError) {
       this.logger.error(
         `${context}: conflito de chave de idempotência (409) — mesma chave ` +
-          'com corpo diferente. O envio precisa de um token novo.',
+          `com corpo diferente. O envio precisa de um token novo.${enviado}`,
       );
       throw new GatewayConflictError(
         `${context}: cobrança já tentada com outros dados`,
@@ -734,10 +746,11 @@ export class MercadoPagoGateway extends CardGateway implements PixGateway {
     if (error instanceof MercadoPagoError) {
       this.logger.error(
         `${context} recusado pelo Mercado Pago (${error.status}): ` +
-          `${error.error || error.message} | causas: ${JSON.stringify(error.causes ?? [])}`,
+          `${error.error || error.message}` +
+          ` | causas: ${JSON.stringify(error.causes ?? [])}${enviado}`,
       );
     } else {
-      this.logger.error(`${context} falhou: ${String(error)}`);
+      this.logger.error(`${context} falhou: ${String(error)}${enviado}`);
     }
     throw error;
   }
@@ -786,6 +799,33 @@ export function describeCharge(request: CheckoutRequest): string {
  * O CPF vai **só com dígitos**: a máscara da tela (`390.533.447-05`) é
  * apresentação, e mandá-la assim é recusa na certa.
  */
+/**
+ * O pedido, resumido para o log de uma recusa.
+ *
+ * **Domínio do e-mail, não o e-mail.** O que se precisa saber é se ele atende à
+ * regra do ambiente — o sandbox exige `@testuser.com` e recusa qualquer outro
+ * com 400 —, e o endereço inteiro num log é dado pessoal sem ganho nenhum.
+ *
+ * Do documento vai só a presença e o tamanho: CPF ausente ou truncado é recusa
+ * certa, e o número não precisa estar aqui para isso ficar evidente.
+ *
+ * **Nada de cartão aparece** — nem o token, que é de uso único mas ainda assim
+ * é credencial de pagamento.
+ */
+export function summarizeRequest(request: ChargeRequest): string {
+  const dominio = request.customer.email?.split('@')[1] ?? '(sem e-mail)';
+  const doc = request.customer.taxId?.replace(/\D/g, '');
+  const parcelas = (request as CheckoutRequest).installments;
+
+  return [
+    `ref=${request.externalId}`,
+    `valor=${toAmountString(request.amount)}`,
+    parcelas ? `parcelas=${parcelas}` : 'parcelas=n/a',
+    `emailDominio=${dominio}`,
+    `doc=${doc ? `${doc.length} dígitos` : 'ausente'}`,
+  ].join(' ');
+}
+
 export function payerOf(customer: GatewayCustomer): {
   email: string;
   first_name?: string;
