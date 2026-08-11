@@ -111,6 +111,20 @@ export class SubscriptionController {
     return this.service.payWithCard(user.sub, dto);
   }
 
+  /**
+   * Relê a cobrança de cartão em aberto — o front chama ao fim do desafio 3DS.
+   *
+   * Separada de `me/card` porque não cria cobrança nenhuma: só consulta e, se
+   * o dinheiro entrou, confirma. Repetir é inofensivo.
+   */
+  @Post('me/card/refresh')
+  @Roles(ROLES.STUDENT)
+  refreshCardPayment(
+    @CurrentUser() user: AuthenticatedUser,
+  ): Promise<CardPaymentResponseDto> {
+    return this.service.refreshCardPayment(user.sub);
+  }
+
   @Patch('me/payment-method')
   @Roles(ROLES.STUDENT)
   changePaymentMethod(

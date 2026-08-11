@@ -76,6 +76,11 @@ function build(overrides: Record<string, any> = {}) {
     }),
     cancelSubscription: jest.fn().mockResolvedValue(undefined),
     updateSubscriptionAmount: jest.fn().mockResolvedValue(undefined),
+    fetchChargeOutcome: jest.fn().mockResolvedValue({
+      id: 'ORD01ABC',
+      provider: 'MERCADOPAGO',
+      outcome: 'PAID',
+    }),
   };
   const acceptances = {
     create: jest.fn(async (acceptance: any) => acceptance),
@@ -225,6 +230,120 @@ describe('SubscriptionService — cronograma de parcelas', () => {
     await expect(service.choosePlan('aluno-1', PIX as any)).rejects.toThrow(
       BadRequestException,
     );
+  });
+});
+
+describe('SubscriptionService — releitura da cobrança de cartão', () => {
+  const ANUAL = {
+    plan: SUBSCRIPTION_PLANS.ANNUAL,
+    paymentMethod: PAYMENT_METHODS.CREDIT_CARD,
+    acceptance: ACEITE,
+  };
+
+  /** Plano de cartão com a cobrança em aberto, como o desafio 3DS a deixa. */
+  async function comDesafioAberto() {
+    const context = build();
+    context.card.createCheckout.mockResolvedValue({
+      id: 'ORD01ABC',
+      provider: 'MERCADOPAGO',
+      outcome: 'CHALLENGE',
+      challengeUrl: 'https://mp/challenge',
+    });
+    await context.service.choosePlan('aluno-1', ANUAL as any);
+    await context.service.payWithCard('aluno-1', CARTAO_TOKEN as any);
+    return context;
+  }
+
+  it('desafio concluído e creditado ativa o plano', async () => {
+    const { service, subscriptions } = await comDesafioAberto();
+    expect(subscriptions.store.get('aluno-1')!.status).toBe(
+      SUBSCRIPTION_STATUS.PENDING,
+    );
+
+    const result = await service.refreshCardPayment('aluno-1');
+
+    // O `postMessage` do iframe diz que a **etapa** acabou, não que o
+    // pagamento passou. Quem sabe é a order — e é ela que se lê aqui.
+    expect(result.outcome).toBe('PAID');
+    expect(subscriptions.store.get('aluno-1')!.status).toBe(
+      SUBSCRIPTION_STATUS.ACTIVE,
+    );
+  });
+
+  it('desafio ainda pendente não ativa nada', async () => {
+    const { service, subscriptions, card } = await comDesafioAberto();
+    card.fetchChargeOutcome.mockResolvedValue({
+      id: 'ORD01ABC',
+      provider: 'MERCADOPAGO',
+      outcome: 'CHALLENGE',
+      challengeUrl: 'https://mp/challenge',
+    });
+
+    const result = await service.refreshCardPayment('aluno-1');
+
+    expect(result.outcome).toBe('CHALLENGE');
+    expect(subscriptions.store.get('aluno-1')!.status).toBe(
+      SUBSCRIPTION_STATUS.PENDING,
+    );
+  });
+
+  it('desafio recusado não ativa nada', async () => {
+    const { service, subscriptions, card } = await comDesafioAberto();
+    card.fetchChargeOutcome.mockResolvedValue({
+      id: 'ORD01ABC',
+      provider: 'MERCADOPAGO',
+      outcome: 'REJECTED',
+      detail: 'cc_rejected_3ds_challenge',
+    });
+
+    const result = await service.refreshCardPayment('aluno-1');
+
+    expect(result.outcome).toBe('REJECTED');
+    expect(subscriptions.store.get('aluno-1')!.status).toBe(
+      SUBSCRIPTION_STATUS.PENDING,
+    );
+  });
+
+  it('reler duas vezes não conta a parcela duas vezes', async () => {
+    const { service, subscriptions } = await comDesafioAberto();
+
+    await service.refreshCardPayment('aluno-1');
+    await service.refreshCardPayment('aluno-1');
+
+    expect(subscriptions.store.get('aluno-1')!.paidInstallments).toBe(1);
+  });
+
+  it('no mensal não relê nada: lá fora é assinatura, não order', async () => {
+    const { service, card } = build();
+    card.createCheckout.mockResolvedValue({
+      id: 'preapproval_1',
+      subscriptionId: 'preapproval_1',
+      provider: 'MERCADOPAGO',
+      outcome: 'PENDING',
+    });
+    await service.choosePlan('aluno-1', {
+      plan: SUBSCRIPTION_PLANS.MONTHLY,
+      paymentMethod: PAYMENT_METHODS.CREDIT_CARD,
+      acceptance: ACEITE,
+    } as any);
+    await service.payWithCard('aluno-1', CARTAO_TOKEN as any);
+
+    const result = await service.refreshCardPayment('aluno-1');
+
+    // Reler o id do `preapproval` como se fosse order daria 404. A primeira
+    // cobrança sai em até ~1h e quem confirma é o webhook.
+    expect(card.fetchChargeOutcome).not.toHaveBeenCalled();
+    expect(result.outcome).toBe('PENDING');
+  });
+
+  it('sem cobrança emitida não há o que reler', async () => {
+    const { service, card } = build();
+    await service.choosePlan('aluno-1', ANUAL as any);
+
+    const result = await service.refreshCardPayment('aluno-1');
+
+    expect(card.fetchChargeOutcome).not.toHaveBeenCalled();
+    expect(result.outcome).toBe('PENDING');
   });
 });
 

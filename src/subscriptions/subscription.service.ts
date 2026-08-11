@@ -18,7 +18,7 @@ import {
   PixGateway,
   toCents,
 } from './payment.gateway';
-import type { CheckoutResult } from './payment.gateway';
+import type { ChargeOutcome, CheckoutResult } from './payment.gateway';
 import { GatewayBusyError, GatewayConflictError } from './mercadopago.gateway';
 import { MP_TOPICS } from './mercadopago.gateway';
 import type { MercadoPagoDomainEvent } from './mercadopago.gateway';
@@ -326,6 +326,47 @@ export class SubscriptionService {
   /** Todos os aceites, para a página de contratos da gerente (§7.4). */
   listAcceptances(): Promise<PlanAcceptance[]> {
     return this.acceptances.findAll();
+  }
+
+  /**
+   * Relê a cobrança de cartão em aberto e aplica o desfecho.
+   *
+   * Chamada quando o aluno termina o desafio 3DS. O `postMessage` do iframe
+   * avisa que a **etapa** acabou, não que o pagamento passou — quem sabe é a
+   * order. Sem esta consulta o único caminho até a resposta seria o webhook, e
+   * enquanto ele não chega o aluno encara "confirmando" com o cartão já
+   * debitado. É o que a doc do provedor recomenda.
+   *
+   * **Idempotente e inofensiva:** só lê e, no máximo, confirma uma parcela que
+   * `confirmCharge` já sabe não contar duas vezes.
+   */
+  async refreshCardPayment(studentId: string): Promise<CardPaymentResponseDto> {
+    const subscription = await this.requireSubscription(studentId);
+    const semNovidade = (): CardPaymentResponseDto => ({
+      subscription: new SubscriptionDto(subscription),
+      outcome: CHARGE_OUTCOMES.PENDING,
+    });
+
+    const charge = this.nextPendingCharge(subscription);
+    if (!charge?.gatewayChargeId) return semNovidade();
+
+    // **No mensal não há order para reler.** O que existe lá fora é um
+    // `preapproval`, e a primeira cobrança dele sai em até ~1h — quem confirma
+    // é o webhook. Reler o id da assinatura como se fosse order daria 404.
+    if (planConfig(subscription.plan).recurring) return semNovidade();
+
+    const result = await this.card.fetchChargeOutcome(charge.gatewayChargeId);
+    if (result.outcome === CHARGE_OUTCOMES.PAID) {
+      await this.confirmCharge(subscription, charge.gatewayChargeId);
+    }
+
+    return {
+      subscription: new SubscriptionDto(
+        (await this.subscriptions.findByStudent(studentId)) ?? subscription,
+      ),
+      outcome: result.outcome,
+      challengeUrl: result.challengeUrl,
+    };
   }
 
   async getSubscription(studentId: string): Promise<SubscriptionDto | null> {
