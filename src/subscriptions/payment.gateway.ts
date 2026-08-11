@@ -216,6 +216,18 @@ export abstract class CardGateway extends PaymentGateway {
     subscriptionId: string,
     amount: number,
   ): Promise<void>;
+  /**
+   * Relê uma cobrança já criada e devolve o desfecho **atual**.
+   *
+   * Existe por causa do desafio 3DS. Quando ele termina, a tela sabe apenas que
+   * a etapa acabou — **não** se o pagamento passou. Sem esta releitura o único
+   * caminho até a resposta é o webhook, e enquanto ele não chega o aluno encara
+   * "confirmando" com o dinheiro já debitado.
+   *
+   * É também o que a doc do provedor recomenda: consultar a order ao fim do
+   * desafio, em vez de esperar a notificação.
+   */
+  abstract fetchChargeOutcome(chargeId: string): Promise<CheckoutResult>;
 }
 
 /** R$ → centavos, usado nas chaves de reconciliação. */

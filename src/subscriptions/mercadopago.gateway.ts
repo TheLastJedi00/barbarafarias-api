@@ -503,6 +503,22 @@ export class MercadoPagoGateway extends CardGateway implements PixGateway {
     }
   }
 
+  /**
+   * Relê a order e devolve o desfecho de agora (ver a porta).
+   *
+   * A mesma tradução da criação — `resultOfOrder` — de propósito: se a leitura
+   * de "pago" divergisse entre criar e reconsultar, um desafio 3DS concluído
+   * confirmaria a parcela por um caminho e não pelo outro.
+   */
+  async fetchChargeOutcome(chargeId: string): Promise<CheckoutResult> {
+    try {
+      const order = await this.require().orders.get({ id: chargeId });
+      return this.resultOfOrder(order);
+    } catch (error) {
+      this.rethrow(error, `Releitura da order ${chargeId}`);
+    }
+  }
+
   /** Traduz a order para o desfecho que a regra de negócio entende. */
   protected resultOfOrder(order: OrderResponse): CheckoutResult {
     const payment = order.transactions?.payments?.[0];
