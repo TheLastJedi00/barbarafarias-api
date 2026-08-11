@@ -530,13 +530,27 @@ export class MercadoPagoGateway extends CardGateway implements PixGateway {
       );
     }
 
+    const challengeUrl =
+      payment?.payment_method?.transaction_security?.url ??
+      payment?.payment_method?.redirect_url;
+
+    // **Desafio sem URL é um beco sem saída**: a tela não tem o que renderizar,
+    // o aluno fica esperando e o dinheiro está reservado. Se acontecer, o que
+    // resolve é saber **onde** a URL veio parar — daí logar a forma da resposta
+    // (só nomes de campo; nenhum valor, porque aqui trafega dado de cartão).
+    if (outcome === CHARGE_OUTCOMES.CHALLENGE && !challengeUrl) {
+      this.logger.error(
+        `Order ${order.id} pediu desafio 3DS e não trouxe URL. ` +
+          `Campos do meio de pagamento: ${Object.keys(payment?.payment_method ?? {}).join(', ') || '(vazio)'}` +
+          ` | campos do pagamento: ${Object.keys(payment ?? {}).join(', ') || '(vazio)'}`,
+      );
+    }
+
     return {
       id: order.id ?? '',
       provider: GATEWAY_PROVIDERS.MERCADOPAGO,
       outcome,
-      challengeUrl:
-        payment?.payment_method?.transaction_security?.url ??
-        payment?.payment_method?.redirect_url,
+      challengeUrl,
       detail: order.status_detail,
     };
   }
