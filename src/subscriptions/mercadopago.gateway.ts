@@ -60,6 +60,34 @@ export const MERCADOPAGO_APIS = {
 export const MERCADOPAGO_BASE_URL = 'https://api.mercadopago.com';
 
 /**
+ * **3DS 2.0 ligado** (spec 023 §9.6) — decisão da dona, não padrão do provedor.
+ *
+ * Sem este nó o padrão é `validation: 'never'`: nenhuma autenticação, e o
+ * prejuízo de uma contestação é da vendedora. Num produto de até R$ 2.280 sem
+ * cancelamento nem reembolso — o perfil de compra que mais atrai contestação —
+ * o *liability shift* transfere essa responsabilidade para a bandeira, e de
+ * quebra aumenta a taxa de aprovação.
+ *
+ * `on_fraud_risk` e não `always`: o desafio só aparece quando o emissor acha
+ * que precisa, então a maior parte dos alunos não vê etapa nenhuma a mais.
+ *
+ * **O preço disto é um ramo de UX obrigatório.** A order pode voltar
+ * `action_required` / `pending_challenge` com a URL em
+ * `payment_method.transaction_security.url`, e o aluno tem 40 minutos para
+ * completar. Ligar isto **sem** tratar o desafio é a pior combinação possível:
+ * o aluno é debitado, a tela diz "concluído" e a cobrança nunca completa
+ * (falha silenciosa 19). Por isso `outcomeOfOrder` tem um valor só para este
+ * caso, e ele não é sucesso.
+ *
+ * `liability_shift: 'required'` é o **único** valor aceito, e não pode ser
+ * enviado quando `validation` for `never` — os dois andam juntos ou nenhum vai.
+ */
+export const TRANSACTION_SECURITY = {
+  validation: 'on_fraud_risk',
+  liability_shift: 'required',
+} as const;
+
+/**
  * Os dois clientes do provedor, cada um com o **seu** access token.
  *
  * Não é preciosismo: no ambiente de teste a Orders API usa token com prefixo
@@ -352,6 +380,7 @@ export class MercadoPagoGateway extends CardGateway implements PixGateway {
           total_amount: amount,
           external_reference: request.externalId,
           description: describeCharge(request),
+          config: { online: { transaction_security: TRANSACTION_SECURITY } },
           payer: { email: request.customer.email },
           transactions: {
             payments: [
