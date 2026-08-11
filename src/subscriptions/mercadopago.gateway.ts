@@ -92,6 +92,22 @@ export const STATEMENT_DESCRIPTOR = 'BFARIAS';
 export const ITEM_CATEGORY = 'learnings';
 
 /**
+ * Para onde o provedor mandaria o aluno depois de autorizar a assinatura.
+ *
+ * **Obrigatório pela API, e nunca usado por nós.** Serve ao fluxo em que o
+ * aluno sai para autorizar numa página do Mercado Pago — o redirecionamento que
+ * a spec 014 proibiu, e que aqui não acontece porque a assinatura já nasce
+ * `authorized` com o cartão.
+ *
+ * **Constante, e não derivado de `APP_BASE_URL`**, de propósito: a variável
+ * aponta para `localhost` em desenvolvimento e o provedor **recusa** — o plano
+ * mensal ficava impossível de testar na máquina por causa de um campo que nem
+ * lemos. Como o destino nunca é visitado, o domínio canônico serve a todos os
+ * ambientes.
+ */
+export const SUBSCRIPTION_BACK_URL = 'https://barbarafarias.com.br/meu-plano';
+
+/**
  * **3DS 2.0 ligado** (spec 023 §9.6) — decisão da dona, não padrão do provedor.
  *
  * Sem este nó o padrão é `validation: 'never'`: nenhuma autenticação, e o
@@ -374,15 +390,8 @@ export class MercadoPagoGateway extends CardGateway implements PixGateway {
   /**
    * Mensal: assinatura recorrente por `POST /preapproval`.
    *
-   * **`back_url` não é enviado, e é decisão.** Ele serve ao fluxo em que o
-   * aluno sai para autorizar a assinatura numa página do provedor — o
-   * redirecionamento que a spec 014 proibiu, e que aqui nunca acontece porque a
-   * assinatura já nasce `authorized` com o cartão. Conferido contra a API: sem
-   * ele a criação passa igual.
-   *
-   * Mandá-lo custava mais do que parecia. A URL saía de `APP_BASE_URL`, e o
-   * provedor **recusa `localhost`** — o plano mensal ficava impossível de
-   * testar na máquina por causa de um campo que não usamos.
+   * **`back_url` é obrigatório e inútil ao mesmo tempo** — ver
+   * `SUBSCRIPTION_BACK_URL` para por que ele é uma constante.
    *
    * **Cartão é o único meio documentado.** `status: 'authorized'` exige
    * `card_token_id`; sem meio de pagamento a assinatura nasce `pending` e o
@@ -419,6 +428,7 @@ export class MercadoPagoGateway extends CardGateway implements PixGateway {
           payer_email: request.customer.email,
           card_token_id: card.token,
           status: PREAPPROVAL_STATUS.AUTHORIZED,
+          back_url: SUBSCRIPTION_BACK_URL,
           auto_recurring: {
             frequency: 1,
             frequency_type: 'months',
