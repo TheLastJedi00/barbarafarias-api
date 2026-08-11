@@ -44,3 +44,36 @@ export class PlanAcceptance {
     Object.assign(this, data);
   }
 }
+
+/**
+ * O aceite virou compra? (spec 023 P3)
+ *
+ * O aceite é gravado **antes** da cobrança, de propósito — a janela alternativa,
+ * aluna debitada sem registro de que concordou, é a pior das duas. A
+ * consequência é que uma cobrança recusada deixa um aceite na lista mesmo
+ * assim, e a gerente lia aquilo como "quem comprou".
+ *
+ * A decisão foi fazer a tela **ser** isso, em vez de avisar que não é. Este
+ * campo é a diferença, e ele não mora no aceite: é calculado na leitura, contra
+ * a assinatura de hoje. Gravá-lo exigiria alterar um registro probatório
+ * depois de criado, que é exatamente o que ele não pode sofrer.
+ */
+export const PURCHASE_OUTCOMES = {
+  /** Chegou a pagar ao menos uma parcela. */
+  PAID: 'PAID',
+  /** Concordou e a cobrança não passou. */
+  UNPAID: 'UNPAID',
+  /**
+   * Houve contratação posterior. Não dá para responder por **este** aceite: a
+   * aluna tem uma assinatura só, e ela foi reescrita desde então.
+   */
+  SUPERSEDED: 'SUPERSEDED',
+} as const;
+
+export type PurchaseOutcome =
+  (typeof PURCHASE_OUTCOMES)[keyof typeof PURCHASE_OUTCOMES];
+
+/** O aceite como a gerente o lê: o registro mais o desfecho da cobrança. */
+export interface PlanAcceptanceView extends PlanAcceptance {
+  purchase: PurchaseOutcome;
+}

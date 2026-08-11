@@ -19,7 +19,7 @@ import {
 import { Charge, PLAN_CONFIGS } from './subscription.entity';
 import type { PlanConfig, SubscriptionPlan } from './subscription.entity';
 import { buildTerms } from './plan-terms';
-import { PlanAcceptance } from './plan-acceptance.entity';
+import type { PlanAcceptanceView } from './plan-acceptance.entity';
 import { Roles } from '../decorators/roles.decorator';
 import { Public } from '../decorators/public.decorator';
 import { CurrentUser } from '../decorators/current-user.decorator';
@@ -71,7 +71,7 @@ export class SubscriptionController {
    */
   @Get('acceptances')
   @Roles(ROLES.MANAGER)
-  acceptances(): Promise<PlanAcceptance[]> {
+  acceptances(): Promise<PlanAcceptanceView[]> {
     return this.service.listAcceptances();
   }
 
