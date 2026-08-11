@@ -112,7 +112,9 @@ export const PLAN_CONFIGS: Record<SubscriptionPlan, PlanConfig> = {
     payerTotal: 1371.84,
     payerInstallment: 228.64,
     recurring: false,
-    description: 'Seis meses em 6x. Economia de R$ 240 no período.',
+    // Sem número na prosa: um valor escrito aqui sobrevive ao reajuste
+    // seguinte e vira propaganda falsa. Quem calcula a vantagem é a tela.
+    description: 'Seis meses garantidos, com parcela menor que a mensalidade.',
   },
   [SUBSCRIPTION_PLANS.ANNUAL]: {
     plan: SUBSCRIPTION_PLANS.ANNUAL,
