@@ -1,0 +1,222 @@
+import { Inject, Injectable, Logger } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
+import { createHash } from 'node:crypto';
+import { MercadoPagoConfig, Order, PreApproval } from 'mercadopago';
+import { MPRateLimitError } from 'mercadopago/dist/utils/errors';
+import { PaymentGateway } from './payment.gateway';
+
+/**
+ * Token dos clientes do Mercado Pago. Os clientes são construídos pelo módulo,
+ * não pelo gateway, pelo mesmo motivo do `STRIPE_CLIENT`: os testes injetam um
+ * dublê e **nenhuma suíte deste projeto toca a rede**.
+ *
+ * `null` quando não há chave configurada.
+ */
+export const MERCADOPAGO_CLIENT = 'MERCADOPAGO_CLIENT';
+
+/**
+ * **Qual API é usada, e por que a outra não** (spec 023 §9.5).
+ *
+ * A Orders API (`/v1/orders`) é o caminho **documentado e recomendado** do
+ * Checkout Transparente no Brasil: é o que a visão geral do produto ensina e
+ * para onde as outras APIs (Payment Intents, QR, Pedidos Presenciais) têm guia
+ * de migração. Quem é legado é `/v1/payments`, que sobrevive como "Checkout API
+ * via API Payments" — a maior parte do material de terceiros ainda fala dele.
+ *
+ * Isto está escrito aqui pelo mesmo motivo que `STRIPE_API_VERSION` existia: o
+ * vocabulário de status das duas é **diferente** (§4.6), e alguém que copie um
+ * exemplo de `/v1/payments` traz junto o `approved`, que nesta API não existe.
+ *
+ * Assinaturas (`/preapproval`) é um produto à parte, com endpoint, vocabulário
+ * e tópico de webhook próprios. Daí este gateway ser uma classe com duas
+ * metades: parcelado por Orders, mensal por `preapproval`.
+ */
+export const MERCADOPAGO_APIS = {
+  /** PIX à vista e cartão parcelado. */
+  ORDERS: '/v1/orders',
+  /** Assinatura recorrente do plano mensal. */
+  SUBSCRIPTIONS: '/preapproval',
+  /** **Não usada.** Legado; vocabulário de status incompatível (§4.6). */
+  LEGACY_PAYMENTS: '/v1/payments',
+} as const;
+
+/** Raiz da API, para os poucos recursos que o SDK não tem cliente. */
+export const MERCADOPAGO_BASE_URL = 'https://api.mercadopago.com';
+
+/**
+ * Os dois clientes do provedor, cada um com o **seu** access token.
+ *
+ * Não é preciosismo: no ambiente de teste a Orders API usa token com prefixo
+ * `APP_USR` e Assinaturas usa `TEST-`, os dois válidos ao mesmo tempo (§9.4).
+ * Um cliente só obrigaria a escolher qual caminho quebrar.
+ */
+export interface MercadoPagoClients {
+  orders: Order;
+  subscriptions: PreApproval;
+  /**
+   * Token de Assinaturas cru. O SDK não tem cliente para
+   * `/authorized_payments/{id}`, que é o recurso que a notificação de cada
+   * ciclo do mensal aponta.
+   */
+  subscriptionsToken: string;
+}
+
+/**
+ * Gateway fora do ar de forma **temporária** — 429 com `Retry-After`, que a
+ * doc da Orders API prevê como caminho normal.
+ *
+ * Existe separado de um erro qualquer porque o desfecho é outro: 429 é
+ * degradação (o aluno vê "tente em instantes" e o plano fica gravado), não
+ * falha de programação. Sem esta distinção o 429 viraria 500.
+ */
+export class GatewayBusyError extends Error {
+  constructor(
+    message: string,
+    readonly retryAfterSeconds: number | null,
+  ) {
+    super(message);
+    this.name = 'GatewayBusyError';
+  }
+}
+
+/**
+ * Raiz das duas metades do Mercado Pago (spec 023).
+ *
+ * O desenho é o mesmo dos gateways anteriores: a ausência de chave **não**
+ * derruba a aplicação — o aluno vê o plano gravado com um aviso de cobrança
+ * indisponível em vez de um 500 sem explicação.
+ *
+ * Duas regras valem para tudo aqui dentro:
+ *
+ * 1. **Nenhum dado cru de cartão passa por aqui.** O token é gerado no
+ *    navegador pelo Payment Brick, vale 7 dias e um único uso; o backend só
+ *    troca ids. É a garantia que a spec 014 estabeleceu, preservada.
+ * 2. **Valores vão como string com duas casas** (`"1200.00"`). Mandar `1200`
+ *    ou `1200.0` é o tipo de divergência que some no JSON e reaparece no
+ *    extrato.
+ */
+@Injectable()
+export class MercadoPagoGateway extends PaymentGateway {
+  protected readonly logger = new Logger(MercadoPagoGateway.name);
+
+  constructor(
+    @Inject(MERCADOPAGO_CLIENT)
+    protected readonly mp: MercadoPagoClients | null,
+  ) {
+    super();
+    if (!this.mp) {
+      this.logger.warn(
+        'MP_ACCESS_TOKEN_ORDERS/MP_ACCESS_TOKEN_SUBSCRIPTIONS ausentes: cobranças não serão emitidas.',
+      );
+    }
+  }
+
+  isEnabled(): boolean {
+    return !!this.mp;
+  }
+
+  /**
+   * Os clientes ou um erro nomeado. Sem isto a chave ausente viraria um
+   * `TypeError: Cannot read properties of null` lá adiante, longe da causa.
+   */
+  protected require(): MercadoPagoClients {
+    if (!this.mp) throw new Error('Mercado Pago não configurado');
+    return this.mp;
+  }
+
+  /**
+   * Traduz o erro do SDK. Só o 429 muda de natureza; todo o resto continua
+   * estourando com a mensagem do provedor, porque engolir erro de cobrança é
+   * como o bug de origem desta spec passou despercebido.
+   */
+  protected rethrow(error: unknown, context: string): never {
+    if (error instanceof MPRateLimitError) {
+      throw new GatewayBusyError(
+        `${context}: Mercado Pago pediu para tentar de novo`,
+        error.retryAfter,
+      );
+    }
+    throw error;
+  }
+}
+
+/** `1200` → `"1200.00"`. A Orders API recusa número e aceita string. */
+export function toAmountString(amount: number): string {
+  return amount.toFixed(2);
+}
+
+/**
+ * Segundos → duração ISO 8601 (`3600` → `"PT1H"`).
+ *
+ * `expiration_time` **não** é segundos: o exemplo da doc é `"P3Y6M4DT12H30M5S"`
+ * e a faixa aceita vai de 30 minutos a 30 dias. Mandar `3600` não é "o padrão
+ * de 24h" — é payload inválido, ou pior, aceito e interpretado de um jeito que
+ * ninguém previu.
+ */
+export function toIsoDuration(seconds: number): string {
+  const hours = Math.floor(seconds / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+  const rest = seconds % 60;
+
+  const parts =
+    (hours ? `${hours}H` : '') +
+    (minutes ? `${minutes}M` : '') +
+    (rest || (!hours && !minutes) ? `${rest}S` : '');
+  return `PT${parts}`;
+}
+
+/**
+ * `X-Idempotency-Key` da criação de um pedido — **obrigatório** na Orders API,
+ * não uma boa prática opcional.
+ *
+ * A chave é **derivada** do id da cobrança, não sorteada: um UUID novo a cada
+ * chamada tem o formato certo e não protege de nada. Dois cliques no botão de
+ * pagar precisam produzir a **mesma** chave para virarem uma cobrança só — que
+ * é a única razão de o cabeçalho existir.
+ *
+ * O formato continua sendo UUID v4 (a versão e a variante são fixadas nas
+ * posições que a RFC 4122 manda), porque é o que a doc pede.
+ */
+export function idempotencyKeyFor(externalId: string): string {
+  const hex = createHash('sha256')
+    .update(externalId)
+    .digest('hex')
+    .slice(0, 32)
+    .split('');
+  hex[12] = '4';
+  hex[16] = ((parseInt(hex[16], 16) & 0x3) | 0x8).toString(16);
+
+  const id = hex.join('');
+  return [
+    id.slice(0, 8),
+    id.slice(8, 12),
+    id.slice(12, 16),
+    id.slice(16, 20),
+    id.slice(20),
+  ].join('-');
+}
+
+/**
+ * Constrói os clientes do Mercado Pago, ou `null` quando falta chave.
+ *
+ * Basta **um** dos dois tokens faltar para o gateway inteiro nascer desligado:
+ * um provedor meio configurado cobraria por um caminho e falharia no outro, e
+ * a falha apareceria só quando um aluno de plano mensal aparecesse.
+ */
+export function createMercadoPagoClients(
+  config: ConfigService,
+): MercadoPagoClients | null {
+  const ordersToken = config.get<string>('MP_ACCESS_TOKEN_ORDERS');
+  const subscriptionsToken = config.get<string>(
+    'MP_ACCESS_TOKEN_SUBSCRIPTIONS',
+  );
+  if (!ordersToken || !subscriptionsToken) return null;
+
+  return {
+    orders: new Order(new MercadoPagoConfig({ accessToken: ordersToken })),
+    subscriptions: new PreApproval(
+      new MercadoPagoConfig({ accessToken: subscriptionsToken }),
+    ),
+    subscriptionsToken,
+  };
+}
