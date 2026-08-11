@@ -74,6 +74,24 @@ export const MERCADOPAGO_APIS = {
 export const MERCADOPAGO_BASE_URL = 'https://api.mercadopago.com';
 
 /**
+ * O que aparece na fatura do cartão do aluno.
+ *
+ * Existe para **reduzir contestação**, e aqui o peso é maior que o normal: um
+ * débito de até R$ 2.280 sem reembolso, com um nome irreconhecível na fatura, é
+ * o roteiro clássico do "não fui eu". O limite prático é ~13 caracteres.
+ */
+export const STATEMENT_DESCRIPTOR = 'BFARIAS';
+
+/**
+ * Categoria do item na taxonomia do provedor.
+ *
+ * A antifraude compara a compra com o padrão da categoria — e aula de idioma é
+ * serviço de educação, não varejo. Categoria errada é pior que ausente: alinha
+ * a transação com a estatística de outro mercado.
+ */
+export const ITEM_CATEGORY = 'learnings';
+
+/**
  * **3DS 2.0 ligado** (spec 023 §9.6) — decisão da dona, não padrão do provedor.
  *
  * Sem este nó o padrão é `validation: 'never'`: nenhuma autenticação, e o
@@ -265,6 +283,8 @@ export class MercadoPagoGateway extends CardGateway implements PixGateway {
           total_amount: amount,
           external_reference: request.externalId,
           description: request.description,
+          items: itemsOf(request),
+          config: { statement_descriptor: STATEMENT_DESCRIPTOR },
           payer: payerOf(request.customer),
           transactions: {
             payments: [
@@ -452,7 +472,11 @@ export class MercadoPagoGateway extends CardGateway implements PixGateway {
           total_amount: amount,
           external_reference: request.externalId,
           description: describeCharge(request),
-          config: { online: { transaction_security: TRANSACTION_SECURITY } },
+          items: itemsOf(request),
+          config: {
+            statement_descriptor: STATEMENT_DESCRIPTOR,
+            online: { transaction_security: TRANSACTION_SECURITY },
+          },
           payer: payerOf(request.customer),
           transactions: {
             payments: [
@@ -800,6 +824,34 @@ export function describeCharge(request: CheckoutRequest): string {
  * apresentação, e mandá-la assim é recusa na certa.
  */
 /**
+ * A linha de item do pedido.
+ *
+ * O checklist de qualidade do Mercado Pago cobra `items` como **obrigatório**,
+ * e a razão não é burocrática: título, descrição, preço e categoria alimentam a
+ * antifraude, que é quem decide entre aprovar, pedir desafio 3DS e recusar. Sem
+ * eles a transação é julgada às cegas, e o custo de uma recusa indevida é uma
+ * venda perdida — que não aparece em log nenhum.
+ *
+ * É **um** item: o aluno compra um plano, não um carrinho. `unit_price` é o
+ * total e `quantity` é 1 — no parcelado quem divide é o emissor, e descrever
+ * "12 unidades de R$ 190" diria ao provedor algo que não é verdade.
+ */
+export function itemsOf(
+  request: ChargeRequest,
+): Array<Record<string, unknown>> {
+  return [
+    {
+      title: request.product?.label ?? request.description,
+      description: request.description,
+      external_code: request.product?.key ?? 'PLANO',
+      category_id: ITEM_CATEGORY,
+      quantity: 1,
+      unit_price: toAmountString(request.amount),
+    },
+  ];
+}
+
+/**
  * O pedido, resumido para o log de uma recusa.
  *
  * **Domínio do e-mail, não o e-mail.** O que se precisa saber é se ele atende à
@@ -831,15 +883,22 @@ export function payerOf(customer: GatewayCustomer): {
   first_name?: string;
   last_name?: string;
   identification?: { type: string; number: string };
+  phone?: { area_code: string; number: string };
 } {
   const digits = customer.taxId?.replace(/\D/g, '');
   const [first, ...rest] = (customer.name ?? '').trim().split(/\s+/);
+  const fone = customer.cellphone?.replace(/\D/g, '');
 
   return {
     email: customer.email,
     ...(first ? { first_name: first } : {}),
     ...(rest.length ? { last_name: rest.join(' ') } : {}),
     ...(digits ? { identification: { type: 'CPF', number: digits } } : {}),
+    // DDD separado do número, como a API pede, e só quando está completo: um
+    // telefone pela metade não ajuda a antifraude e vira ruído no painel.
+    ...(fone && fone.length >= 10
+      ? { phone: { area_code: fone.slice(0, 2), number: fone.slice(2) } }
+      : {}),
   };
 }
 
