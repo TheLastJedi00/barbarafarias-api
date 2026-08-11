@@ -55,20 +55,25 @@ describe('buildTerms — o texto sai do catálogo', () => {
     const texto = [anual.summary, ...anual.clauses.map((c) => c.body)].join(
       ' ',
     );
-    expect(texto).toContain('2.280');
+    // Os valores do contrato são os **do pagador**: quanto ela vai pagar, não
+    // a base que cobramos do provedor. O contrato responde a pergunta dela.
+    expect(texto).toContain('2.637,58');
     expect(texto).toContain(String(config.installments));
-    expect(texto).toContain('190');
+    expect(texto).toContain('219,80');
+    // E o preço à vista aparece junto: sem ele, o custo do parcelamento fica
+    // escondido de quem compra a prazo.
+    expect(texto).toContain('2.160,00');
   });
 
-  it('o parcelado explica que o débito é único e a divisão é do emissor', () => {
+  it('o parcelado explica os juros e o limite comprometido', () => {
     const texto = buildTerms('SEMIANNUAL')
       .clauses.map((c) => c.body)
       .join(' ');
 
-    // É a diferença entre o que o aluno vê ("6x de R$ 200") e o que acontece
-    // no limite do cartão dele no mesmo instante.
-    expect(texto).toMatch(/uma única cobrança/i);
-    expect(texto).toMatch(/banco emissor/i);
+    // É a diferença entre o que a aluna vê ("6x de R$ 228,64") e o que
+    // acontece no limite do cartão dela no mesmo instante.
+    expect(texto).toMatch(/limite do cartão é comprometido pelo valor total/i);
+    expect(texto).toMatch(/juros do parcelamento/i);
   });
 
   it('todo plano diz que não há reembolso', () => {
