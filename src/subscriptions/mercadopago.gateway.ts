@@ -10,6 +10,7 @@ import {
 import {
   MPNotFoundError,
   MPRateLimitError,
+  MercadoPagoError,
 } from 'mercadopago/dist/utils/errors';
 import type { OrderResponse } from 'mercadopago/dist/clients/order/commonTypes';
 import {
@@ -20,6 +21,7 @@ import {
   CheckoutRequest,
   CheckoutResult,
   GATEWAY_PROVIDERS,
+  GatewayCustomer,
   PIX_EXPIRATION_SECONDS,
   PixChargeResult,
   PixGateway,
@@ -247,7 +249,7 @@ export class MercadoPagoGateway extends CardGateway implements PixGateway {
           total_amount: amount,
           external_reference: request.externalId,
           description: request.description,
-          payer: { email: request.customer.email },
+          payer: payerOf(request.customer),
           transactions: {
             payments: [
               {
@@ -435,7 +437,7 @@ export class MercadoPagoGateway extends CardGateway implements PixGateway {
           external_reference: request.externalId,
           description: describeCharge(request),
           config: { online: { transaction_security: TRANSACTION_SECURITY } },
-          payer: { email: request.customer.email },
+          payer: payerOf(request.customer),
           transactions: {
             payments: [
               {
@@ -696,6 +698,21 @@ export class MercadoPagoGateway extends CardGateway implements PixGateway {
         error.retryAfter,
       );
     }
+
+    // **Loga antes de repassar, e a razão é experiência de campo.** O erro do
+    // SDK carrega a causa real em `causes`; o `message` sozinho é genérico
+    // ("MercadoPago API error"). Sem esta linha, uma recusa da API chega ao
+    // filtro global como uma frase que não diz nada, o backend não registra
+    // nada, e a única pista disponível é o status HTTP — que é o mesmo para
+    // "faltou um campo" e "o valor está errado".
+    if (error instanceof MercadoPagoError) {
+      this.logger.error(
+        `${context} recusado pelo Mercado Pago (${error.status}): ` +
+          `${error.error || error.message} | causas: ${JSON.stringify(error.causes ?? [])}`,
+      );
+    } else {
+      this.logger.error(`${context} falhou: ${String(error)}`);
+    }
     throw error;
   }
 }
@@ -728,6 +745,36 @@ export function describeCharge(request: CheckoutRequest): string {
   return request.couponCode
     ? `${request.description} (cupom ${request.couponCode})`
     : request.description;
+}
+
+/**
+ * O pagador, com **documento e nome**, não só o e-mail.
+ *
+ * No Brasil o cartão exige `payer.identification`: sem ele a Orders API recusa
+ * a criação com 400. É justamente o "Documento do titular" que o formulário
+ * coleta — e que não adiantava nada se parasse no navegador.
+ *
+ * Nome e sobrenome não são obrigatórios, mas entram porque melhoram a análise
+ * antifraude, e é ela que decide entre aprovar e pedir o desafio 3DS.
+ *
+ * O CPF vai **só com dígitos**: a máscara da tela (`390.533.447-05`) é
+ * apresentação, e mandá-la assim é recusa na certa.
+ */
+export function payerOf(customer: GatewayCustomer): {
+  email: string;
+  first_name?: string;
+  last_name?: string;
+  identification?: { type: string; number: string };
+} {
+  const digits = customer.taxId?.replace(/\D/g, '');
+  const [first, ...rest] = (customer.name ?? '').trim().split(/\s+/);
+
+  return {
+    email: customer.email,
+    ...(first ? { first_name: first } : {}),
+    ...(rest.length ? { last_name: rest.join(' ') } : {}),
+    ...(digits ? { identification: { type: 'CPF', number: digits } } : {}),
+  };
 }
 
 /** `1200` → `"1200.00"`. A Orders API recusa número e aceita string. */
