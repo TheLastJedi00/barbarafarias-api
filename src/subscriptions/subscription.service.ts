@@ -207,6 +207,21 @@ export class SubscriptionService {
     this.assertPayableProfile(student);
 
     const config = planConfig(subscription.plan);
+
+    // **Antes de cobrar, ver se já não foi cobrado.**
+    //
+    // Encontrado em teste, e é a única falha desta migração que tira dinheiro a
+    // mais: uma cobrança foi aprovada no gateway, o nosso lado não confirmou (a
+    // tela travou no desafio), o aluno tentou de novo — e como cada envio do
+    // formulário emite token novo, a chave de idempotência é outra e o
+    // provedor criou uma **segunda order**. Dois débitos de R$ 2.280.
+    //
+    // A chave por tentativa está certa: é ela que permite retentativa depois de
+    // uma recusa. O que faltava era esta pergunta. Qualquer falha nossa em
+    // confirmar — webhook atrasado, rede caindo na resposta, aluno impaciente —
+    // deixava a janela aberta.
+    const emAberto = await this.existingCardOutcome(subscription, charge);
+    if (emAberto) return emAberto;
     let checkout: CheckoutResult;
     try {
       checkout = await this.card.createCheckout({
@@ -335,6 +350,80 @@ export class SubscriptionService {
   /** Todos os aceites, para a página de contratos da gerente (§7.4). */
   listAcceptances(): Promise<PlanAcceptance[]> {
     return this.acceptances.findAll();
+  }
+
+  /**
+   * A cobrança que já existe para esta parcela ainda vale? Então não crie outra.
+   *
+   * Devolve a resposta pronta quando **cobrar de novo seria errado**, e
+   * `null` quando o caminho está livre.
+   *
+   * | situação | o que acontece |
+   * |---|---|
+   * | já paga | confirma e devolve `PAID` — sem tocar no gateway de novo |
+   * | desafio aberto | devolve **o mesmo** desafio, em vez de abrir um segundo |
+   * | recusada, expirada, inexistente | libera: aí sim cria outra |
+   *
+   * **Falhar aqui não bloqueia a cobrança.** Se a leitura cair, seguimos e
+   * criamos — travar a contratação por causa de uma consulta seria trocar um
+   * risco raro por um impedimento certo. O log é o que torna isso visível.
+   */
+  private async existingCardOutcome(
+    subscription: Subscription,
+    charge: Charge,
+  ): Promise<CardPaymentResponseDto | null> {
+    // No mensal o que existe lá fora é uma **assinatura**, não uma order: criar
+    // outra colocaria o aluno em dois `preapproval` cobrando todo mês, para
+    // sempre. Nem se pergunta ao gateway — a existência do id já responde.
+    if (planConfig(subscription.plan).recurring) {
+      if (!subscription.gatewaySubscriptionId) return null;
+      this.logger.warn(
+        `Assinatura de ${subscription.studentId} já existe (${subscription.gatewaySubscriptionId}); nova cobrança recusada.`,
+      );
+      return {
+        subscription: new SubscriptionDto(subscription),
+        outcome: CHARGE_OUTCOMES.PENDING,
+      };
+    }
+
+    if (!charge.gatewayChargeId) return null;
+
+    try {
+      const anterior = await this.card.fetchChargeOutcome(
+        charge.gatewayChargeId,
+      );
+
+      if (anterior.outcome === CHARGE_OUTCOMES.PAID) {
+        this.logger.warn(
+          `Parcela ${charge.index} de ${subscription.studentId} já estava paga (${charge.gatewayChargeId}); cobrança nova evitada.`,
+        );
+        await this.confirmCharge(subscription, charge.gatewayChargeId);
+        return {
+          subscription: new SubscriptionDto(
+            (await this.subscriptions.findByStudent(subscription.studentId)) ??
+              subscription,
+          ),
+          outcome: CHARGE_OUTCOMES.PAID,
+        };
+      }
+
+      if (anterior.outcome === CHARGE_OUTCOMES.CHALLENGE) {
+        this.logger.log(
+          `Parcela ${charge.index} de ${subscription.studentId} já tem desafio aberto; reaproveitado.`,
+        );
+        return {
+          subscription: new SubscriptionDto(subscription),
+          outcome: CHARGE_OUTCOMES.CHALLENGE,
+          challengeUrl: anterior.challengeUrl,
+        };
+      }
+    } catch (error) {
+      this.logger.error(
+        `Não foi possível reler ${charge.gatewayChargeId} antes de cobrar: ${String(error)}`,
+      );
+    }
+
+    return null;
   }
 
   /**

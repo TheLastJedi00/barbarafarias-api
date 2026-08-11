@@ -233,6 +233,119 @@ describe('SubscriptionService — cronograma de parcelas', () => {
   });
 });
 
+describe('SubscriptionService — não cobrar duas vezes', () => {
+  const ANUAL = {
+    plan: SUBSCRIPTION_PLANS.ANNUAL,
+    paymentMethod: PAYMENT_METHODS.CREDIT_CARD,
+    acceptance: ACEITE,
+  };
+
+  /**
+   * Cobrança já enviada ao gateway e **não** confirmada aqui — o estado exato
+   * em que a cobrança dupla aconteceu: aprovada lá, pendente cá.
+   */
+  async function comCobrancaEmAberto() {
+    const context = build();
+    context.card.createCheckout.mockResolvedValue({
+      id: 'ORD01ABC',
+      provider: 'MERCADOPAGO',
+      outcome: 'CHALLENGE',
+      challengeUrl: 'https://mp/challenge',
+    });
+    await context.service.choosePlan('aluno-1', ANUAL as any);
+    await context.service.payWithCard('aluno-1', CARTAO_TOKEN as any);
+    context.card.createCheckout.mockClear();
+    return context;
+  }
+
+  it('cobrança já paga no gateway NÃO vira uma segunda cobrança', async () => {
+    const { service, card, subscriptions } = await comCobrancaEmAberto();
+    card.fetchChargeOutcome.mockResolvedValue({
+      id: 'ORD01ABC',
+      provider: 'MERCADOPAGO',
+      outcome: 'PAID',
+    });
+
+    const result = await service.payWithCard('aluno-1', {
+      token: 'tok_outro',
+      paymentMethodId: 'master',
+    } as any);
+
+    // Aconteceu de verdade em teste: aprovada no gateway, não confirmada aqui,
+    // o aluno tentou de novo e o token novo gerou chave nova — **duas** ordens
+    // de R$ 2.280. A chave por tentativa está certa; faltava esta pergunta.
+    expect(card.createCheckout).not.toHaveBeenCalled();
+    expect(result.outcome).toBe('PAID');
+    expect(subscriptions.store.get('aluno-1')!.status).toBe(
+      SUBSCRIPTION_STATUS.ACTIVE,
+    );
+  });
+
+  it('desafio já aberto é reaproveitado, não duplicado', async () => {
+    const { service, card } = await comCobrancaEmAberto();
+    card.fetchChargeOutcome.mockResolvedValue({
+      id: 'ORD01ABC',
+      provider: 'MERCADOPAGO',
+      outcome: 'CHALLENGE',
+      challengeUrl: 'https://mp/challenge',
+    });
+
+    const result = await service.payWithCard('aluno-1', CARTAO_TOKEN as any);
+
+    expect(card.createCheckout).not.toHaveBeenCalled();
+    expect(result.challengeUrl).toBe('https://mp/challenge');
+  });
+
+  it('cobrança recusada libera a retentativa', async () => {
+    const { service, card } = await comCobrancaEmAberto();
+    card.fetchChargeOutcome.mockResolvedValue({
+      id: 'ORD01ABC',
+      provider: 'MERCADOPAGO',
+      outcome: 'REJECTED',
+    });
+
+    await service.payWithCard('aluno-1', CARTAO_TOKEN as any);
+
+    // Cartão recusado é rotina — travar aqui seria trocar cobrança dupla por
+    // venda perdida.
+    expect(card.createCheckout).toHaveBeenCalledTimes(1);
+  });
+
+  it('falha ao reler não impede a cobrança', async () => {
+    const { service, card } = await comCobrancaEmAberto();
+    card.fetchChargeOutcome.mockRejectedValue(new Error('rede'));
+
+    await service.payWithCard('aluno-1', CARTAO_TOKEN as any);
+
+    // Travar a contratação por causa de uma consulta seria trocar um risco
+    // raro por um impedimento certo.
+    expect(card.createCheckout).toHaveBeenCalledTimes(1);
+  });
+
+  it('no mensal, assinatura já criada não vira uma segunda', async () => {
+    const { service, card } = build();
+    card.createCheckout.mockResolvedValue({
+      id: 'preapproval_1',
+      subscriptionId: 'preapproval_1',
+      provider: 'MERCADOPAGO',
+      outcome: 'PENDING',
+    });
+    await service.choosePlan('aluno-1', {
+      plan: SUBSCRIPTION_PLANS.MONTHLY,
+      paymentMethod: PAYMENT_METHODS.CREDIT_CARD,
+      acceptance: ACEITE,
+    } as any);
+    await service.payWithCard('aluno-1', CARTAO_TOKEN as any);
+    card.createCheckout.mockClear();
+
+    await service.payWithCard('aluno-1', CARTAO_TOKEN as any);
+
+    // Uma segunda assinatura colocaria o aluno em dois `preapproval` cobrando
+    // todo mês, **para sempre**. É pior que a cobrança dupla do parcelado.
+    expect(card.createCheckout).not.toHaveBeenCalled();
+  });
+});
+
 describe('SubscriptionService — releitura da cobrança de cartão', () => {
   const ANUAL = {
     plan: SUBSCRIPTION_PLANS.ANNUAL,
