@@ -35,7 +35,9 @@ import {
   RECURRING_SCHEDULE_MONTHS,
   SUBSCRIPTION_STATUS,
   Subscription,
+  addMonths,
   grantsAccess,
+  paidAccessUntil,
   planConfig,
 } from './subscription.entity';
 import type { PaymentMethod, SubscriptionPlan } from './subscription.entity';
@@ -562,6 +564,11 @@ export class SubscriptionService {
     subscription.cancelledAt = now;
     subscription.updatedAt = now;
     subscription.nextChargeDate = undefined;
+    // **O acesso já pago sobrevive ao cancelamento.** Cancelar interrompe o que
+    // ainda seria cobrado; não desfaz o que foi. No parcelado o dinheiro saiu
+    // inteiro e o emissor continua faturando — tirar o acesso aqui seria cobrar
+    // a aluna por um ano e entregar um dia.
+    subscription.accessUntil = paidAccessUntil(subscription);
     subscription.charges = subscription.charges.filter(
       (charge) => charge.status === CHARGE_STATUS.PAID,
     );
@@ -841,6 +848,9 @@ export class SubscriptionService {
         subscriptionPlan: subscription.plan,
         subscriptionStatus: subscription.status,
         isPaying: grantsAccess(subscription.status),
+        // Vai junto porque, cancelada, a assinatura ainda pode dar acesso — e
+        // quem decide isso lê o aluno, não a assinatura.
+        accessUntil: subscription.accessUntil,
       });
     } catch (error) {
       // O espelho é conveniência de listagem; a assinatura já está gravada.
@@ -1119,14 +1129,39 @@ export class SubscriptionService {
     if (!charge || charge.status === CHARGE_STATUS.PAID) return;
 
     const now = new Date().toISOString();
-    charge.status = CHARGE_STATUS.PAID;
-    charge.paidAt = now;
+
+    // **No plano fechado, uma order paga o plano inteiro.** Semestral e Anual
+    // são um débito só, parcelado pelo emissor do cartão — não seis ou doze
+    // cobranças nossas. Confirmar apenas a parcela que veio na resposta deixava
+    // o Anual em "1 de 12" para sempre, com onze parcelas "pendentes" que o
+    // banco já cobrou, e é esse cronograma que o painel da gerente lê.
+    //
+    // O `dueDate` de cada uma **não** muda: a receita continua distribuída por
+    // competência mensal, que é como ela de fato ocorre. O que muda é só a
+    // verdade sobre o que já foi pago.
+    const quitadas = planConfig(subscription.plan).recurring
+      ? [charge]
+      : subscription.charges;
+
+    for (const item of quitadas) {
+      if (item.status === CHARGE_STATUS.PAID) continue;
+      item.status = CHARGE_STATUS.PAID;
+      item.paidAt = now;
+      // A trilha de qual order liquidou cada parcela; sem sobrescrever a de
+      // quem já tinha a sua.
+      item.gatewayChargeId ??= charge.gatewayChargeId;
+      item.gatewayProvider ??= charge.gatewayProvider;
+    }
 
     subscription.paidInstallments = subscription.charges.filter(
       (item) => item.status === CHARGE_STATUS.PAID,
     ).length;
     subscription.status = SUBSCRIPTION_STATUS.ACTIVE;
     subscription.updatedAt = now;
+    // Cada pagamento empurra a data até onde o acesso está comprado. Mantê-la
+    // em dia aqui é o que permite ao cancelamento apenas *parar de renovar*,
+    // sem precisar recalcular nada no momento em que a aluna desiste.
+    subscription.accessUntil = paidAccessUntil(subscription);
 
     this.extendRecurringSchedule(subscription);
 
@@ -1176,16 +1211,7 @@ export class SubscriptionService {
 }
 
 /**
- * Soma meses a uma data 'YYYY-MM-DD' preservando o dia. Dia 31 em mês curto
- * cai no último dia do mês (31/jan + 1 mês = 28/fev), que é o comportamento
- * esperado de mensalidade — `Date.UTC` sozinho estouraria para março.
+ * Mora na entidade desde a spec 023: a conta do `accessUntil` precisa dela, e
+ * duas cópias do mesmo calendário divergiriam no primeiro dia 31.
  */
-export function addMonths(date: string, months: number): string {
-  const [year, month, day] = date.split('-').map(Number);
-  const target = new Date(Date.UTC(year, month - 1 + months, 1));
-  const lastDay = new Date(
-    Date.UTC(target.getUTCFullYear(), target.getUTCMonth() + 1, 0),
-  ).getUTCDate();
-  target.setUTCDate(Math.min(day, lastDay));
-  return target.toISOString().slice(0, 10);
-}
+export { addMonths };

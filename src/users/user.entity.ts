@@ -16,6 +16,12 @@ export class User {
   phone!: string;
   email!: string;
   isPaying!: boolean;
+  /**
+   * Espelho do `accessUntil` da assinatura (spec 023 P1). Fica aqui porque é
+   * daqui que o guard lê: buscar a assinatura a cada rota protegida trocaria
+   * uma leitura por duas em todo o sistema.
+   */
+  accessUntil?: string;
   /** @deprecated substituído por `role`; mantido durante a migração (spec 010 §2.1). */
   isTeacher!: boolean;
   role?: Role;

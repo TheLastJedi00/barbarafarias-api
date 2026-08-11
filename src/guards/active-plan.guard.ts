@@ -7,6 +7,7 @@ import {
 } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import { UserRepository } from '../users/user.repository';
+import { hasPaidAccess } from '../users/paid-access';
 import { ROLES } from '../types/role';
 
 export const ACTIVE_PLAN_KEY = 'requiresActivePlan';
@@ -27,9 +28,12 @@ export const PAYMENT_PENDING_MESSAGE =
  * está em dia. Roda só nas rotas anotadas, e só para alunos — professora e
  * gerente atravessam sem consulta ao banco.
  *
- * A leitura é do `isPaying` do documento do aluno, que o `SubscriptionService`
- * mantém alinhado ao status da assinatura (Task 18). Assim o bloqueio funciona
- * tanto para quem assinou quanto para quem a gerente marcou à mão.
+ * A leitura é do documento do aluno, que o `SubscriptionService` mantém
+ * alinhado à assinatura (Task 18). Assim o bloqueio funciona tanto para quem
+ * assinou quanto para quem a gerente marcou à mão.
+ *
+ * Desde a spec 023 não basta o `isPaying`: cancelar preserva o que já foi
+ * comprado, e `hasPaidAccess` é quem sabe somar as duas metades.
  */
 @Injectable()
 export class ActivePlanGuard implements CanActivate {
@@ -53,7 +57,7 @@ export class ActivePlanGuard implements CanActivate {
     // rota, com o 404 dela. Bloquear aqui esconderia o erro real.
     if (!student) return true;
 
-    if (student.isPaying === false) {
+    if (!hasPaidAccess(student)) {
       throw new ForbiddenException(PAYMENT_PENDING_MESSAGE);
     }
     return true;

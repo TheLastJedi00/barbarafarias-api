@@ -1,6 +1,7 @@
 import { ForbiddenException, Injectable } from '@nestjs/common';
 import { UserRepository } from '../users/user.repository';
 import { PAYMENT_PENDING_MESSAGE } from '../guards/active-plan.guard';
+import { hasPaidAccess } from '../users/paid-access';
 
 /**
  * Lado da professora do controle de inadimplência (spec 012 RF14).
@@ -19,7 +20,7 @@ export class PaymentAccessService {
   async assertStudentIsPaying(studentId?: string): Promise<void> {
     if (!studentId) return;
     const student = await this.users.findById(studentId);
-    if (student && student.isPaying === false) {
+    if (student && !hasPaidAccess(student)) {
       throw new ForbiddenException(
         `${student.fullName ?? 'O aluno'} está com pagamento pendente. ${PAYMENT_PENDING_MESSAGE}`,
       );
@@ -35,7 +36,7 @@ export class PaymentAccessService {
     return new Map(
       students
         .filter((student): student is NonNullable<typeof student> => !!student)
-        .map((student) => [student.id!, student.isPaying !== false]),
+        .map((student) => [student.id!, hasPaidAccess(student)]),
     );
   }
 }
