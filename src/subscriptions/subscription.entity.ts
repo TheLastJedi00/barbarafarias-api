@@ -199,6 +199,19 @@ export interface Charge {
    * financeiro soma essas parcelas normalmente.
    */
   gatewayProvider?: string;
+  /**
+   * Cobranças que a aluna abandonou nesta parcela (spec 023 P2).
+   *
+   * Existe porque **abandonar não pode ser esquecer**. Quando ela recomeça o
+   * pagamento, a order anterior continua viva no provedor — o desafio 3DS não
+   * expira de forma confiável e não aceita cancelamento nesse estado —, e a URL
+   * dele ainda funciona. Apagar o id devolveria o risco que a trava
+   * anticobrança-dupla existe para impedir: a antiga sendo concluída depois,
+   * virando uma segunda cobrança sem ninguém ver.
+   *
+   * Guardando aqui, a trava confere **todas** antes de emitir outra.
+   */
+  abandonedChargeIds?: string[];
 }
 
 export class Subscription {

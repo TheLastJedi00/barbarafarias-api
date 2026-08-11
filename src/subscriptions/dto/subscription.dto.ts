@@ -19,6 +19,7 @@ import {
   PAYMENT_METHODS,
   SUBSCRIPTION_PLANS,
   Subscription,
+  CHARGE_STATUS,
   payerAmountsOf,
   planConfig,
 } from '../subscription.entity';
@@ -202,6 +203,14 @@ export class SubscriptionDto {
    */
   payerTotal!: number;
   payerInstallment!: number;
+  /**
+   * A parcela em aberto já tem uma cobrança emitida lá fora (spec 023 P2).
+   *
+   * É o que habilita "Recomeçar o pagamento" na tela. Vai como **booleano**, e
+   * não como o id: a aluna não tem o que fazer com um identificador do gateway,
+   * e mandá-lo seria expor o que a cobrança dupla explora.
+   */
+  hasOpenCardAttempt!: boolean;
   couponCode?: string;
   couponDiscount?: number;
   couponRemainingCharges?: number | null;
@@ -217,5 +226,10 @@ export class SubscriptionDto {
     const pagador = payerAmountsOf(subscription);
     this.payerTotal = pagador.total;
     this.payerInstallment = pagador.installment;
+
+    const emAberto = subscription.charges?.find(
+      (charge) => charge.status !== CHARGE_STATUS.PAID,
+    );
+    this.hasOpenCardAttempt = !!emAberto?.gatewayChargeId;
   }
 }

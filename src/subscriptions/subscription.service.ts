@@ -394,26 +394,28 @@ export class SubscriptionService {
       };
     }
 
+    // **As abandonadas contam.** Recomeçar o pagamento tira a order da frente,
+    // não do mundo: ela segue viva no provedor e a URL do desafio continua
+    // funcionando. Conferir só a atual deixaria a antiga ser concluída depois,
+    // virando a segunda cobrança que esta trava existe para impedir.
+    for (const antiga of charge.abandonedChargeIds ?? []) {
+      const paga = await this.paidOutcomeOf(subscription, charge, antiga);
+      if (paga) return paga;
+    }
+
     if (!charge.gatewayChargeId) return null;
 
     try {
+      const paga = await this.paidOutcomeOf(
+        subscription,
+        charge,
+        charge.gatewayChargeId,
+      );
+      if (paga) return paga;
+
       const anterior = await this.card.fetchChargeOutcome(
         charge.gatewayChargeId,
       );
-
-      if (anterior.outcome === CHARGE_OUTCOMES.PAID) {
-        this.logger.warn(
-          `Parcela ${charge.index} de ${subscription.studentId} já estava paga (${charge.gatewayChargeId}); cobrança nova evitada.`,
-        );
-        await this.confirmCharge(subscription, charge.gatewayChargeId);
-        return {
-          subscription: new SubscriptionDto(
-            (await this.subscriptions.findByStudent(subscription.studentId)) ??
-              subscription,
-          ),
-          outcome: CHARGE_OUTCOMES.PAID,
-        };
-      }
 
       if (anterior.outcome === CHARGE_OUTCOMES.CHALLENGE) {
         this.logger.log(
@@ -429,13 +431,13 @@ export class SubscriptionService {
           //
           // O texto **não promete prazo**. A doc fala em 40 minutos, mas uma
           // order abandonada foi observada em `pending_challenge` bem depois
-          // disso — e um prazo que não se cumpre é pior que nenhum. Enquanto
-          // não houver saída de verdade (ver a pendência da spec), o honesto é
-          // dizer que a verificação é a mesma e mandar procurar a gerente.
+          // disso — e um prazo que não se cumpre é pior que nenhum. A saída
+          // agora é a própria aluna recomeçar (`restartCardPayment`), e é para
+          // lá que a frase aponta.
           warning:
             'Você já tem uma verificação do banco em aberto para esta parcela, ' +
             'e é ela que aparece aqui — não uma cobrança nova. Se não conseguir ' +
-            'concluir, fale com a gente antes de tentar outra vez.',
+            'concluir, use "Recomeçar o pagamento" para tentar do zero.',
         };
       }
     } catch (error) {
@@ -445,6 +447,102 @@ export class SubscriptionService {
     }
 
     return null;
+  }
+
+  /**
+   * Esta cobrança já foi paga? Então confirma e devolve — não cobre de novo.
+   *
+   * Serve tanto para a cobrança atual quanto para as abandonadas, e é por isso
+   * que existe separado: eram duas verificações a manter em sincronia, e a que
+   * ficasse para trás autorizaria a cobrança dupla.
+   *
+   * Falha de leitura devolve `null` e deixa seguir: travar a contratação por
+   * causa de uma consulta seria trocar um risco raro por um impedimento certo.
+   */
+  private async paidOutcomeOf(
+    subscription: Subscription,
+    charge: Charge,
+    chargeId: string,
+  ): Promise<CardPaymentResponseDto | null> {
+    let desfecho: CheckoutResult;
+    try {
+      desfecho = await this.card.fetchChargeOutcome(chargeId);
+    } catch (error) {
+      this.logger.error(
+        `Não foi possível reler ${chargeId} antes de cobrar: ${String(error)}`,
+      );
+      return null;
+    }
+
+    if (desfecho.outcome !== CHARGE_OUTCOMES.PAID) return null;
+
+    this.logger.warn(
+      `Parcela ${charge.index} de ${subscription.studentId} já estava paga (${chargeId}); cobrança nova evitada.`,
+    );
+    // A parcela pode ter sido paga por uma order que ela abandonou: o id da
+    // confirmação é o que **de fato** pagou, não o que está guardado.
+    charge.gatewayChargeId = chargeId;
+    await this.confirmCharge(subscription, chargeId);
+
+    return {
+      subscription: new SubscriptionDto(
+        (await this.subscriptions.findByStudent(subscription.studentId)) ??
+          subscription,
+      ),
+      outcome: CHARGE_OUTCOMES.PAID,
+    };
+  }
+
+  /**
+   * Recomeça o pagamento do zero, abandonando a cobrança em aberto (P2).
+   *
+   * A saída do beco: um desafio 3DS que não completa deixava a parcela travada
+   * sem prazo, porque a trava anticobrança-dupla reaproveitava a mesma order
+   * para sempre. Aqui a aluna decide desistir daquela tentativa.
+   *
+   * **O id vai para `abandonedChargeIds`, não para o lixo.** A order continua
+   * viva lá fora; guardá-la é o que mantém a proteção contra cobrança dupla de
+   * pé quando a próxima tentativa começar.
+   *
+   * Já paga, não se abandona nada: confirma e devolve, porque aí o beco não
+   * existe — o que existe é dinheiro que entrou e ninguém registrou.
+   */
+  async restartCardPayment(studentId: string): Promise<CardPaymentResponseDto> {
+    const subscription = await this.requireSubscription(studentId);
+    if (subscription.paymentMethod !== PAYMENT_METHODS.CREDIT_CARD) {
+      throw new BadRequestException('O plano atual não é de cartão.');
+    }
+
+    const charge = this.nextPendingCharge(subscription);
+    if (!charge?.gatewayChargeId) {
+      throw new BadRequestException('Não há cobrança em aberto para recomeçar.');
+    }
+
+    const paga = await this.paidOutcomeOf(
+      subscription,
+      charge,
+      charge.gatewayChargeId,
+    );
+    if (paga) return paga;
+
+    charge.abandonedChargeIds = [
+      ...(charge.abandonedChargeIds ?? []),
+      charge.gatewayChargeId,
+    ];
+    this.logger.warn(
+      `Parcela ${charge.index} de ${studentId}: cobrança ${charge.gatewayChargeId} abandonada a pedido da aluna.`,
+    );
+    charge.gatewayChargeId = undefined;
+    charge.gatewayProvider = undefined;
+    await this.subscriptions.save(subscription);
+
+    return {
+      subscription: new SubscriptionDto(subscription),
+      outcome: CHARGE_OUTCOMES.PENDING,
+      warning:
+        'Tentativa anterior descartada. Envie os dados do cartão de novo para ' +
+        'começar um pagamento novo.',
+    };
   }
 
   /**
