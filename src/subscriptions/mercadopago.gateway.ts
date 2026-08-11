@@ -1,7 +1,12 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { createHash } from 'node:crypto';
-import { MercadoPagoConfig, Order, PreApproval } from 'mercadopago';
+import {
+  MercadoPagoConfig,
+  Order,
+  PreApproval,
+  WebhookSignatureValidator,
+} from 'mercadopago';
 import {
   MPNotFoundError,
   MPRateLimitError,
@@ -19,7 +24,11 @@ import {
   PixChargeResult,
   PixGateway,
 } from './payment.gateway';
-import { PREAPPROVAL_STATUS, outcomeOfOrder } from './mercadopago.status';
+import {
+  PREAPPROVAL_STATUS,
+  type SubscriptionCycle,
+  outcomeOfOrder,
+} from './mercadopago.status';
 
 /**
  * Token dos clientes do Mercado Pago. Os clientes são construídos pelo módulo,
@@ -106,6 +115,40 @@ export interface MercadoPagoClients {
 }
 
 /**
+ * Os tópicos de notificação que interessam.
+ *
+ * `order` é **singular** — é o nome do evento no painel ("Order (Mercado
+ * Pago)") — e cobre PIX e cartão parcelado. `subscription_authorized_payment`
+ * é cada ciclo do mensal. `subscription_preapproval` é a assinatura em si, e
+ * existe por um motivo que não é óbvio: depois de 3 parcelas recusadas o
+ * Mercado Pago **cancela sozinho** (§9.7) — sem escutar este tópico, o
+ * cancelamento dele nunca chegaria até nós e o aluno ficaria ativo no nosso
+ * banco sem nada sendo cobrado lá fora.
+ */
+export const MP_TOPICS = {
+  ORDER: 'order',
+  SUBSCRIPTION_PAYMENT: 'subscription_authorized_payment',
+  SUBSCRIPTION: 'subscription_preapproval',
+} as const;
+
+/** O corpo da notificação, que traz o id e nada mais de confiável. */
+export interface MercadoPagoNotification {
+  type?: string;
+  action?: string;
+  data?: { id?: string };
+}
+
+/** A notificação depois de o recurso ter sido buscado de verdade. */
+export type MercadoPagoDomainEvent =
+  | { topic: typeof MP_TOPICS.ORDER; id: string; order: OrderResponse }
+  | {
+      topic: typeof MP_TOPICS.SUBSCRIPTION_PAYMENT;
+      id: string;
+      cycle: SubscriptionCycle;
+    }
+  | { topic: typeof MP_TOPICS.SUBSCRIPTION; id: string; status?: string };
+
+/**
  * Gateway fora do ar de forma **temporária** — 429 com `Retry-After`, que a
  * doc da Orders API prevê como caminho normal.
  *
@@ -145,6 +188,8 @@ export class MercadoPagoGateway extends CardGateway implements PixGateway {
 
   /** Base do front, para o `back_url` que o `preapproval` exige. */
   private readonly appBaseUrl: string;
+  /** Segredo da assinatura das notificações. Ausente = webhook recusado. */
+  private readonly webhookSecret?: string;
 
   constructor(
     @Inject(MERCADOPAGO_CLIENT)
@@ -154,6 +199,7 @@ export class MercadoPagoGateway extends CardGateway implements PixGateway {
     super();
     this.appBaseUrl =
       configService.get<string>('APP_BASE_URL') ?? 'http://localhost:4200';
+    this.webhookSecret = configService.get<string>('MP_WEBHOOK_SECRET');
     if (!this.mp) {
       this.logger.warn(
         'MP_ACCESS_TOKEN_ORDERS/MP_ACCESS_TOKEN_SUBSCRIPTIONS ausentes: cobranças não serão emitidas.',
@@ -508,6 +554,132 @@ export class MercadoPagoGateway extends CardGateway implements PixGateway {
       );
     }
     return installments;
+  }
+
+  // --------------------------------------------------------------- webhook
+
+  /**
+   * Confere a assinatura da notificação. Levanta se não bater.
+   *
+   * **Segredo ausente = recusa**, nunca "aceita sem conferir". A postura é
+   * herdada da integração anterior e o motivo está escrito lá: sem esta
+   * conferência, um POST anônimo vira assinatura ativa.
+   *
+   * A validação é a do **SDK oficial** — mesmo motivo de usar
+   * `stripe.webhooks.constructEvent` em vez de HMAC caseiro. Ele monta o
+   * manifesto `id:<data.id>;request-id:<x-request-id>;ts:<ts>;` com o
+   * ponto-e-vírgula final e omitindo campo ausente, que são duas das três
+   * regras que quebram a validação em silêncio.
+   *
+   * **A terceira regra o SDK não implementa**, e por isso ela está aqui: a doc
+   * manda converter `data.id` para minúsculas. Os ids de order **são**
+   * maiúsculos (`ORD01JQ4S…`), então isso não é caso de borda, é o caso normal
+   * — sem ele nenhuma notificação de order validaria.
+   *
+   * Daí tentar as duas grafias. Não enfraquece nada: as duas são HMAC com o
+   * mesmo segredo, e quem não o tem não forja nenhuma das duas. O que se ganha
+   * é não depender de qual das duas leituras o provedor adotou hoje — o modo
+   * de falha alternativo seria 100% das notificações recusadas, e é dele que
+   * nasce a gambiarra de "desligar a conferência para destravar".
+   */
+  verifyNotification(input: {
+    xSignature?: string | string[];
+    xRequestId?: string | string[];
+    dataId?: string | string[];
+  }): void {
+    const secret = this.webhookSecret;
+    if (!secret) {
+      throw new Error('MP_WEBHOOK_SECRET ausente: webhook não verificável');
+    }
+
+    const dataId = Array.isArray(input.dataId) ? input.dataId[0] : input.dataId;
+    const candidates = [dataId?.toLowerCase(), dataId];
+
+    let last: unknown;
+    for (const candidate of candidates) {
+      try {
+        WebhookSignatureValidator.validate({
+          xSignature: input.xSignature,
+          xRequestId: input.xRequestId,
+          dataId: candidate,
+          secret,
+        });
+        return;
+      } catch (error) {
+        last = error;
+      }
+    }
+    throw last;
+  }
+
+  /**
+   * Busca o recurso que a notificação aponta e o traduz.
+   *
+   * A notificação traz **só o id**: nada nela diz se o pagamento entrou. Quem
+   * decide é o recurso, buscado agora — confiar no corpo da notificação seria
+   * aceitar o estado que quem a enviou disse que era.
+   *
+   * Tópico desconhecido devolve `null`: registra-se e responde 200, porque
+   * repetir para sempre uma notificação que nunca vamos tratar só enche a fila
+   * do provedor.
+   */
+  async resolveNotification(
+    notification: MercadoPagoNotification,
+  ): Promise<MercadoPagoDomainEvent | null> {
+    const id = notification.data?.id;
+    if (!id) {
+      this.logger.warn(
+        `Notificação de ${notification.type} sem id: nada a buscar.`,
+      );
+      return null;
+    }
+
+    switch (notification.type) {
+      case MP_TOPICS.ORDER:
+        return {
+          topic: MP_TOPICS.ORDER,
+          id,
+          order: await this.require().orders.get({ id }),
+        };
+      case MP_TOPICS.SUBSCRIPTION_PAYMENT:
+        return {
+          topic: MP_TOPICS.SUBSCRIPTION_PAYMENT,
+          id,
+          cycle: await this.fetchSubscriptionCycle(id),
+        };
+      case MP_TOPICS.SUBSCRIPTION: {
+        const preapproval = await this.require().subscriptions.get({ id });
+        return {
+          topic: MP_TOPICS.SUBSCRIPTION,
+          id,
+          status: preapproval.status,
+        };
+      }
+      default:
+        this.logger.log(`Tópico ignorado: ${notification.type}`);
+        return null;
+    }
+  }
+
+  /**
+   * A parcela do mensal, em `/authorized_payments/{id}`.
+   *
+   * Vai por `fetch` porque o SDK não tem cliente para este recurso — e é
+   * justamente ele que carrega o pagamento associado, sem o qual `processed`
+   * de assinatura é ambíguo entre pago e recusado quatro vezes.
+   */
+  private async fetchSubscriptionCycle(id: string): Promise<SubscriptionCycle> {
+    const { subscriptionsToken } = this.require();
+    const response = await fetch(
+      `${MERCADOPAGO_BASE_URL}/authorized_payments/${encodeURIComponent(id)}`,
+      { headers: { Authorization: `Bearer ${subscriptionsToken}` } },
+    );
+    if (!response.ok) {
+      throw new Error(
+        `Parcela de assinatura ${id} não pôde ser lida: ${response.status}`,
+      );
+    }
+    return (await response.json()) as SubscriptionCycle;
   }
 
   /**

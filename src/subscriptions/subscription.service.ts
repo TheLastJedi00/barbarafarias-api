@@ -18,6 +18,14 @@ import {
   toCents,
 } from './payment.gateway';
 import type { StripeDomainEvent } from './stripe.gateway';
+import { MP_TOPICS } from './mercadopago.gateway';
+import type { MercadoPagoDomainEvent } from './mercadopago.gateway';
+import {
+  isOrderPaid,
+  isPreapprovalDead,
+  isSubscriptionCyclePaid,
+} from './mercadopago.status';
+import type { OrderStatusPair, SubscriptionCycle } from './mercadopago.status';
 import {
   CHARGE_STATUS,
   Charge,
@@ -291,6 +299,160 @@ export class SubscriptionService {
 
     await this.confirmCharge(subscription, chargeId);
     return { received: true };
+  }
+
+  /**
+   * Regra de domínio das notificações do Mercado Pago (spec 023).
+   *
+   * Recebe o evento **já verificado e com o recurso buscado**: nada do que
+   * chega no corpo da notificação decide alguma coisa aqui.
+   *
+   * Idempotente do começo ao fim — o Mercado Pago reenvia até receber 2xx, e
+   * espera resposta em até 22 segundos. `confirmCharge` já é idempotente por
+   * recontagem, e essa propriedade é o que sustenta a reentrega.
+   */
+  async handleMercadoPagoEvent(event: MercadoPagoDomainEvent): Promise<void> {
+    switch (event.topic) {
+      case MP_TOPICS.ORDER:
+        return this.onOrderUpdated(event.id, event.order);
+      case MP_TOPICS.SUBSCRIPTION_PAYMENT:
+        return this.onSubscriptionCycle(event.cycle);
+      case MP_TOPICS.SUBSCRIPTION:
+        return this.onPreapprovalUpdated(event.id, event.status);
+    }
+  }
+
+  /**
+   * Uma order mudou de estado — PIX pago, cartão parcelado aprovado, desafio
+   * 3DS concluído.
+   *
+   * **Só o par `processed` + `accredited` confirma.** Tudo o mais é log: PIX
+   * ainda aguardando o aluno, desafio pendente, recusa, e qualquer status que
+   * o provedor invente depois. Ativar por exclusão libera acesso sem dinheiro.
+   */
+  private async onOrderUpdated(
+    orderId: string,
+    order: OrderStatusPair,
+  ): Promise<void> {
+    if (!isOrderPaid(order)) {
+      this.logger.log(
+        `Order ${orderId} em ${order.status}/${order.status_detail}: nada a confirmar.`,
+      );
+      return;
+    }
+
+    const subscription = await this.subscriptions.findByChargeId(orderId);
+    if (!subscription) {
+      this.logger.warn(`Order ${orderId} sem assinatura correspondente`);
+      return;
+    }
+
+    await this.confirmCharge(subscription, orderId);
+  }
+
+  /**
+   * Uma parcela do plano mensal foi processada.
+   *
+   * **`processed` aqui não quer dizer paga.** Depois da quarta tentativa
+   * recusada a parcela também fica `processed`, associada a um pagamento
+   * recusado — e um handler que trate os dois igual dá acesso vitalício de
+   * graça para quem nunca pagou, responde 200 e não loga nada. Quem decide é
+   * o pagamento associado.
+   */
+  private async onSubscriptionCycle(cycle: SubscriptionCycle): Promise<void> {
+    const preapprovalId = cycle.preapproval_id;
+    if (!preapprovalId) return;
+
+    const subscription =
+      await this.subscriptions.findByStripeSubscriptionId(preapprovalId);
+    if (!subscription) {
+      this.logger.warn(`Assinatura ${preapprovalId} sem correspondente aqui`);
+      return;
+    }
+
+    if (!isSubscriptionCyclePaid(cycle)) {
+      // Recusa dentro das 4 tentativas ou depois delas: o aluno perde o acesso
+      // até regularizar, e quem encerra a assinatura é o Mercado Pago (§9.7).
+      this.logger.warn(
+        `Parcela ${cycle.id} de ${preapprovalId} sem pagamento creditado (${cycle.status}).`,
+      );
+      await this.markPastDue(subscription);
+      return;
+    }
+
+    const pending = this.nextPendingCharge(subscription);
+    if (!pending) return;
+    await this.confirmCharge(subscription, undefined, pending.index);
+    await this.syncRecurringAmount(subscription);
+  }
+
+  /**
+   * A assinatura acabou lá fora. Chega **sem ninguém pedir**: depois de 3
+   * parcelas recusadas o Mercado Pago cancela sozinho. Não tentamos cancelar
+   * de volta — o outro lado já fez isso.
+   */
+  private async onPreapprovalUpdated(
+    preapprovalId: string,
+    status?: string,
+  ): Promise<void> {
+    if (!isPreapprovalDead(status)) return;
+
+    const subscription =
+      await this.subscriptions.findByStripeSubscriptionId(preapprovalId);
+    if (!subscription) return;
+    if (subscription.status === SUBSCRIPTION_STATUS.CANCELLED) return;
+
+    const now = new Date().toISOString();
+    subscription.status = SUBSCRIPTION_STATUS.CANCELLED;
+    subscription.cancelledAt = now;
+    subscription.updatedAt = now;
+    subscription.nextChargeDate = undefined;
+    subscription.stripeSubscriptionId = undefined;
+    subscription.charges = subscription.charges.filter(
+      (charge) => charge.status === CHARGE_STATUS.PAID,
+    );
+
+    await this.subscriptions.save(subscription);
+    await this.syncUser(subscription);
+  }
+
+  /** Parcela recusada: o aluno perde o acesso até regularizar (RF13). */
+  private async markPastDue(subscription: Subscription): Promise<void> {
+    if (subscription.status === SUBSCRIPTION_STATUS.PAST_DUE) return;
+    subscription.status = SUBSCRIPTION_STATUS.PAST_DUE;
+    subscription.updatedAt = new Date().toISOString();
+    await this.subscriptions.save(subscription);
+    await this.syncUser(subscription);
+  }
+
+  /**
+   * Acerta o valor da assinatura recorrente quando a próxima parcela do nosso
+   * cronograma passa a valer outra coisa — que é o que acontece no mês em que
+   * um cupom com prazo acaba.
+   *
+   * Sem isto o desconto vira vitalício: a assinatura lá fora tem um valor só, e
+   * ninguém reclama de receber a menos. É o tipo de erro que só aparece na
+   * conciliação, meses depois.
+   */
+  private async syncRecurringAmount(subscription: Subscription): Promise<void> {
+    const gatewayId = subscription.stripeSubscriptionId;
+    const next = this.nextPendingCharge(subscription);
+    if (!gatewayId || !next || next.amount === subscription.installmentAmount) {
+      return;
+    }
+
+    try {
+      await this.card.updateSubscriptionAmount(gatewayId, next.amount);
+      subscription.installmentAmount = next.amount;
+      await this.subscriptions.save(subscription);
+    } catch (error) {
+      // Degradação: a próxima cobrança sai pelo valor antigo e a diferença
+      // aparece no painel. Derrubar o webhook por isso faria o Mercado Pago
+      // reenviar para sempre uma parcela que já foi confirmada.
+      this.logger.error(
+        `Valor do ciclo de ${gatewayId} não pôde ser ajustado para ${next.amount}: ${String(error)}`,
+      );
+    }
   }
 
   /**

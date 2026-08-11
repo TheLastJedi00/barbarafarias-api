@@ -19,6 +19,12 @@ import {
   createStripeClient,
 } from './stripe.gateway';
 import { StripeWebhookController } from './stripe-webhook.controller';
+import {
+  MERCADOPAGO_CLIENT,
+  MercadoPagoGateway,
+  createMercadoPagoClients,
+} from './mercadopago.gateway';
+import { MercadoPagoWebhookController } from './mercadopago-webhook.controller';
 import { PaymentAccessService } from './payment-access.service';
 import { UserModule } from '../users/user.module';
 
@@ -34,12 +40,21 @@ import { UserModule } from '../users/user.module';
     SubscriptionController,
     SubscriptionWebhookController,
     StripeWebhookController,
+    MercadoPagoWebhookController,
   ],
   providers: [
     SubscriptionService,
     SubscriptionRepository,
     CouponRepository,
     PaymentAccessService,
+    // Os clientes do Mercado Pago são construídos aqui, e não dentro do
+    // gateway, pelo mesmo motivo do Stripe: os testes injetam um dublê.
+    {
+      provide: MERCADOPAGO_CLIENT,
+      useFactory: createMercadoPagoClients,
+      inject: [ConfigService],
+    },
+    MercadoPagoGateway,
     AbacatePayGateway,
     { provide: PixGateway, useExisting: AbacatePayGateway },
     // O cliente do Stripe é construído aqui, e não dentro do gateway, para os
