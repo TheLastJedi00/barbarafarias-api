@@ -230,8 +230,6 @@ export class GatewayConflictError extends Error {
 export class MercadoPagoGateway extends CardGateway implements PixGateway {
   protected readonly logger = new Logger(MercadoPagoGateway.name);
 
-  /** Base do front, para o `back_url` que o `preapproval` exige. */
-  private readonly appBaseUrl: string;
   /** Segredo da assinatura das notificações. Ausente = webhook recusado. */
   private readonly webhookSecret?: string;
 
@@ -241,8 +239,6 @@ export class MercadoPagoGateway extends CardGateway implements PixGateway {
     configService: ConfigService,
   ) {
     super();
-    this.appBaseUrl =
-      configService.get<string>('APP_BASE_URL') ?? 'http://localhost:4200';
     this.webhookSecret = configService.get<string>('MP_WEBHOOK_SECRET');
     if (!this.mp) {
       this.logger.warn(
@@ -378,6 +374,16 @@ export class MercadoPagoGateway extends CardGateway implements PixGateway {
   /**
    * Mensal: assinatura recorrente por `POST /preapproval`.
    *
+   * **`back_url` não é enviado, e é decisão.** Ele serve ao fluxo em que o
+   * aluno sai para autorizar a assinatura numa página do provedor — o
+   * redirecionamento que a spec 014 proibiu, e que aqui nunca acontece porque a
+   * assinatura já nasce `authorized` com o cartão. Conferido contra a API: sem
+   * ele a criação passa igual.
+   *
+   * Mandá-lo custava mais do que parecia. A URL saía de `APP_BASE_URL`, e o
+   * provedor **recusa `localhost`** — o plano mensal ficava impossível de
+   * testar na máquina por causa de um campo que não usamos.
+   *
    * **Cartão é o único meio documentado.** `status: 'authorized'` exige
    * `card_token_id`; sem meio de pagamento a assinatura nasce `pending` e o
    * aluno precisa abrir um link do Mercado Pago para escolher — ou seja,
@@ -413,7 +419,6 @@ export class MercadoPagoGateway extends CardGateway implements PixGateway {
           payer_email: request.customer.email,
           card_token_id: card.token,
           status: PREAPPROVAL_STATUS.AUTHORIZED,
-          back_url: `${this.appBaseUrl}/meu-plano`,
           auto_recurring: {
             frequency: 1,
             frequency_type: 'months',
