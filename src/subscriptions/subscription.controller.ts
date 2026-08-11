@@ -49,9 +49,14 @@ export class SubscriptionController {
    * O aluno precisa ler o texto **antes** de pagar, e a `termsVersion` que ele
    * devolve em `POST me` é a que vem daqui — é o que garante que o que ficou
    * registrado é o que estava na tela.
+   *
+   * A gerente lê a mesma rota: a tela de contratos (§7.4) mostra o texto de
+   * cada aceite, e sem ela o aceite vira uma linha sem o que foi aceito. Não é
+   * dado de ninguém — é o catálogo, o mesmo texto que qualquer visitante vê
+   * antes de contratar.
    */
   @Get('plans/:plan/terms')
-  @Roles(ROLES.STUDENT)
+  @Roles(ROLES.STUDENT, ROLES.MANAGER)
   terms(@Param('plan') plan: SubscriptionPlan) {
     if (!PLAN_CONFIGS[plan]) {
       throw new BadRequestException('Plano inválido');
