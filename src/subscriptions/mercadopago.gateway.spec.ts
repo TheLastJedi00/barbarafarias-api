@@ -1,0 +1,515 @@
+import { createHmac } from 'node:crypto';
+import { ConfigService } from '@nestjs/config';
+import {
+  MercadoPagoGateway,
+  idempotencyKeyFor,
+  readPixCodes,
+  toAmountString,
+  toIsoDuration,
+} from './mercadopago.gateway';
+import type { MercadoPagoClients } from './mercadopago.gateway';
+import { PLAN_CONFIGS } from './subscription.entity';
+
+/**
+ * Esta suíte não testa cobertura de linha: testa a **falha silenciosa**.
+ *
+ * Em cobrança o modo de falha que importa não é o erro — é o silêncio. O
+ * sistema responde 200, a tela diz "pagamento concluído", e o dinheiro está
+ * errado. Cada `it` abaixo corresponde a uma linha do catálogo da spec, e a
+ * maioria é uma assertiva **negativa**: "aqui não vai X". São elas que quebram
+ * quando alguém "melhora" o gateway sem ler o comentário.
+ */
+
+/** Cliente de mentira: **nenhuma suíte deste projeto toca a rede**. */
+function fakeClients() {
+  const orders = {
+    create: jest.fn().mockResolvedValue({
+      id: 'ORD01ABC',
+      status: 'processed',
+      status_detail: 'accredited',
+    }),
+    get: jest.fn(),
+  };
+  const subscriptions = {
+    create: jest.fn().mockResolvedValue({ id: 'preapproval_1' }),
+    update: jest.fn().mockResolvedValue({}),
+    get: jest.fn(),
+  };
+  return {
+    orders,
+    subscriptions,
+    subscriptionsToken: 'TEST-token',
+  } as unknown as MercadoPagoClients & {
+    orders: { create: jest.Mock; get: jest.Mock };
+    subscriptions: { create: jest.Mock; update: jest.Mock; get: jest.Mock };
+  };
+}
+
+const SECRET = 'segredo-do-painel';
+
+function build(env: Record<string, string> = {}) {
+  const clients = fakeClients();
+  const config = {
+    get: (key: string) =>
+      ({ MP_WEBHOOK_SECRET: SECRET, APP_BASE_URL: 'https://app', ...env })[key],
+  } as ConfigService;
+  return { clients, gateway: new MercadoPagoGateway(clients, config) };
+}
+
+const CLIENTE = { email: 'ana@example.com', name: 'Ana', taxId: '390' };
+const CARTAO = { token: 'tok_1', paymentMethodId: 'master' };
+
+function pedidoDeCartao(plan: 'SEMIANNUAL' | 'ANNUAL' | 'MONTHLY') {
+  const config = PLAN_CONFIGS[plan];
+  return {
+    amount: config.recurring ? config.installmentAmount : config.totalAmount,
+    description: `${config.label} — parcela 1`,
+    externalId: `aluno-1-1-${config.totalAmount * 100}`,
+    customer: CLIENTE,
+    plan,
+    planLabel: `Plano ${config.label}`,
+    studentId: 'aluno-1',
+    chargeIndex: 1,
+    installments: config.installments,
+    recurring: { cycles: config.recurring ? null : config.installments },
+    card: CARTAO,
+  };
+}
+
+describe('MercadoPagoGateway — sem chave', () => {
+  it('nasce desligado em vez de derrubar o boot', () => {
+    const config = { get: () => undefined } as unknown as ConfigService;
+
+    // Chave ausente **não** é exceção de boot: o aluno vê o plano gravado com
+    // um aviso, em vez de um 500 sem explicação.
+    expect(new MercadoPagoGateway(null, config).isEnabled()).toBe(false);
+  });
+});
+
+describe('MercadoPagoGateway — cartão parcelado', () => {
+  it('o anual vai em 12x, e o número sai do catálogo', async () => {
+    const { gateway, clients } = build();
+
+    await gateway.createCheckout(pedidoDeCartao('ANNUAL') as any);
+
+    const { body } = clients.orders.create.mock.calls[0][0];
+    const pagamento = body.transactions.payments[0];
+    // Sem isto o aluno é debitado à vista em R$ 2.280 — a falha silenciosa
+    // número 1 do catálogo, e o bug que originou esta spec.
+    expect(pagamento.payment_method.installments).toBe(12);
+    expect(pagamento.payment_method.type).toBe('credit_card');
+    expect(pagamento.payment_method.token).toBe('tok_1');
+  });
+
+  it('o total enviado é exatamente o do catálogo, como string', async () => {
+    const { gateway, clients } = build();
+
+    await gateway.createCheckout(pedidoDeCartao('SEMIANNUAL') as any);
+
+    const { body } = clients.orders.create.mock.calls[0][0];
+    // String com duas casas: `1200` ou `1200.0` é o tipo de divergência que
+    // some no JSON e reaparece no extrato.
+    expect(body.total_amount).toBe('1200.00');
+    expect(body.transactions.payments[0].amount).toBe('1200.00');
+    expect(body.processing_mode).toBe('automatic');
+  });
+
+  it('recusa cobrar sem token, em vez de mandar `undefined` para a API', async () => {
+    const { gateway } = build();
+    const pedido = { ...pedidoDeCartao('ANNUAL'), card: undefined };
+
+    await expect(gateway.createCheckout(pedido as any)).rejects.toThrow(
+      /sem token/,
+    );
+  });
+
+  it('recusa cobrar sem número de parcelas válido', async () => {
+    const { gateway } = build();
+    const pedido = { ...pedidoDeCartao('ANNUAL'), installments: 0 };
+
+    await expect(gateway.createCheckout(pedido as any)).rejects.toThrow(
+      /parcelas/,
+    );
+  });
+
+  it('manda `X-Idempotency-Key`, e a mesma cobrança gera a mesma chave', async () => {
+    const { gateway, clients } = build();
+
+    await gateway.createCheckout(pedidoDeCartao('ANNUAL') as any);
+    await gateway.createCheckout(pedidoDeCartao('ANNUAL') as any);
+
+    const [primeira, segunda] = clients.orders.create.mock.calls.map(
+      (call: any[]) => call[0].requestOptions.idempotencyKey,
+    );
+    // **Estável, não sorteada.** Uma chave nova a cada chamada tem o formato
+    // certo e não protege de nada: dois cliques virariam duas cobranças.
+    expect(primeira).toBe(segunda);
+    expect(primeira).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+    );
+  });
+
+  it('cobranças diferentes têm chaves diferentes', () => {
+    expect(idempotencyKeyFor('aluno-1-1-228000')).not.toBe(
+      idempotencyKeyFor('aluno-1-2-228000'),
+    );
+  });
+
+  it('liga o 3DS com liability shift', async () => {
+    const { gateway, clients } = build();
+
+    await gateway.createCheckout(pedidoDeCartao('ANNUAL') as any);
+
+    const { body } = clients.orders.create.mock.calls[0][0];
+    expect(body.config.online.transaction_security).toEqual({
+      validation: 'on_fraud_risk',
+      liability_shift: 'required',
+    });
+  });
+
+  it('desafio 3DS volta como CHALLENGE, não como sucesso', async () => {
+    const { gateway, clients } = build();
+    clients.orders.create.mockResolvedValue({
+      id: 'ORD01ABC',
+      status: 'action_required',
+      status_detail: 'pending_challenge',
+      transactions: {
+        payments: [
+          {
+            payment_method: {
+              transaction_security: { url: 'https://mp/challenge' },
+            },
+          },
+        ],
+      },
+    });
+
+    const result = await gateway.createCheckout(
+      pedidoDeCartao('ANNUAL') as any,
+    );
+
+    // Tratar isto como concluído deixa o aluno debitado, a tela dizendo
+    // "concluído" e a cobrança nunca completando.
+    expect(result.outcome).toBe('CHALLENGE');
+    expect(result.challengeUrl).toBe('https://mp/challenge');
+  });
+
+  it('status desconhecido recusa, nunca aprova', async () => {
+    const { gateway, clients } = build();
+    clients.orders.create.mockResolvedValue({
+      id: 'ORD01ABC',
+      status: 'algo_que_o_mercado_pago_inventou_amanha',
+    });
+
+    // Regra 4 da bateria: "não reconheci" e "está pago" são vizinhos perigosos
+    // demais. O desfecho seguro é a recusa.
+    const result = await gateway.createCheckout(
+      pedidoDeCartao('ANNUAL') as any,
+    );
+    expect(result.outcome).toBe('REJECTED');
+  });
+
+  it('`processed` sem `accredited` não é pagamento', async () => {
+    const { gateway, clients } = build();
+    clients.orders.create.mockResolvedValue({
+      id: 'ORD01ABC',
+      status: 'processed',
+      status_detail: 'partially_refunded',
+    });
+
+    const result = await gateway.createCheckout(
+      pedidoDeCartao('ANNUAL') as any,
+    );
+    expect(result.outcome).not.toBe('PAID');
+  });
+});
+
+describe('MercadoPagoGateway — plano mensal', () => {
+  it('abre assinatura recorrente com o token do cartão', async () => {
+    const { gateway, clients } = build();
+
+    const result = await gateway.createCheckout(
+      pedidoDeCartao('MONTHLY') as any,
+    );
+
+    const { body } = clients.subscriptions.create.mock.calls[0][0];
+    expect(body.status).toBe('authorized');
+    expect(body.card_token_id).toBe('tok_1');
+    expect(body.auto_recurring).toMatchObject({
+      frequency: 1,
+      frequency_type: 'months',
+      transaction_amount: 240,
+      currency_id: 'BRL',
+    });
+    expect(result.subscriptionId).toBe('preapproval_1');
+  });
+
+  it('criar a assinatura NÃO é ter recebido', async () => {
+    const { gateway } = build();
+
+    const result = await gateway.createCheckout(
+      pedidoDeCartao('MONTHLY') as any,
+    );
+
+    // A primeira cobrança sai em até ~1h. `PAID` aqui liberaria acesso antes
+    // de existir dinheiro — e para sempre, se a cobrança falhar.
+    expect(result.outcome).toBe('PENDING');
+  });
+
+  it('não usa `repetitions` para fechar plano de prazo fixo', async () => {
+    const { gateway, clients } = build();
+
+    await gateway.createCheckout(pedidoDeCartao('SEMIANNUAL') as any);
+
+    // Fechar o semestral em 6 ciclos seria 6 cobranças que podem falhar na
+    // quarta: o bug de origem desta spec, reencenado com outro sotaque.
+    expect(clients.subscriptions.create).not.toHaveBeenCalled();
+    expect(clients.orders.create).toHaveBeenCalledTimes(1);
+  });
+
+  it('cancelar é um PUT de status, e já cancelada não é erro', async () => {
+    const { gateway, clients } = build();
+
+    await gateway.cancelSubscription('preapproval_1');
+
+    expect(clients.subscriptions.update).toHaveBeenCalledWith({
+      id: 'preapproval_1',
+      body: { status: 'cancelled' },
+    });
+  });
+});
+
+describe('MercadoPagoGateway — PIX', () => {
+  const PEDIDO_PIX = {
+    amount: 240,
+    description: 'Mensal — parcela 1',
+    externalId: 'aluno-1-1-24000',
+    customer: CLIENTE,
+  };
+
+  function ordemComQr() {
+    return {
+      id: 'ORD01PIX',
+      status: 'action_required',
+      status_detail: 'waiting_transfer',
+      transactions: {
+        payments: [
+          {
+            payment_method: {
+              id: 'pix',
+              type: 'bank_transfer',
+              qr_code: '00020126580014br.gov.bcb.pix...',
+              qr_code_base64: 'iVBORw0KGgo=',
+            },
+          },
+        ],
+      },
+    };
+  }
+
+  it('manda os dois campos do meio de pagamento', async () => {
+    const { gateway, clients } = build();
+    clients.orders.create.mockResolvedValue(ordemComQr());
+
+    await gateway.createPixCharge(PEDIDO_PIX);
+
+    const { body } = clients.orders.create.mock.calls[0][0];
+    expect(body.transactions.payments[0].payment_method).toEqual({
+      id: 'pix',
+      type: 'bank_transfer',
+    });
+  });
+
+  it('a validade vai como duração ISO 8601, não como segundos', async () => {
+    const { gateway, clients } = build();
+    clients.orders.create.mockResolvedValue(ordemComQr());
+
+    await gateway.createPixCharge(PEDIDO_PIX);
+
+    const { body } = clients.orders.create.mock.calls[0][0];
+    // `3600` não é "o padrão de 24h": é payload inválido, ou pior, aceito e
+    // interpretado de um jeito que ninguém previu.
+    expect(body.transactions.payments[0].expiration_time).toBe('PT1H');
+  });
+
+  it('lê o QR aninhado, não na raiz', async () => {
+    const { gateway, clients } = build();
+    clients.orders.create.mockResolvedValue(ordemComQr());
+
+    const result = await gateway.createPixCharge(PEDIDO_PIX);
+
+    expect(result.brCode).toBe('00020126580014br.gov.bcb.pix...');
+    expect(result.brCodeBase64).toBe('iVBORw0KGgo=');
+  });
+
+  it('order criada de forma assíncrona reconsulta antes de desistir', async () => {
+    const { gateway, clients } = build();
+    // Sem QR na criação: a doc avisa que "a order fica com o status de
+    // processando e sem informações".
+    clients.orders.create.mockResolvedValue({
+      id: 'ORD01PIX',
+      status: 'processing',
+    });
+    clients.orders.get.mockResolvedValue(ordemComQr());
+
+    const result = await gateway.createPixCharge(PEDIDO_PIX);
+
+    expect(clients.orders.get).toHaveBeenCalledWith({ id: 'ORD01PIX' });
+    expect(result.brCode).toBeTruthy();
+  });
+
+  it('sem QR nem depois da reconsulta, estoura — nunca `brCode: undefined`', async () => {
+    const { gateway, clients } = build();
+    clients.orders.create.mockResolvedValue({
+      id: 'ORD01PIX',
+      status: 'processing',
+    });
+    clients.orders.get.mockResolvedValue({
+      id: 'ORD01PIX',
+      status: 'processing',
+    });
+
+    // Um `undefined` aqui atravessa backend, DTO e modal sem ninguém
+    // reclamar, e termina numa tela em branco sem erro. O erro cai no catch de
+    // `issueCharge`, que degrada com aviso.
+    await expect(gateway.createPixCharge(PEDIDO_PIX)).rejects.toThrow(
+      /sem QR Code/,
+    );
+  });
+
+  it('meio QR não serve: a leitura é tudo ou nada', () => {
+    const semImagem = {
+      transactions: { payments: [{ payment_method: { qr_code: 'abc' } }] },
+    };
+    expect(readPixCodes(semImagem as any)).toBeUndefined();
+  });
+});
+
+describe('MercadoPagoGateway — assinatura do webhook', () => {
+  /** O manifesto exatamente como a doc o define, para gerar o vetor. */
+  function assinar(dataId: string, requestId: string, ts: string) {
+    const manifesto = `id:${dataId};request-id:${requestId};ts:${ts};`;
+    return createHmac('sha256', SECRET).update(manifesto).digest('hex');
+  }
+
+  const REQUEST_ID = '2066ca19-c6f1-498a-be75-1923005edd06';
+  const TS = '1742505638683';
+  const ORDER_ID = 'ORD01JQ4S4KY8HWQ6NA5PXB65B3D3';
+
+  it('valida uma notificação de order, com o id em MAIÚSCULAS', () => {
+    const { gateway } = build();
+    // Ids de order são maiúsculos: esta não é uma borda, é o caso normal. O
+    // manifesto usa a versão em minúsculas, como a doc manda — sem essa regra,
+    // 100% das notificações de order seriam recusadas.
+    const v1 = assinar(ORDER_ID.toLowerCase(), REQUEST_ID, TS);
+
+    expect(() =>
+      gateway.verifyNotification({
+        xSignature: `ts=${TS},v1=${v1}`,
+        xRequestId: REQUEST_ID,
+        dataId: ORDER_ID,
+      }),
+    ).not.toThrow();
+  });
+
+  it('recusa assinatura adulterada', () => {
+    const { gateway } = build();
+
+    expect(() =>
+      gateway.verifyNotification({
+        xSignature: `ts=${TS},v1=${'0'.repeat(64)}`,
+        xRequestId: REQUEST_ID,
+        dataId: ORDER_ID,
+      }),
+    ).toThrow();
+  });
+
+  it('o manifesto tem ponto-e-vírgula no fim', () => {
+    const { gateway } = build();
+    const semTerminador = createHmac('sha256', SECRET)
+      .update(`id:${ORDER_ID.toLowerCase()};request-id:${REQUEST_ID};ts:${TS}`)
+      .digest('hex');
+
+    // Um caractere muda o HMAC inteiro. O sintoma de errar isto é 100% dos
+    // webhooks recusados — ou, se alguém "consertar" com um bypass, 100%
+    // aceitos sem conferir.
+    expect(() =>
+      gateway.verifyNotification({
+        xSignature: `ts=${TS},v1=${semTerminador}`,
+        xRequestId: REQUEST_ID,
+        dataId: ORDER_ID,
+      }),
+    ).toThrow();
+  });
+
+  it('campo ausente sai do manifesto, em vez de virar string vazia', () => {
+    const { gateway } = build();
+    // `request-id:abc;ts:123;` é um manifesto **diferente** de
+    // `id:;request-id:abc;ts:123;`.
+    const semId = createHmac('sha256', SECRET)
+      .update(`request-id:${REQUEST_ID};ts:${TS};`)
+      .digest('hex');
+
+    expect(() =>
+      gateway.verifyNotification({
+        xSignature: `ts=${TS},v1=${semId}`,
+        xRequestId: REQUEST_ID,
+        dataId: undefined,
+      }),
+    ).not.toThrow();
+  });
+
+  it('segredo ausente recusa, nunca aceita sem conferir', () => {
+    const { gateway } = build({ MP_WEBHOOK_SECRET: '' });
+    const v1 = assinar(ORDER_ID.toLowerCase(), REQUEST_ID, TS);
+
+    // Sem isto, um POST anônimo vira assinatura ativa.
+    expect(() =>
+      gateway.verifyNotification({
+        xSignature: `ts=${TS},v1=${v1}`,
+        xRequestId: REQUEST_ID,
+        dataId: ORDER_ID,
+      }),
+    ).toThrow(/MP_WEBHOOK_SECRET/);
+  });
+});
+
+describe('MercadoPagoGateway — o vocabulário legado não entrou', () => {
+  it('nenhum arquivo do gateway compara status com `approved`', () => {
+    const fs = require('node:fs') as typeof import('node:fs');
+    const arquivos = [
+      'mercadopago.gateway.ts',
+      'mercadopago.status.ts',
+      'mercadopago-webhook.controller.ts',
+      'subscription.service.ts',
+    ];
+
+    for (const arquivo of arquivos) {
+      const codigo = fs
+        .readFileSync(`${__dirname}/${arquivo}`, 'utf8')
+        // Comentários podem citar a palavra — é assim que se explica por que
+        // ela não pode ser usada.
+        .replace(/\/\*[\s\S]*?\*\//g, '')
+        .replace(/^\s*\/\/.*$/gm, '');
+
+      // `approved` é o vocabulário da API de Pagamentos, o caminho legado. Um
+      // `if (status === 'approved')` sobre uma order **nunca** é verdadeiro:
+      // ninguém recebe acesso e nenhum erro é lançado.
+      expect(codigo).not.toContain('approved');
+    }
+  });
+});
+
+describe('conversões de fronteira', () => {
+  it('valores viram string com duas casas', () => {
+    expect(toAmountString(1200)).toBe('1200.00');
+    expect(toAmountString(2280)).toBe('2280.00');
+    expect(toAmountString(199.9)).toBe('199.90');
+  });
+
+  it('segundos viram duração ISO 8601', () => {
+    expect(toIsoDuration(3600)).toBe('PT1H');
+    expect(toIsoDuration(1800)).toBe('PT30M');
+    expect(toIsoDuration(5400)).toBe('PT1H30M');
+  });
+});
