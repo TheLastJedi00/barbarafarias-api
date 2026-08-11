@@ -48,7 +48,12 @@ import {
   normalizeCouponCode,
   round2,
 } from './coupon.entity';
-import { PlanAcceptance } from './plan-acceptance.entity';
+import {
+  PURCHASE_OUTCOMES,
+  PlanAcceptance,
+  type PlanAcceptanceView,
+  type PurchaseOutcome,
+} from './plan-acceptance.entity';
 import { PlanAcceptanceRepository } from './plan-acceptance.repository';
 import {
   CardPaymentDto,
@@ -356,8 +361,53 @@ export class SubscriptionService {
   }
 
   /** Todos os aceites, para a página de contratos da gerente (§7.4). */
-  listAcceptances(): Promise<PlanAcceptance[]> {
-    return this.acceptances.findAll();
+  async listAcceptances(): Promise<PlanAcceptanceView[]> {
+    const [acceptances, subscriptions] = await Promise.all([
+      this.acceptances.findAll(),
+      this.subscriptions.findAll(),
+    ]);
+
+    const porAluno = new Map(
+      subscriptions.map((subscription) => [subscription.studentId, subscription]),
+    );
+
+    // Qual aceite de cada aluna é o vigente. A assinatura é **uma** e é
+    // reescrita a cada contratação; só o último aceite ainda descreve o que
+    // está lá. Os anteriores viraram histórico, e responder por eles com o
+    // estado de hoje seria inventar.
+    const vigente = new Map<string, string>();
+    for (const aceite of [...acceptances].sort((a, b) =>
+      a.acceptedAt.localeCompare(b.acceptedAt),
+    )) {
+      vigente.set(aceite.studentId, aceite.id);
+    }
+
+    return acceptances.map((aceite) => ({
+      ...aceite,
+      purchase: this.purchaseOf(
+        aceite,
+        porAluno.get(aceite.studentId),
+        vigente.get(aceite.studentId) === aceite.id,
+      ),
+    }));
+  }
+
+  /** Ver `PURCHASE_OUTCOMES`. */
+  private purchaseOf(
+    aceite: PlanAcceptance,
+    subscription: Subscription | undefined,
+    ehVigente: boolean,
+  ): PurchaseOutcome {
+    if (!ehVigente) return PURCHASE_OUTCOMES.SUPERSEDED;
+    if (!subscription) return PURCHASE_OUTCOMES.UNPAID;
+    // Divergência de plano no aceite vigente não deveria acontecer — trocar de
+    // plano grava um aceite novo. Se acontecer, dizer "não sei" é melhor que
+    // afirmar uma compra que não se pode sustentar.
+    if (subscription.plan !== aceite.plan) return PURCHASE_OUTCOMES.SUPERSEDED;
+
+    return subscription.paidInstallments > 0
+      ? PURCHASE_OUTCOMES.PAID
+      : PURCHASE_OUTCOMES.UNPAID;
   }
 
   /**
