@@ -3,12 +3,14 @@ import { ConfigService } from '@nestjs/config';
 import {
   MercadoPagoGateway,
   idempotencyKeyFor,
+  payerOf,
   readPixCodes,
   toAmountString,
   toIsoDuration,
 } from './mercadopago.gateway';
 import type { MercadoPagoClients } from './mercadopago.gateway';
 import { PLAN_CONFIGS } from './subscription.entity';
+import { MPBadRequestError } from 'mercadopago/dist/utils/errors';
 
 /**
  * Esta suíte não testa cobertura de linha: testa a **falha silenciosa**.
@@ -221,6 +223,90 @@ describe('MercadoPagoGateway — cartão parcelado', () => {
       pedidoDeCartao('ANNUAL') as any,
     );
     expect(result.outcome).not.toBe('PAID');
+  });
+});
+
+describe('MercadoPagoGateway — o pagador', () => {
+  it('manda o CPF: sem ele a Orders API recusa o cartão com 400', async () => {
+    const { gateway, clients } = build();
+
+    await gateway.createCheckout(pedidoDeCartao('ANNUAL') as any);
+
+    const { body } = clients.orders.create.mock.calls[0][0];
+    // Foi encontrado em ambiente de teste: `payer` só com e-mail devolve 400.
+    // O "Documento do titular" que o formulário coleta não adiantava nada se
+    // parasse no navegador.
+    expect(body.payer.identification).toEqual({
+      type: 'CPF',
+      number: '390',
+    });
+  });
+
+  it('o CPF vai só com dígitos, sem a máscara da tela', () => {
+    expect(payerOf({ email: 'a@b.c', taxId: '390.533.447-05' })).toMatchObject({
+      identification: { type: 'CPF', number: '39053344705' },
+    });
+  });
+
+  it('separa nome e sobrenome, que a antifraude usa', () => {
+    expect(payerOf({ email: 'a@b.c', name: 'Ana Maria Aluna' })).toMatchObject({
+      first_name: 'Ana',
+      last_name: 'Maria Aluna',
+    });
+  });
+
+  it('sem documento, o campo some em vez de ir vazio', () => {
+    // Um `identification: { type: 'CPF', number: '' }` é pior que ausência: a
+    // API o rejeita com uma mensagem sobre formato, não sobre falta.
+    const payer = payerOf({ email: 'a@b.c' });
+    expect(payer).toEqual({ email: 'a@b.c' });
+  });
+
+  it('o PIX manda o mesmo pagador do cartão', async () => {
+    const { gateway, clients } = build();
+    clients.orders.create.mockResolvedValue({
+      id: 'ORD01PIX',
+      transactions: {
+        payments: [{ payment_method: { qr_code: 'x', qr_code_base64: 'y' } }],
+      },
+    });
+
+    await gateway.createPixCharge({
+      amount: 240,
+      description: 'Mensal — parcela 1',
+      externalId: 'aluno-1-1-24000',
+      customer: CLIENTE,
+    });
+
+    const { body } = clients.orders.create.mock.calls[0][0];
+    expect(body.payer.identification).toBeDefined();
+  });
+});
+
+describe('MercadoPagoGateway — diagnóstico de recusa', () => {
+  it('loga status e causas antes de repassar o erro', async () => {
+    const { gateway, clients } = build();
+    const erro = new MPBadRequestError({
+      status: 400,
+      message: 'MercadoPago API error',
+      error: 'bad_request',
+      cause: [{ code: 2067, description: 'payer.identification invalid' }],
+    });
+    clients.orders.create.mockRejectedValue(erro);
+    const log = jest
+      .spyOn((gateway as any).logger, 'error')
+      .mockImplementation(() => undefined);
+
+    await expect(
+      gateway.createCheckout(pedidoDeCartao('ANNUAL') as any),
+    ).rejects.toBe(erro);
+
+    // Sem isto, a recusa chega ao filtro global como "MercadoPago API error" —
+    // uma frase que não diz nada — e o backend não registra pista nenhuma.
+    // Regra 3 da bateria: nenhum caminho de falha termina sem sinal.
+    const registrado = log.mock.calls[0][0] as string;
+    expect(registrado).toContain('400');
+    expect(registrado).toContain('payer.identification invalid');
   });
 });
 
