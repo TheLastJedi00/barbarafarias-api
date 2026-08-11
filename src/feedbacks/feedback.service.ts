@@ -5,6 +5,7 @@ import {
 } from '@nestjs/common';
 import { FeedbackRepository } from './feedback.repository';
 import { UserRepository } from '../users/user.repository';
+import { hasPaidAccess } from '../users/paid-access';
 import { StudentFeedback } from './feedback.entity';
 import { CreateFeedbackDto } from './dto/create-feedback.dto';
 import { ROLES } from '../types/role';
@@ -35,7 +36,7 @@ export class FeedbackService {
     const student = await this.assertCanAccess(user, studentId);
     // Avaliar a evolução de quem está inadimplente fica bloqueado (RF14). Ler
     // avaliações antigas continua liberado: é histórico, não serviço novo.
-    if (student.isPaying === false) {
+    if (!hasPaidAccess(student)) {
       throw new ForbiddenException(
         `${student.fullName ?? 'O aluno'} está com pagamento pendente.`,
       );

@@ -97,6 +97,7 @@ export class UserRepository {
       subscriptionPlan?: string;
       subscriptionStatus?: string;
       isPaying: boolean;
+      accessUntil?: string;
     },
   ): Promise<void> {
     await this.db
@@ -107,6 +108,7 @@ export class UserRepository {
           subscriptionPlan: state.subscriptionPlan ?? null,
           subscriptionStatus: state.subscriptionStatus ?? null,
           isPaying: state.isPaying,
+          accessUntil: state.accessUntil ?? null,
         },
         { merge: true },
       );

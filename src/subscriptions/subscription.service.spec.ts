@@ -424,12 +424,65 @@ describe('SubscriptionService — releitura da cobrança de cartão', () => {
     );
   });
 
-  it('reler duas vezes não conta a parcela duas vezes', async () => {
+  it('reler duas vezes não reconfirma o que já estava pago', async () => {
     const { service, subscriptions } = await comDesafioAberto();
 
     await service.refreshCardPayment('aluno-1');
+    const depoisDaPrimeira = subscriptions
+      .store.get('aluno-1')!
+      .charges.map((charge) => charge.paidAt);
+
     await service.refreshCardPayment('aluno-1');
 
+    // O Anual é uma cobrança só: a primeira releitura quita o plano inteiro.
+    // A segunda não pode mexer em nada — nem no número, nem nos carimbos, que
+    // são o que prova *quando* cada parcela foi liquidada.
+    expect(subscriptions.store.get('aluno-1')!.paidInstallments).toBe(12);
+    expect(
+      subscriptions.store.get('aluno-1')!.charges.map((c) => c.paidAt),
+    ).toEqual(depoisDaPrimeira);
+  });
+
+  it('plano fechado quita o cronograma inteiro, preservando as datas', async () => {
+    const { service, subscriptions } = await comDesafioAberto();
+    const vencimentos = subscriptions
+      .store.get('aluno-1')!
+      .charges.map((charge) => charge.dueDate);
+
+    await service.refreshCardPayment('aluno-1');
+
+    const plano = subscriptions.store.get('aluno-1')!;
+    // O emissor é que divide em 12; do nosso lado saiu **uma** cobrança. Deixar
+    // onze "pendentes" que o banco já cobrou é o que fazia o painel da gerente
+    // mostrar dívida onde não há.
+    expect(plano.charges.every((c) => c.status === CHARGE_STATUS.PAID)).toBe(
+      true,
+    );
+    expect(plano.paidInstallments).toBe(12);
+    // E **não** há próxima: o plano está quitado.
+    expect(plano.nextChargeDate).toBeUndefined();
+    // O vencimento de cada parcela sobrevive à quitação, senão a receita
+    // desabaria toda no mês da compra em vez de correr por competência.
+    expect(plano.charges.map((c) => c.dueDate)).toEqual(vencimentos);
+  });
+
+  it('no mensal só a parcela do ciclo é quitada', async () => {
+    const { service, subscriptions, card } = build();
+    card.createCheckout.mockResolvedValue({
+      id: 'preapproval_1',
+      provider: 'MERCADOPAGO',
+      outcome: 'PAID',
+    });
+    await service.choosePlan('aluno-1', {
+      plan: SUBSCRIPTION_PLANS.MONTHLY,
+      paymentMethod: PAYMENT_METHODS.CREDIT_CARD,
+      acceptance: ACEITE,
+    } as any);
+
+    await service.payWithCard('aluno-1', CARTAO_TOKEN as any);
+
+    // Aqui a divisão é real: cada mês é uma cobrança que ainda vai acontecer.
+    // Quitar o cronograma daria acesso pago por meses que ninguém pagou.
     expect(subscriptions.store.get('aluno-1')!.paidInstallments).toBe(1);
   });
 
@@ -888,6 +941,64 @@ describe('SubscriptionService — cancelamento e cobranças', () => {
     expect(cancelled.cancelledAt).toBeTruthy();
     expect(cancelled.nextChargeDate).toBeUndefined();
     expect(subscriptions.store.get('aluno-1')!.charges).toHaveLength(1);
+  });
+
+  it('cancelar o parcelado preserva o acesso do período comprado', async () => {
+    const { service, subscriptions, card } = build();
+    card.createCheckout.mockResolvedValue({
+      id: 'ORD01ABC',
+      provider: 'MERCADOPAGO',
+      outcome: 'PAID',
+    });
+    await service.choosePlan('aluno-1', {
+      plan: SUBSCRIPTION_PLANS.ANNUAL,
+      paymentMethod: PAYMENT_METHODS.CREDIT_CARD,
+      acceptance: ACEITE,
+    } as any);
+    await service.payWithCard('aluno-1', CARTAO_TOKEN as any);
+    const { startDate } = subscriptions.store.get('aluno-1')!;
+
+    const cancelled = await service.cancelSubscription('aluno-1');
+
+    // O dinheiro já saiu inteiro e o emissor continua faturando. Derrubar o
+    // acesso aqui seria cobrar por um ano e entregar o dia do cancelamento.
+    expect(cancelled.status).toBe(SUBSCRIPTION_STATUS.CANCELLED);
+    expect(subscriptions.store.get('aluno-1')!.accessUntil).toBe(
+      addMonths(startDate, 12),
+    );
+  });
+
+  it('cancelar o mensal vale até o fim do ciclo já pago', async () => {
+    const { service, subscriptions, card } = build();
+    card.createCheckout.mockResolvedValue({
+      id: 'preapproval_1',
+      provider: 'MERCADOPAGO',
+      outcome: 'PAID',
+    });
+    await service.choosePlan('aluno-1', {
+      plan: SUBSCRIPTION_PLANS.MONTHLY,
+      paymentMethod: PAYMENT_METHODS.CREDIT_CARD,
+      acceptance: ACEITE,
+    } as any);
+    await service.payWithCard('aluno-1', CARTAO_TOKEN as any);
+    const { startDate } = subscriptions.store.get('aluno-1')!;
+
+    await service.cancelSubscription('aluno-1');
+
+    // Aqui cancelar tem efeito real sobre dinheiro: evita as **próximas**. O
+    // mês pago, esse, continua valendo.
+    expect(subscriptions.store.get('aluno-1')!.accessUntil).toBe(
+      addMonths(startDate, 1),
+    );
+  });
+
+  it('cancelar sem nada pago não inventa acesso', async () => {
+    const { service, subscriptions } = build();
+    await service.choosePlan('aluno-1', PIX as any);
+
+    await service.cancelSubscription('aluno-1');
+
+    expect(subscriptions.store.get('aluno-1')!.accessUntil).toBeUndefined();
   });
 
   it('próximas cobranças trazem só o que ainda não foi pago, em ordem de vencimento', async () => {

@@ -142,6 +142,22 @@ export class Subscription {
   cancelledAt?: string;
 
   /**
+   * Até quando o acesso vale, independente do status (spec 023 P1).
+   *
+   * Existe porque **cancelar não devolve dinheiro**. No Semestral e no Anual a
+   * compra é debitada de uma vez e quem divide em parcelas é o emissor do
+   * cartão: cancelar aqui não interrompe a fatura da aluna. Derrubar o acesso
+   * na hora significava tirar dela o que já estava pago enquanto o banco
+   * seguia cobrando — o pior dos dois lados.
+   *
+   * No mensal a lógica é a mesma com outra conta: o ciclo já pago vale até o
+   * fim, e o que o cancelamento evita são os **próximos**.
+   *
+   * Ausente enquanto nada foi pago: aí não há acesso comprado a preservar.
+   */
+  accessUntil?: string;
+
+  /**
    * Assinatura recorrente no gateway, **só no cartão**.
    *
    * É o elo com quem emite as renovações: sem ele, cancelar aqui deixaria o
@@ -177,4 +193,46 @@ export class Subscription {
 /** A assinatura garante acesso enquanto estiver ativa (RF13). */
 export function grantsAccess(status: SubscriptionStatus): boolean {
   return status === SUBSCRIPTION_STATUS.ACTIVE;
+}
+
+/**
+ * Até quando o que **já foi pago** dá acesso.
+ *
+ * Uma conta só, que serve aos dois regimes porque a diferença está em quantos
+ * meses foram comprados de fato:
+ *
+ * - **plano fechado** (Semestral, Anual): a compra inteira foi debitada, então
+ *   valem todos os meses do plano;
+ * - **mensal**: vale um mês por ciclo pago, e o próximo só existe se for pago.
+ *
+ * Devolve `undefined` quando nada foi pago — não há acesso comprado a proteger.
+ */
+export function paidAccessUntil(subscription: {
+  plan: SubscriptionPlan;
+  startDate: string;
+  installments: number;
+  paidInstallments: number;
+}): string | undefined {
+  if (!subscription.paidInstallments) return undefined;
+
+  const meses = PLAN_CONFIGS[subscription.plan].recurring
+    ? subscription.paidInstallments
+    : subscription.installments;
+
+  return addMonths(subscription.startDate, meses);
+}
+
+/**
+ * Soma meses a uma data 'YYYY-MM-DD' preservando o dia. Dia 31 em mês curto
+ * cai no último dia do mês (31/jan + 1 mês = 28/fev), que é o comportamento
+ * esperado de mensalidade — `Date.UTC` sozinho estouraria para março.
+ */
+export function addMonths(date: string, months: number): string {
+  const [year, month, day] = date.split('-').map(Number);
+  const target = new Date(Date.UTC(year, month - 1 + months, 1));
+  const lastDay = new Date(
+    Date.UTC(target.getUTCFullYear(), target.getUTCMonth() + 1, 0),
+  ).getUTCDate();
+  target.setUTCDate(Math.min(day, lastDay));
+  return target.toISOString().slice(0, 10);
 }

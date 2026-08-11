@@ -185,6 +185,12 @@ export class SubscriptionDto {
   startDate!: string;
   nextChargeDate?: string;
   cancelledAt?: string;
+  /**
+   * Até quando o acesso vale. A tela precisa dela **antes** do cancelamento:
+   * é o que transforma "seu acesso é encerrado" em uma data que a aluna pode
+   * conferir contra o que pagou.
+   */
+  accessUntil?: string;
   couponCode?: string;
   couponDiscount?: number;
   couponRemainingCharges?: number | null;
