@@ -1,14 +1,8 @@
-import {
-  Body,
-  Controller,
-  Get,
-  Param,
-  Patch,
-  Post,
-  Query,
-} from '@nestjs/common';
+import { Body, Controller, Get, Param, Patch, Post } from '@nestjs/common';
 import { SubscriptionService } from './subscription.service';
 import {
+  CardPaymentDto,
+  CardPaymentResponseDto,
   ChangePaymentMethodDto,
   ChoosePlanDto,
   ChoosePlanResponseDto,
@@ -66,6 +60,20 @@ export class SubscriptionController {
     return this.service.choosePlan(user.sub, dto);
   }
 
+  /**
+   * Segundo passo da contratação por cartão: o token que o formulário gerou no
+   * navegador. Separado de `POST me` porque o token só existe **depois** de o
+   * aluno digitar o cartão, que é depois daquela resposta.
+   */
+  @Post('me/card')
+  @Roles(ROLES.STUDENT)
+  payWithCard(
+    @CurrentUser() user: AuthenticatedUser,
+    @Body() dto: CardPaymentDto,
+  ): Promise<CardPaymentResponseDto> {
+    return this.service.payWithCard(user.sub, dto);
+  }
+
   @Patch('me/payment-method')
   @Roles(ROLES.STUDENT)
   changePaymentMethod(
@@ -105,23 +113,5 @@ export class SubscriptionController {
     @Param('studentId') studentId: string,
   ): Promise<SubscriptionDto | null> {
     return this.service.getSubscription(studentId);
-  }
-}
-
-/**
- * Retorno do gateway. Público por definição — o AbacatePay não carrega o
- * nosso JWT —, autenticado pelo segredo que ele devolve na query string.
- */
-@Controller('webhooks')
-export class SubscriptionWebhookController {
-  constructor(private readonly service: SubscriptionService) {}
-
-  @Post('abacatepay')
-  @Public()
-  handle(
-    @Body() payload: Record<string, any>,
-    @Query('webhookSecret') secret?: string,
-  ): Promise<{ received: boolean }> {
-    return this.service.handleWebhook(payload, secret);
   }
 }

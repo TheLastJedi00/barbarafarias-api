@@ -22,6 +22,7 @@ import type {
   PaymentMethod,
   SubscriptionPlan,
 } from '../subscription.entity';
+import type { ChargeOutcome } from '../payment.gateway';
 
 export class ChoosePlanDto {
   @IsIn(Object.values(SUBSCRIPTION_PLANS), { message: 'Plano inválido' })
@@ -37,6 +38,37 @@ export class ChoosePlanDto {
   @IsOptional()
   @MaxLength(40)
   couponCode?: string;
+}
+
+/**
+ * O cartão tokenizado no navegador, para `POST /subscriptions/me/card`.
+ *
+ * Repare no que **não** está aqui: número, CVC, validade e — de propósito —
+ * `installments`. O número de parcelas do plano sai do `PLAN_CONFIGS` no
+ * backend; aceitá-lo do cliente transformaria a trava do formulário na única
+ * régua, e ela é conveniência, não segurança.
+ */
+export class CardPaymentDto {
+  @IsString()
+  @IsNotEmpty({ message: 'O token do cartão é obrigatório' })
+  @MaxLength(120)
+  token!: string;
+
+  /** Bandeira resolvida pelo formulário do gateway (`master`, `visa`, …). */
+  @IsString()
+  @IsNotEmpty({ message: 'A bandeira do cartão é obrigatória' })
+  @MaxLength(40)
+  paymentMethodId!: string;
+}
+
+/** O que a tela precisa saber depois de mandar o cartão. */
+export class CardPaymentResponseDto {
+  subscription!: SubscriptionDto;
+  /** `PAID`, `PENDING`, `CHALLENGE`. `REJECTED` volta como 400. */
+  outcome!: ChargeOutcome;
+  /** Só quando `outcome === 'CHALLENGE'`: onde o aluno completa o 3DS. */
+  challengeUrl?: string;
+  warning?: string;
 }
 
 export class ChangePaymentMethodDto {
@@ -78,18 +110,20 @@ export class MonthQueryDto {
 /**
  * O que o aluno precisa para pagar, devolvido por `POST /subscriptions/me`.
  *
- * PIX volta com QR Code e copia-e-cola para o modal. Cartão volta com o
- * `clientSecret` da sessão do Stripe, que o frontend monta na própria página
- * (spec 014) — `checkoutUrl` continua existindo para o caso de o cartão voltar
- * a sair por um gateway de checkout hospedado, e os dois nunca vêm juntos.
+ * Os dois métodos saem por caminhos diferentes, e **nunca vêm juntos**:
+ *
+ * - **PIX** já volta com QR Code e copia-e-cola: a cobrança foi emitida.
+ * - **Cartão** volta com `card`, que é só o que a tela precisa para montar o
+ *   formulário — valor e parcelas. A cobrança ainda não existe, porque o token
+ *   do cartão nasce no navegador, depois desta resposta.
  */
 export class ChoosePlanResponseDto {
   subscription!: SubscriptionDto;
   paymentMethod!: PaymentMethod;
   pixQrCodeUrl?: string;
   pixCopyPaste?: string;
-  checkoutUrl?: string;
-  clientSecret?: string;
+  /** Parâmetros do formulário de cartão. Ver `CardPaymentDto`. */
+  card?: { amount: number; installments: number; chargeIndex: number };
   /** Explica por que não veio cobrança (ex.: gateway sem chave configurada). */
   warning?: string;
 }

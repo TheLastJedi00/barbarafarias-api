@@ -132,8 +132,7 @@ export class UserService {
     }
     return users.filter(
       (user) =>
-        resolveRole(user) !== ROLES.STUDENT ||
-        user.teacherId === requester.sub,
+        resolveRole(user) !== ROLES.STUDENT || user.teacherId === requester.sub,
     );
   }
 

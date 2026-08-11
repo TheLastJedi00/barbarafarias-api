@@ -1,4 +1,10 @@
-import { IsBoolean, IsEmail, IsIn, IsNotEmpty, IsString } from 'class-validator';
+import {
+  IsBoolean,
+  IsEmail,
+  IsIn,
+  IsNotEmpty,
+  IsString,
+} from 'class-validator';
 import { LEVELS } from '../../types/student.level';
 
 export class CreateUserDto {

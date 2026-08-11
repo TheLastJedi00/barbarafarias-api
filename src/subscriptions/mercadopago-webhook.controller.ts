@@ -44,11 +44,11 @@ export class MercadoPagoWebhookController {
    * Verifica, busca o recurso, aplica a regra e responde.
    *
    * **401 em assinatura inválida**, e não 400: é o que a doc do Mercado Pago
-   * manda, e todos os exemplos dela usam. O controller do Stripe devolve 400
-   * por razão dele — *"é o que o Stripe espera para parar de reenviar"*. A
-   * assimetria é deliberada: **cada provedor decide o que fazer com o código
-   * de resposta**, e uniformizar os dois faria um deles reenviar para sempre,
-   * ou parar de reenviar cedo demais. Não "arrume" isto.
+   * manda, e todos os exemplos dela usam. Outros provedores pedem 400 no
+   * mesmo caso — *"é o que ele espera para parar de reenviar"*. Não há um
+   * código "certo" universal: **cada provedor decide o que fazer com ele**, e
+   * uniformizar faria um reenviar para sempre, ou parar cedo demais. Se um dia
+   * houver dois webhooks aqui com códigos diferentes, isso não é inconsistência.
    *
    * Já uma falha no **processamento** propaga (500) de propósito: aí sim
    * queremos a retentativa, porque o dinheiro entrou e o plano não ativou.

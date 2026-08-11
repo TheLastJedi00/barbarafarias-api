@@ -131,7 +131,11 @@ describe('UserService', () => {
 
     it('marca a conclusão quando o último campo que faltava chega', async () => {
       userRepository.findById.mockResolvedValue(
-        convidado({ fullName: 'Ana', phone: '11999999999', cpf: '12345678909' }),
+        convidado({
+          fullName: 'Ana',
+          phone: '11999999999',
+          cpf: '12345678909',
+        }),
       );
 
       const user = await service.updateOwnProfile('uid-1', {
@@ -199,7 +203,9 @@ describe('UserService', () => {
 
   describe('getAllUsers', () => {
     it('repassa o papel "student" ao repositório (garante que teachers não vazam)', async () => {
-      const alunos = [new User({ id: 'a1', fullName: 'Ana', isTeacher: false })];
+      const alunos = [
+        new User({ id: 'a1', fullName: 'Ana', isTeacher: false }),
+      ];
       userRepository.findAll.mockResolvedValue(alunos);
 
       const result = await service.getAllUsers('student');
@@ -251,7 +257,12 @@ describe('UserService', () => {
 
     it('professora não edita aluno de outra professora', async () => {
       userRepository.findById.mockResolvedValue(
-        new User({ id: 'a9', fullName: 'Léo', teacherId: 'outra', isTeacher: false }),
+        new User({
+          id: 'a9',
+          fullName: 'Léo',
+          teacherId: 'outra',
+          isTeacher: false,
+        }),
       );
 
       await expect(
@@ -262,7 +273,12 @@ describe('UserService', () => {
 
     it('professora edita aluno vinculado a ela', async () => {
       userRepository.findById.mockResolvedValue(
-        new User({ id: 'a1', fullName: 'Léo', teacherId: 't1', isTeacher: false }),
+        new User({
+          id: 'a1',
+          fullName: 'Léo',
+          teacherId: 't1',
+          isTeacher: false,
+        }),
       );
 
       await service.updateUser(teacher, 'a1', { fullName: 'Léo M.' } as any);
@@ -334,7 +350,12 @@ describe('UserService', () => {
 
     it('professora não alcança a ficha de outra professora', async () => {
       userRepository.findById.mockResolvedValue(
-        new User({ id: 't2', fullName: 'Bia', isTeacher: true, role: 'teacher' }),
+        new User({
+          id: 't2',
+          fullName: 'Bia',
+          isTeacher: true,
+          role: 'teacher',
+        }),
       );
 
       await expect(
@@ -344,7 +365,12 @@ describe('UserService', () => {
 
     it('professora alcança aluno vinculado a ela', async () => {
       userRepository.findById.mockResolvedValue(
-        new User({ id: 'a1', fullName: 'Léo', teacherId: 't1', isTeacher: false }),
+        new User({
+          id: 'a1',
+          fullName: 'Léo',
+          teacherId: 't1',
+          isTeacher: false,
+        }),
       );
 
       const result = await service.findByIdForRequester(teacher, 'a1');
@@ -363,8 +389,18 @@ describe('UserService', () => {
 
   describe('getUsersForRequester (spec 011 RF2.1)', () => {
     const base = [
-      new User({ id: 's1', fullName: 'Aluno da Ana', role: ROLES.STUDENT, teacherId: 't1' }),
-      new User({ id: 's2', fullName: 'Aluno da Bia', role: ROLES.STUDENT, teacherId: 't2' }),
+      new User({
+        id: 's1',
+        fullName: 'Aluno da Ana',
+        role: ROLES.STUDENT,
+        teacherId: 't1',
+      }),
+      new User({
+        id: 's2',
+        fullName: 'Aluno da Bia',
+        role: ROLES.STUDENT,
+        teacherId: 't2',
+      }),
       new User({ id: 's3', fullName: 'Sem professora', role: ROLES.STUDENT }),
       new User({ id: 't2', fullName: 'Bia', role: ROLES.TEACHER }),
     ];
@@ -396,7 +432,12 @@ describe('UserService', () => {
 
     it('o filtro alcança documentos legados sem `role`', async () => {
       userRepository.findAll.mockResolvedValueOnce([
-        new User({ id: 's9', fullName: 'Legado', isTeacher: false, teacherId: 't2' }),
+        new User({
+          id: 's9',
+          fullName: 'Legado',
+          isTeacher: false,
+          teacherId: 't2',
+        }),
       ]);
 
       const users = await service.getUsersForRequester(teacher);

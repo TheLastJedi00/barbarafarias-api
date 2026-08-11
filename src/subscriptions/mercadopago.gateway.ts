@@ -26,14 +26,15 @@ import {
 } from './payment.gateway';
 import {
   PREAPPROVAL_STATUS,
+  type OrderStatusPair,
   type SubscriptionCycle,
   outcomeOfOrder,
 } from './mercadopago.status';
 
 /**
  * Token dos clientes do Mercado Pago. Os clientes são construídos pelo módulo,
- * não pelo gateway, pelo mesmo motivo do `STRIPE_CLIENT`: os testes injetam um
- * dublê e **nenhuma suíte deste projeto toca a rede**.
+ * não pelo gateway, para os testes injetarem um dublê: **nenhuma suíte deste
+ * projeto toca a rede**.
  *
  * `null` quando não há chave configurada.
  */
@@ -48,9 +49,10 @@ export const MERCADOPAGO_CLIENT = 'MERCADOPAGO_CLIENT';
  * de migração. Quem é legado é `/v1/payments`, que sobrevive como "Checkout API
  * via API Payments" — a maior parte do material de terceiros ainda fala dele.
  *
- * Isto está escrito aqui pelo mesmo motivo que `STRIPE_API_VERSION` existia: o
- * vocabulário de status das duas é **diferente** (§4.6), e alguém que copie um
- * exemplo de `/v1/payments` traz junto o `approved`, que nesta API não existe.
+ * Isto está escrito aqui porque o vocabulário de status das duas é
+ * **diferente** (§4.6): alguém que copie um exemplo de `/v1/payments` traz
+ * junto o `approved`, que nesta API não existe — e um `if` que nunca é
+ * verdadeiro não dá acesso a ninguém nem lança erro nenhum.
  *
  * Assinaturas (`/preapproval`) é um produto à parte, com endpoint, vocabulário
  * e tópico de webhook próprios. Daí este gateway ser uma classe com duas
@@ -138,9 +140,15 @@ export interface MercadoPagoNotification {
   data?: { id?: string };
 }
 
-/** A notificação depois de o recurso ter sido buscado de verdade. */
+/**
+ * A notificação depois de o recurso ter sido buscado de verdade.
+ *
+ * A order aparece como o **par de status**, não como o tipo do SDK: quem
+ * consome isto é a regra de domínio, e ela não deve conhecer o formato do
+ * fornecedor. É a mesma razão de as portas existirem.
+ */
 export type MercadoPagoDomainEvent =
-  | { topic: typeof MP_TOPICS.ORDER; id: string; order: OrderResponse }
+  | { topic: typeof MP_TOPICS.ORDER; id: string; order: OrderStatusPair }
   | {
       topic: typeof MP_TOPICS.SUBSCRIPTION_PAYMENT;
       id: string;
@@ -501,21 +509,6 @@ export class MercadoPagoGateway extends CardGateway implements PixGateway {
   }
 
   /**
-   * **Não faz nada, e é de propósito.**
-   *
-   * Semestral e Anual deixaram de ser assinaturas com teto de ciclos: são uma
-   * cobrança parcelada, e não existe ciclo para limitar. Era justamente o teto
-   * improvisado que o bug de origem desta spec exigia — e o comentário do
-   * gateway anterior chamava de *"o único ponto desta integração onde uma
-   * falha silenciosa cobra dinheiro a mais"*.
-   *
-   * O método sobrevive só enquanto a porta o exigir; sai na Task 26.
-   */
-  capSubscriptionCycles(): Promise<void> {
-    return Promise.resolve();
-  }
-
-  /**
    * Acerta o valor do ciclo quando o cupom com prazo acaba (ver a porta).
    * `currency_id` é obrigatório no corpo mesmo mudando só o valor.
    */
@@ -566,7 +559,7 @@ export class MercadoPagoGateway extends CardGateway implements PixGateway {
    * conferência, um POST anônimo vira assinatura ativa.
    *
    * A validação é a do **SDK oficial** — mesmo motivo de usar
-   * `stripe.webhooks.constructEvent` em vez de HMAC caseiro. Ele monta o
+   * o verificador do provedor em vez de um HMAC caseiro. Ele monta o
    * manifesto `id:<data.id>;request-id:<x-request-id>;ts:<ts>;` com o
    * ponto-e-vírgula final e omitindo campo ausente, que são duas das três
    * regras que quebram a validação em silêncio.

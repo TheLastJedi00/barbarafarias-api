@@ -3,7 +3,7 @@ import { Test } from '@nestjs/testing';
 import { ConfigModule } from '@nestjs/config';
 import { SubscriptionModule } from './subscription.module';
 import { CardGateway, PixGateway } from './payment.gateway';
-import { StripeGateway } from './stripe.gateway';
+import { MercadoPagoGateway } from './mercadopago.gateway';
 import { FIRESTORE } from '../firestore/firestore.module';
 import { FIREBASE_AUTH } from '../firestore/firebase-auth.module';
 
@@ -26,10 +26,10 @@ class FakeFirestoreModule {}
  *
  * Compilar não prova isso: um `useExisting` apontando para um provider não
  * registrado passa no `tsc` e só quebra no boot — que em produção é o deploy
- * inteiro caindo, com a fila de webhooks do Stripe acumulando atrás.
+ * inteiro caindo, com a fila de webhooks do gateway acumulando atrás.
  */
 describe('SubscriptionModule — fiação', () => {
-  it('entrega o Stripe no cartão e o AbacatePay no PIX, na mesma instância', async () => {
+  it('entrega o mesmo Mercado Pago nas duas portas', async () => {
     const moduleRef = await Test.createTestingModule({
       imports: [
         ConfigModule.forRoot({ ignoreEnvFile: true }),
@@ -41,10 +41,24 @@ describe('SubscriptionModule — fiação', () => {
     const card = moduleRef.get(CardGateway);
     const pix = moduleRef.get(PixGateway);
 
-    expect(card).toBeInstanceOf(StripeGateway);
-    // Duas instâncias seriam dois caches de catálogo, e o dobro de chamadas à
-    // API por processo — o webhook injeta o gateway pelo nome da classe.
-    expect(card).toBe(moduleRef.get(StripeGateway));
-    expect(pix).not.toBe(card);
+    expect(card).toBeInstanceOf(MercadoPagoGateway);
+    // **A mesma instância nas duas portas.** Duas seriam dois clientes do SDK
+    // por processo, e o webhook injeta o gateway pelo nome da classe.
+    expect(card).toBe(moduleRef.get(MercadoPagoGateway));
+    expect(pix).toBe(card);
+  });
+
+  it('sobe sem chave nenhuma, com o gateway desligado', async () => {
+    const moduleRef = await Test.createTestingModule({
+      imports: [
+        ConfigModule.forRoot({ ignoreEnvFile: true }),
+        FakeFirestoreModule,
+        SubscriptionModule,
+      ],
+    }).compile();
+
+    // Chave ausente derruba `isEnabled()`, não o boot: o aluno vê o plano
+    // gravado com um aviso, em vez de um 500 sem explicação.
+    expect(moduleRef.get(CardGateway).isEnabled()).toBe(false);
   });
 });
