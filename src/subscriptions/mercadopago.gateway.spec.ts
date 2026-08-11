@@ -1,6 +1,7 @@
 import { createHmac } from 'node:crypto';
 import { ConfigService } from '@nestjs/config';
 import {
+  GatewayConflictError,
   MercadoPagoGateway,
   idempotencyKeyFor,
   payerOf,
@@ -10,7 +11,10 @@ import {
 } from './mercadopago.gateway';
 import type { MercadoPagoClients } from './mercadopago.gateway';
 import { PLAN_CONFIGS } from './subscription.entity';
-import { MPBadRequestError } from 'mercadopago/dist/utils/errors';
+import {
+  MPBadRequestError,
+  MPIdempotencyError,
+} from 'mercadopago/dist/utils/errors';
 
 /**
  * Esta suíte não testa cobertura de linha: testa a **falha silenciosa**.
@@ -155,6 +159,42 @@ describe('MercadoPagoGateway — cartão parcelado', () => {
     expect(idempotencyKeyFor('aluno-1-1-228000')).not.toBe(
       idempotencyKeyFor('aluno-1-2-228000'),
     );
+  });
+
+  it('token novo gera chave nova: uma tentativa não trava a seguinte', async () => {
+    const { gateway, clients } = build();
+
+    await gateway.createCheckout(pedidoDeCartao('ANNUAL') as any);
+    await gateway.createCheckout({
+      ...pedidoDeCartao('ANNUAL'),
+      card: { token: 'tok_2', paymentMethodId: 'master' },
+    } as any);
+
+    const [primeira, segunda] = clients.orders.create.mock.calls.map(
+      (call: any[]) => call[0].requestOptions.idempotencyKey,
+    );
+    // **Estável na tentativa, não na cobrança.** Derivar só do id da cobrança
+    // torna a chave eterna: uma primeira tentativa recusada por payload
+    // inválido queima a chave, e a correção do payload passa a bater em 409 —
+    // a cobrança fica permanentemente bloqueada. Foi o que aconteceu em
+    // ambiente de teste.
+    expect(primeira).not.toBe(segunda);
+  });
+
+  it('409 vira erro nomeado, não "MercadoPago API error"', async () => {
+    const { gateway, clients } = build();
+    clients.orders.create.mockRejectedValue(
+      new MPIdempotencyError({ status: 409, message: 'MercadoPago API error' }),
+    );
+    jest
+      .spyOn((gateway as any).logger, 'error')
+      .mockImplementation(() => undefined);
+
+    // A saída é específica — reenviar o formulário emite outro token —, e o
+    // aluno só descobre isso se alguém disser.
+    await expect(
+      gateway.createCheckout(pedidoDeCartao('ANNUAL') as any),
+    ).rejects.toThrow(GatewayConflictError);
   });
 
   it('liga o 3DS com liability shift', async () => {

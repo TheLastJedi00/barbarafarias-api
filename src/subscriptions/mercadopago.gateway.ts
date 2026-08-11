@@ -8,6 +8,7 @@ import {
   WebhookSignatureValidator,
 } from 'mercadopago';
 import {
+  MPIdempotencyError,
   MPNotFoundError,
   MPRateLimitError,
   MercadoPagoError,
@@ -173,6 +174,21 @@ export class GatewayBusyError extends Error {
   ) {
     super(message);
     this.name = 'GatewayBusyError';
+  }
+}
+
+/**
+ * Chave de idempotência reusada com corpo diferente (409).
+ *
+ * Depois que a chave passou a incluir o token do cartão isto virou raro, mas
+ * continua possível — e merece nome próprio porque a saída é específica: **um
+ * envio novo do formulário resolve**, já que ele emite outro token. Sem esta
+ * tradução o aluno lê "MercadoPago API error" e não tem o que fazer.
+ */
+export class GatewayConflictError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'GatewayConflictError';
   }
 }
 
@@ -386,7 +402,7 @@ export class MercadoPagoGateway extends CardGateway implements PixGateway {
           },
         },
         requestOptions: {
-          idempotencyKey: idempotencyKeyFor(request.externalId),
+          idempotencyKey: idempotencyKeyFor(request.externalId, card.token),
         },
       });
 
@@ -453,7 +469,7 @@ export class MercadoPagoGateway extends CardGateway implements PixGateway {
           },
         },
         requestOptions: {
-          idempotencyKey: idempotencyKeyFor(request.externalId),
+          idempotencyKey: idempotencyKeyFor(request.externalId, card.token),
         },
       });
 
@@ -705,6 +721,16 @@ export class MercadoPagoGateway extends CardGateway implements PixGateway {
     // filtro global como uma frase que não diz nada, o backend não registra
     // nada, e a única pista disponível é o status HTTP — que é o mesmo para
     // "faltou um campo" e "o valor está errado".
+    if (error instanceof MPIdempotencyError) {
+      this.logger.error(
+        `${context}: conflito de chave de idempotência (409) — mesma chave ` +
+          'com corpo diferente. O envio precisa de um token novo.',
+      );
+      throw new GatewayConflictError(
+        `${context}: cobrança já tentada com outros dados`,
+      );
+    }
+
     if (error instanceof MercadoPagoError) {
       this.logger.error(
         `${context} recusado pelo Mercado Pago (${error.status}): ` +
@@ -806,17 +832,32 @@ export function toIsoDuration(seconds: number): string {
  * `X-Idempotency-Key` da criação de um pedido — **obrigatório** na Orders API,
  * não uma boa prática opcional.
  *
- * A chave é **derivada** do id da cobrança, não sorteada: um UUID novo a cada
- * chamada tem o formato certo e não protege de nada. Dois cliques no botão de
- * pagar precisam produzir a **mesma** chave para virarem uma cobrança só — que
- * é a única razão de o cabeçalho existir.
+ * A chave é **derivada**, não sorteada: um UUID novo a cada chamada tem o
+ * formato certo e não protege de nada. Dois cliques no botão de pagar precisam
+ * produzir a **mesma** chave para virarem uma cobrança só — que é a única razão
+ * de o cabeçalho existir.
+ *
+ * **`attempt` existe por causa de um 409 encontrado em ambiente de teste**, e a
+ * lição vale escrever. Derivar a chave só do id da cobrança a torna *eterna*, e
+ * não é isso que se quer: a primeira tentativa foi recusada por payload
+ * inválido, o payload foi corrigido, e o Mercado Pago passou a responder 409 —
+ * mesma chave, corpo diferente. A cobrança ficou **permanentemente bloqueada**.
+ *
+ * O que precisa ser estável é a *tentativa*, não a cobrança. No cartão o
+ * discriminador natural é o **token**: o formulário emite um por envio, então
+ * dois cliques do mesmo envio compartilham a chave (protegido) e uma
+ * retentativa de verdade traz token novo (liberada).
+ *
+ * No PIX não há token, e a omissão é deliberada: reemitir a mesma parcela deve
+ * devolver **o mesmo QR**, não criar um segundo código pagável. Regerar é ação
+ * explícita, e é da spec 024 §8.1.
  *
  * O formato continua sendo UUID v4 (a versão e a variante são fixadas nas
  * posições que a RFC 4122 manda), porque é o que a doc pede.
  */
-export function idempotencyKeyFor(externalId: string): string {
+export function idempotencyKeyFor(externalId: string, attempt = ''): string {
   const hex = createHash('sha256')
-    .update(externalId)
+    .update(attempt ? `${externalId}|${attempt}` : externalId)
     .digest('hex')
     .slice(0, 32)
     .split('');

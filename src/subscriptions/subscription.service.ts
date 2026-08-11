@@ -19,7 +19,7 @@ import {
   toCents,
 } from './payment.gateway';
 import type { CheckoutResult } from './payment.gateway';
-import { GatewayBusyError } from './mercadopago.gateway';
+import { GatewayBusyError, GatewayConflictError } from './mercadopago.gateway';
 import { MP_TOPICS } from './mercadopago.gateway';
 import type { MercadoPagoDomainEvent } from './mercadopago.gateway';
 import {
@@ -229,6 +229,19 @@ export class SubscriptionService {
         couponCode: subscription.couponCode,
       });
     } catch (error) {
+      if (error instanceof GatewayConflictError) {
+        // Reusar a chave com outro corpo trava a cobrança lá fora. Quem
+        // desbloqueia é um envio novo do formulário — ele emite outro token, e
+        // o token entra na chave. Dizer isso é o que separa "tente de novo" de
+        // um beco sem saída.
+        this.logger.warn(
+          `Cobrança de ${studentId} em conflito no gateway: ${error.message}`,
+        );
+        throw new BadRequestException(
+          'Esta cobrança já foi tentada com outros dados. Feche e preencha o cartão novamente.',
+        );
+      }
+
       if (error instanceof GatewayBusyError) {
         // 429 é caminho previsto pela doc, não falha de programação: o plano
         // continua gravado e o aluno tenta de novo em instantes.
