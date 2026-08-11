@@ -294,6 +294,13 @@ describe('SubscriptionService — não cobrar duas vezes', () => {
 
     expect(card.createCheckout).not.toHaveBeenCalled();
     expect(result.challengeUrl).toBe('https://mp/challenge');
+    // Reaproveitar **em silêncio** é um beco: a tela reabre o mesmo desafio a
+    // cada tentativa e nada explica por que não avança.
+    expect(result.warning).toMatch(/verificação do banco em aberto/i);
+    // E **não** promete prazo: uma order abandonada foi vista em
+    // `pending_challenge` muito além dos 40 minutos da doc. Prometer o prazo
+    // seria repetir na tela um número que o provedor não cumpre.
+    expect(result.warning).not.toMatch(/\d+\s*minutos?/i);
   });
 
   it('cobrança recusada libera a retentativa', async () => {
