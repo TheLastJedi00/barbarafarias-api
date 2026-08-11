@@ -824,7 +824,25 @@ export function readPixCodes(
 ): { brCode: string; brCodeBase64: string } | undefined {
   const method = order.transactions?.payments?.[0]?.payment_method;
   if (!method?.qr_code || !method.qr_code_base64) return undefined;
-  return { brCode: method.qr_code, brCodeBase64: method.qr_code_base64 };
+  return {
+    brCode: method.qr_code,
+    brCodeBase64: toDataUri(method.qr_code_base64),
+  };
+}
+
+/**
+ * Base64 cru → `data:` URI, que é o que a porta promete.
+ *
+ * O `PixChargeResult.brCodeBase64` é documentado como "pronto para
+ * `<img src>`", e o modal o usa exatamente assim. O provedor anterior devolvia
+ * a URI completa; o Mercado Pago devolve **só o base64**. Repassar cru dá uma
+ * imagem quebrada — e o copia-e-cola continua funcionando ao lado, então a tela
+ * não parece com defeito: parece que o QR simplesmente não carregou.
+ */
+export function toDataUri(base64: string): string {
+  return base64.startsWith('data:')
+    ? base64
+    : `data:image/png;base64,${base64}`;
 }
 
 /**

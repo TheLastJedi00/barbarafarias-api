@@ -6,6 +6,7 @@ import {
   idempotencyKeyFor,
   payerOf,
   readPixCodes,
+  toDataUri,
   toAmountString,
   toIsoDuration,
 } from './mercadopago.gateway';
@@ -590,7 +591,17 @@ describe('MercadoPagoGateway — PIX', () => {
     const result = await gateway.createPixCharge(PEDIDO_PIX);
 
     expect(result.brCode).toBe('00020126580014br.gov.bcb.pix...');
-    expect(result.brCodeBase64).toBe('iVBORw0KGgo=');
+    // **`data:` URI, não base64 cru.** A porta promete "pronto para
+    // `<img src>`" e o modal usa assim; o provedor anterior devolvia a URI
+    // completa, este devolve só o base64. Cru, a imagem quebra — e como o
+    // copia-e-cola continua ao lado, a tela não parece com defeito.
+    expect(result.brCodeBase64).toBe('data:image/png;base64,iVBORw0KGgo=');
+  });
+
+  it('não duplica o prefixo se o provedor já mandar a URI', () => {
+    expect(toDataUri('data:image/png;base64,AAA')).toBe(
+      'data:image/png;base64,AAA',
+    );
   });
 
   it('order criada de forma assíncrona reconsulta antes de desistir', async () => {
