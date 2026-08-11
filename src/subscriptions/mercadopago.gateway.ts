@@ -115,11 +115,17 @@ export class GatewayBusyError extends Error {
 export class MercadoPagoGateway extends CardGateway implements PixGateway {
   protected readonly logger = new Logger(MercadoPagoGateway.name);
 
+  /** Base do front, para o `back_url` que o `preapproval` exige. */
+  private readonly appBaseUrl: string;
+
   constructor(
     @Inject(MERCADOPAGO_CLIENT)
     protected readonly mp: MercadoPagoClients | null,
+    configService: ConfigService,
   ) {
     super();
+    this.appBaseUrl =
+      configService.get<string>('APP_BASE_URL') ?? 'http://localhost:4200';
     if (!this.mp) {
       this.logger.warn(
         'MP_ACCESS_TOKEN_ORDERS/MP_ACCESS_TOKEN_SUBSCRIPTIONS ausentes: cobranças não serão emitidas.',
@@ -242,14 +248,78 @@ export class MercadoPagoGateway extends CardGateway implements PixGateway {
    * - **número de ciclos** (Semestral, Anual) → uma order parcelada, aqui;
    * - **`null`** (Mensal) → uma assinatura recorrente (`preapproval`).
    */
-  async createCheckout(request: CheckoutRequest): Promise<CheckoutResult> {
+  createCheckout(request: CheckoutRequest): Promise<CheckoutResult> {
     const cycles = request.recurring?.cycles ?? null;
-    if (cycles === null) {
-      throw new Error(
-        'Plano recorrente ainda não implementado neste gateway (Task 9)',
-      );
+    return cycles === null
+      ? this.createSubscription(request)
+      : this.createInstallmentOrder(request);
+  }
+
+  /**
+   * Mensal: assinatura recorrente por `POST /preapproval`.
+   *
+   * **Cartão é o único meio documentado.** `status: 'authorized'` exige
+   * `card_token_id`; sem meio de pagamento a assinatura nasce `pending` e o
+   * aluno precisa abrir um link do Mercado Pago para escolher — ou seja,
+   * redirecionamento, que a spec 014 proibiu. É por isso que PIX no plano
+   * mensal não é assinatura: é o QR avulso de `createPixCharge`, renovado a
+   * cada ciclo.
+   *
+   * **`auto_recurring.repetitions` não aparece aqui, e é decisão.** Ele fecharia
+   * o Semestral e o Anual em 6 ou 12 ciclos nativamente, e é tentador — mas
+   * seriam 6 cobranças de R$ 200 que podem falhar na quarta, que é exatamente o
+   * bug que esta spec veio corrigir, reencenado com outro sotaque. Plano
+   * fechado é **uma** cobrança parcelada (`createInstallmentOrder`).
+   *
+   * **A criação faz uma cobrança de validação** de valor mínimo, estornada em
+   * seguida — a doc é explícita. Um valor pequeno aparece e some no extrato do
+   * aluno. Não é bug, mas é pergunta de suporte garantida se ninguém souber.
+   *
+   * E o desfecho é `PENDING`, nunca `PAID`: **criar assinatura não é ter
+   * recebido.** A primeira cobrança sai em até ~1 hora. Ativar o plano na
+   * resposta deste POST libera acesso antes de existir dinheiro — e para
+   * sempre, se a cobrança falhar (falha silenciosa 20).
+   */
+  private async createSubscription(
+    request: CheckoutRequest,
+  ): Promise<CheckoutResult> {
+    const card = this.requireCard(request);
+
+    try {
+      const preapproval = await this.require().subscriptions.create({
+        body: {
+          reason: request.planLabel ?? request.description,
+          external_reference: request.externalId,
+          payer_email: request.customer.email,
+          card_token_id: card.token,
+          status: PREAPPROVAL_STATUS.AUTHORIZED,
+          back_url: `${this.appBaseUrl}/meu-plano`,
+          auto_recurring: {
+            frequency: 1,
+            frequency_type: 'months',
+            transaction_amount: request.amount,
+            currency_id: 'BRL',
+          },
+        },
+        requestOptions: {
+          idempotencyKey: idempotencyKeyFor(request.externalId),
+        },
+      });
+
+      const id = preapproval.id;
+      if (!id) {
+        throw new Error('Mercado Pago não devolveu o id da assinatura');
+      }
+
+      return {
+        id,
+        subscriptionId: id,
+        provider: GATEWAY_PROVIDERS.MERCADOPAGO,
+        outcome: CHARGE_OUTCOMES.PENDING,
+      };
+    } catch (error) {
+      this.rethrow(error, 'Assinatura mensal');
     }
-    return this.createInstallmentOrder(request);
   }
 
   /**
