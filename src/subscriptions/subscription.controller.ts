@@ -130,6 +130,22 @@ export class SubscriptionController {
     return this.service.refreshCardPayment(user.sub);
   }
 
+  /**
+   * Descarta a tentativa em aberto e libera uma nova (spec 023 P2).
+   *
+   * A saída do beco em que um desafio 3DS não concluído trancava a parcela sem
+   * prazo. É `POST` e não `DELETE` porque não apaga nada: a cobrança anterior
+   * fica registrada como abandonada, e é ela que impede a cobrança dupla se o
+   * desafio antigo for concluído depois.
+   */
+  @Post('me/card/restart')
+  @Roles(ROLES.STUDENT)
+  restartCardPayment(
+    @CurrentUser() user: AuthenticatedUser,
+  ): Promise<CardPaymentResponseDto> {
+    return this.service.restartCardPayment(user.sub);
+  }
+
   @Patch('me/payment-method')
   @Roles(ROLES.STUDENT)
   changePaymentMethod(

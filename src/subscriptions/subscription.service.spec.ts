@@ -258,6 +258,79 @@ describe('SubscriptionService — não cobrar duas vezes', () => {
     return context;
   }
 
+  describe('recomeçar o pagamento (P2)', () => {
+    it('libera uma cobrança nova, guardando a abandonada', async () => {
+      const { service, subscriptions, card } = await comCobrancaEmAberto();
+      card.fetchChargeOutcome.mockResolvedValue({
+        id: 'ORD01ABC',
+        provider: 'MERCADOPAGO',
+        outcome: 'CHALLENGE',
+        challengeUrl: 'https://mp/challenge',
+      });
+
+      await service.restartCardPayment('aluno-1');
+
+      const parcela = subscriptions.store.get('aluno-1')!.charges[0];
+      // Sai da frente...
+      expect(parcela.gatewayChargeId).toBeUndefined();
+      // ...mas não do mundo: a order segue viva no provedor.
+      expect(parcela.abandonedChargeIds).toEqual(['ORD01ABC']);
+    });
+
+    it('a abandonada ainda barra a cobrança dupla se for paga depois', async () => {
+      const { service, subscriptions, card } = await comCobrancaEmAberto();
+      card.fetchChargeOutcome.mockResolvedValue({
+        id: 'ORD01ABC',
+        provider: 'MERCADOPAGO',
+        outcome: 'CHALLENGE',
+        challengeUrl: 'https://mp/challenge',
+      });
+      await service.restartCardPayment('aluno-1');
+
+      // A aluna concluiu o desafio antigo enquanto tentava de novo — a URL
+      // dele continua funcionando, e é esse o risco de esquecer o id.
+      card.fetchChargeOutcome.mockResolvedValue({
+        id: 'ORD01ABC',
+        provider: 'MERCADOPAGO',
+        outcome: 'PAID',
+      });
+
+      const result = await service.payWithCard('aluno-1', CARTAO_TOKEN as any);
+
+      expect(result.outcome).toBe('PAID');
+      expect(card.createCheckout).not.toHaveBeenCalled();
+      expect(subscriptions.store.get('aluno-1')!.status).toBe(
+        SUBSCRIPTION_STATUS.ACTIVE,
+      );
+    });
+
+    it('já paga não abandona nada: confirma', async () => {
+      const { service, subscriptions, card } = await comCobrancaEmAberto();
+      card.fetchChargeOutcome.mockResolvedValue({
+        id: 'ORD01ABC',
+        provider: 'MERCADOPAGO',
+        outcome: 'PAID',
+      });
+
+      const result = await service.restartCardPayment('aluno-1');
+
+      // Aqui não há beco: há dinheiro que entrou e ninguém registrou.
+      expect(result.outcome).toBe('PAID');
+      expect(
+        subscriptions.store.get('aluno-1')!.charges[0].abandonedChargeIds,
+      ).toBeUndefined();
+    });
+
+    it('sem cobrança em aberto, recusa em vez de fingir', async () => {
+      const { service } = build();
+      await service.choosePlan('aluno-1', ANUAL as any);
+
+      await expect(service.restartCardPayment('aluno-1')).rejects.toThrow(
+        /não há cobrança em aberto/i,
+      );
+    });
+  });
+
   it('cobrança já paga no gateway NÃO vira uma segunda cobrança', async () => {
     const { service, card, subscriptions } = await comCobrancaEmAberto();
     card.fetchChargeOutcome.mockResolvedValue({
