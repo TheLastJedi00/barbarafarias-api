@@ -45,6 +45,8 @@ import {
   normalizeCouponCode,
   round2,
 } from './coupon.entity';
+import { PlanAcceptance } from './plan-acceptance.entity';
+import { PlanAcceptanceRepository } from './plan-acceptance.repository';
 import {
   CardPaymentDto,
   CardPaymentResponseDto,
@@ -52,6 +54,7 @@ import {
   ChoosePlanDto,
   ChoosePlanResponseDto,
   CreateCouponDto,
+  PlanAcceptanceDto,
   SubscriptionDto,
 } from './dto/subscription.dto';
 import { todayInAppTimezone } from '../common/time';
@@ -103,6 +106,7 @@ export class SubscriptionService {
     private readonly subscriptions: SubscriptionRepository,
     private readonly coupons: CouponRepository,
     private readonly users: UserRepository,
+    private readonly acceptances: PlanAcceptanceRepository,
     private readonly pix: PixGateway,
     private readonly card: CardGateway,
     private readonly configService: ConfigService,
@@ -146,6 +150,11 @@ export class SubscriptionService {
       dto.paymentMethod,
       coupon,
     );
+    // **O aceite vem antes da cobrança**, na mesma operação que cria a
+    // assinatura. Gravá-lo depois abriria a janela em que o aluno já foi
+    // debitado e ainda não há registro de que concordou — e é justamente na
+    // falha que essa janela importa.
+    await this.recordAcceptance(student, subscription, dto.acceptance);
     await this.subscriptions.save(subscription);
     await this.syncUser(subscription);
 
@@ -264,6 +273,46 @@ export class SubscriptionService {
       outcome: checkout.outcome,
       challengeUrl: checkout.challengeUrl,
     };
+  }
+
+  /**
+   * Grava o aceite, **congelando os números daquele momento**.
+   *
+   * Ler o catálogo na hora de exibir faria o contrato mudar de valor junto com
+   * a tabela de preços — e um contrato que muda depois de assinado não prova
+   * nada. Por isso os valores são copiados, não referenciados.
+   *
+   * Falhar aqui **derruba a contratação**, ao contrário de `syncUser` e do
+   * gateway, que degradam: os dois são conveniência, este é o registro que
+   * autoriza a cobrança.
+   */
+  private async recordAcceptance(
+    student: User,
+    subscription: Subscription,
+    acceptance: PlanAcceptanceDto,
+  ): Promise<void> {
+    const config = planConfig(subscription.plan);
+    await this.acceptances.create(
+      new PlanAcceptance({
+        id: randomUUID(),
+        studentId: student.id,
+        studentName: student.fullName,
+        studentEmail: student.email,
+        plan: subscription.plan,
+        planLabel: config.label,
+        totalAmount: subscription.totalAmount,
+        installments: subscription.installments,
+        installmentAmount: subscription.installmentAmount,
+        termsVersion: acceptance.termsVersion,
+        acceptedAt: new Date().toISOString(),
+        couponCode: subscription.couponCode,
+      }),
+    );
+  }
+
+  /** Todos os aceites, para a página de contratos da gerente (§7.4). */
+  listAcceptances(): Promise<PlanAcceptance[]> {
+    return this.acceptances.findAll();
   }
 
   async getSubscription(studentId: string): Promise<SubscriptionDto | null> {

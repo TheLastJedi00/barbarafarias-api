@@ -4,6 +4,7 @@ import { SubscriptionController } from './subscription.controller';
 import { SubscriptionService } from './subscription.service';
 import { SubscriptionRepository } from './subscription.repository';
 import { CouponRepository } from './coupon.repository';
+import { PlanAcceptanceRepository } from './plan-acceptance.repository';
 import { CardGateway, PixGateway } from './payment.gateway';
 import {
   MERCADOPAGO_CLIENT,
@@ -29,6 +30,7 @@ import { UserModule } from '../users/user.module';
     SubscriptionService,
     SubscriptionRepository,
     CouponRepository,
+    PlanAcceptanceRepository,
     PaymentAccessService,
     // Os clientes do Mercado Pago são construídos aqui, e não dentro do
     // gateway, para os testes poderem injetar um dublê sem tocar a rede.

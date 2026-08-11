@@ -1,4 +1,12 @@
-import { Body, Controller, Get, Param, Patch, Post } from '@nestjs/common';
+import {
+  BadRequestException,
+  Body,
+  Controller,
+  Get,
+  Param,
+  Patch,
+  Post,
+} from '@nestjs/common';
 import { SubscriptionService } from './subscription.service';
 import {
   CardPaymentDto,
@@ -9,7 +17,9 @@ import {
   SubscriptionDto,
 } from './dto/subscription.dto';
 import { Charge, PLAN_CONFIGS } from './subscription.entity';
-import type { PlanConfig } from './subscription.entity';
+import type { PlanConfig, SubscriptionPlan } from './subscription.entity';
+import { buildTerms } from './plan-terms';
+import { PlanAcceptance } from './plan-acceptance.entity';
 import { Roles } from '../decorators/roles.decorator';
 import { Public } from '../decorators/public.decorator';
 import { CurrentUser } from '../decorators/current-user.decorator';
@@ -31,6 +41,33 @@ export class SubscriptionController {
   @Get('plans')
   plans(): PlanConfig[] {
     return Object.values(PLAN_CONFIGS);
+  }
+
+  /**
+   * O contrato de um plano, montado do catálogo (§7.3).
+   *
+   * O aluno precisa ler o texto **antes** de pagar, e a `termsVersion` que ele
+   * devolve em `POST me` é a que vem daqui — é o que garante que o que ficou
+   * registrado é o que estava na tela.
+   */
+  @Get('plans/:plan/terms')
+  @Roles(ROLES.STUDENT)
+  terms(@Param('plan') plan: SubscriptionPlan) {
+    if (!PLAN_CONFIGS[plan]) {
+      throw new BadRequestException('Plano inválido');
+    }
+    return buildTerms(plan);
+  }
+
+  /**
+   * Os aceites registrados, só para a gerente (§7.4). É consulta: não há rota
+   * de edição nem de remoção, e a ausência delas é o desenho — um registro
+   * probatório que pode ser editado não prova nada.
+   */
+  @Get('acceptances')
+  @Roles(ROLES.MANAGER)
+  acceptances(): Promise<PlanAcceptance[]> {
+    return this.service.listAcceptances();
   }
 
   /**

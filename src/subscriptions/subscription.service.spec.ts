@@ -77,6 +77,10 @@ function build(overrides: Record<string, any> = {}) {
     cancelSubscription: jest.fn().mockResolvedValue(undefined),
     updateSubscriptionAmount: jest.fn().mockResolvedValue(undefined),
   };
+  const acceptances = {
+    create: jest.fn(async (acceptance: any) => acceptance),
+    findAll: jest.fn().mockResolvedValue([]),
+  };
   const config = { get: jest.fn(() => undefined) };
   Object.assign(config, overrides.config ?? {});
 
@@ -84,11 +88,21 @@ function build(overrides: Record<string, any> = {}) {
     subscriptions as any,
     coupons as any,
     users as any,
+    acceptances as any,
     pix as any,
     card as any,
     config as any,
   );
-  return { service, subscriptions, coupons, users, pix, card, config };
+  return {
+    service,
+    subscriptions,
+    coupons,
+    users,
+    acceptances,
+    pix,
+    card,
+    config,
+  };
 }
 
 /**
@@ -106,9 +120,13 @@ function orderPaga(id = 'pix_1') {
 /** Cartão como o formulário do gateway o entrega: token, e nada mais. */
 const CARTAO_TOKEN = { token: 'tok_123', paymentMethodId: 'master' };
 
+/** Aceite dos termos, exigido em toda contratação (spec 023 §7.2). */
+const ACEITE = { termsVersion: '2026-08-1', accepted: true };
+
 const PIX = {
   plan: SUBSCRIPTION_PLANS.MONTHLY,
   paymentMethod: PAYMENT_METHODS.PIX_RECURRING,
+  acceptance: ACEITE,
 };
 
 describe('addMonths', () => {
@@ -141,6 +159,7 @@ describe('SubscriptionService — cronograma de parcelas', () => {
     await service.choosePlan('aluno-1', {
       plan: SUBSCRIPTION_PLANS.SEMIANNUAL,
       paymentMethod: PAYMENT_METHODS.CREDIT_CARD,
+      acceptance: ACEITE,
     } as any);
 
     const saved = subscriptions.store.get('aluno-1')!;
@@ -158,6 +177,7 @@ describe('SubscriptionService — cronograma de parcelas', () => {
     await service.choosePlan('aluno-1', {
       plan: SUBSCRIPTION_PLANS.ANNUAL,
       paymentMethod: PAYMENT_METHODS.CREDIT_CARD,
+      acceptance: ACEITE,
     } as any);
 
     const saved = subscriptions.store.get('aluno-1')!;
@@ -171,6 +191,7 @@ describe('SubscriptionService — cronograma de parcelas', () => {
     await service.choosePlan('aluno-1', {
       plan: SUBSCRIPTION_PLANS.SEMIANNUAL,
       paymentMethod: PAYMENT_METHODS.CREDIT_CARD,
+      acceptance: ACEITE,
     } as any);
 
     const { charges, startDate, nextChargeDate } =
@@ -207,6 +228,101 @@ describe('SubscriptionService — cronograma de parcelas', () => {
   });
 });
 
+describe('SubscriptionService — aceite dos termos', () => {
+  it('o aceite é gravado dentro da contratação, com os números congelados', async () => {
+    const { service, acceptances } = build();
+
+    await service.choosePlan('aluno-1', {
+      plan: SUBSCRIPTION_PLANS.ANNUAL,
+      paymentMethod: PAYMENT_METHODS.CREDIT_CARD,
+      acceptance: ACEITE,
+    } as any);
+
+    expect(acceptances.create).toHaveBeenCalledTimes(1);
+    const gravado = acceptances.create.mock.calls[0][0];
+    expect(gravado).toMatchObject({
+      studentId: 'aluno-1',
+      studentName: 'Ana Aluna',
+      studentEmail: 'ana@example.com',
+      plan: 'ANNUAL',
+      planLabel: 'Anual',
+      // Congelados, não referenciados: o catálogo muda de preço e o contrato
+      // assinado não muda junto.
+      totalAmount: 2280,
+      installments: 12,
+      installmentAmount: 190,
+      termsVersion: '2026-08-1',
+    });
+    // ISO **com hora**: "concordou em 10/08" não responde a mesma pergunta que
+    // "concordou às 22h47 de 10/08".
+    expect(gravado.acceptedAt).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/);
+  });
+
+  it('não grava IP nem user-agent', async () => {
+    const { service, acceptances } = build();
+
+    await service.choosePlan('aluno-1', PIX as any);
+
+    // Dado pessoal novo, sem base declarada, para um ganho probatório que
+    // `studentId` autenticado + timestamp já entrega.
+    const gravado = acceptances.create.mock.calls[0][0];
+    expect(gravado.ip).toBeUndefined();
+    expect(gravado.userAgent).toBeUndefined();
+  });
+
+  it('o cupom acordado fica registrado junto', async () => {
+    const { service, acceptances, coupons } = build();
+    coupons.findByCode.mockResolvedValue(
+      new Coupon({
+        id: 'c1',
+        code: 'BEMVINDA',
+        discountAmount: 50,
+        durationMonths: null,
+        active: true,
+        createdAt: '',
+        createdBy: '',
+      }),
+    );
+
+    await service.choosePlan('aluno-1', {
+      plan: SUBSCRIPTION_PLANS.SEMIANNUAL,
+      paymentMethod: PAYMENT_METHODS.CREDIT_CARD,
+      couponCode: 'BEMVINDA',
+      acceptance: ACEITE,
+    } as any);
+
+    const gravado = acceptances.create.mock.calls[0][0];
+    expect(gravado.couponCode).toBe('BEMVINDA');
+    // O total congelado é o **descontado**, que é o que foi acordado.
+    expect(gravado.totalAmount).toBe(900);
+  });
+
+  it('falhar ao gravar o aceite derruba a contratação, e nada é cobrado', async () => {
+    const { service, acceptances, pix, subscriptions } = build();
+    acceptances.create.mockRejectedValue(new Error('firestore fora'));
+
+    await expect(service.choosePlan('aluno-1', PIX as any)).rejects.toThrow();
+
+    // Ao contrário do espelho no usuário e do gateway, que degradam: os dois
+    // são conveniência, este é o registro que autoriza a cobrança.
+    expect(pix.createPixCharge).not.toHaveBeenCalled();
+    expect(subscriptions.store.get('aluno-1')).toBeUndefined();
+  });
+
+  it('cada contratação gera um registro novo, nunca sobrescreve', async () => {
+    const { service, acceptances, subscriptions } = build();
+
+    await service.choosePlan('aluno-1', PIX as any);
+    await service.cancelSubscription('aluno-1');
+    subscriptions.store.delete('aluno-1');
+    await service.choosePlan('aluno-1', PIX as any);
+
+    const ids = acceptances.create.mock.calls.map((call: any[]) => call[0].id);
+    expect(ids).toHaveLength(2);
+    expect(ids[0]).not.toBe(ids[1]);
+  });
+});
+
 describe('SubscriptionService — pagamento', () => {
   it('PIX devolve QR Code e copia-e-cola para o modal', async () => {
     const { service } = build();
@@ -223,6 +339,7 @@ describe('SubscriptionService — pagamento', () => {
     const response = await service.choosePlan('aluno-1', {
       plan: SUBSCRIPTION_PLANS.ANNUAL,
       paymentMethod: PAYMENT_METHODS.CREDIT_CARD,
+      acceptance: ACEITE,
     } as any);
 
     // **A cobrança ainda não existe, e é de propósito**: o token do cartão
@@ -242,6 +359,7 @@ describe('SubscriptionService — pagamento', () => {
     await anual.service.choosePlan('aluno-1', {
       plan: SUBSCRIPTION_PLANS.ANNUAL,
       paymentMethod: PAYMENT_METHODS.CREDIT_CARD,
+      acceptance: ACEITE,
     } as any);
     await anual.service.payWithCard('aluno-1', CARTAO_TOKEN as any);
 
@@ -259,6 +377,7 @@ describe('SubscriptionService — pagamento', () => {
     await semestral.service.choosePlan('aluno-2', {
       plan: SUBSCRIPTION_PLANS.SEMIANNUAL,
       paymentMethod: PAYMENT_METHODS.CREDIT_CARD,
+      acceptance: ACEITE,
     } as any);
     await semestral.service.payWithCard('aluno-2', CARTAO_TOKEN as any);
 
@@ -279,6 +398,7 @@ describe('SubscriptionService — pagamento', () => {
     await service.choosePlan('aluno-1', {
       plan: SUBSCRIPTION_PLANS.MONTHLY,
       paymentMethod: PAYMENT_METHODS.CREDIT_CARD,
+      acceptance: ACEITE,
     } as any);
     await service.payWithCard('aluno-1', CARTAO_TOKEN as any);
 
@@ -293,6 +413,7 @@ describe('SubscriptionService — pagamento', () => {
     await service.choosePlan('aluno-1', {
       plan: SUBSCRIPTION_PLANS.ANNUAL,
       paymentMethod: PAYMENT_METHODS.CREDIT_CARD,
+      acceptance: ACEITE,
     } as any);
 
     // A DTO nem tem o campo, mas alguém pode reintroduzi-lo: a trava do
@@ -325,6 +446,7 @@ describe('SubscriptionService — pagamento', () => {
       plan: SUBSCRIPTION_PLANS.SEMIANNUAL,
       paymentMethod: PAYMENT_METHODS.CREDIT_CARD,
       couponCode: 'BEMVINDA',
+      acceptance: ACEITE,
     } as any);
     await service.payWithCard('aluno-1', CARTAO_TOKEN as any);
 
@@ -353,6 +475,7 @@ describe('SubscriptionService — pagamento', () => {
     const response = await service.choosePlan('aluno-1', {
       plan: SUBSCRIPTION_PLANS.ANNUAL,
       paymentMethod: PAYMENT_METHODS.CREDIT_CARD,
+      acceptance: ACEITE,
     } as any);
 
     expect(response.card).toBeDefined();
@@ -451,6 +574,7 @@ describe('SubscriptionService — cupons', () => {
       plan: SUBSCRIPTION_PLANS.SEMIANNUAL,
       paymentMethod: PAYMENT_METHODS.CREDIT_CARD,
       couponCode: 'bemvinda',
+      acceptance: ACEITE,
     } as any);
 
     const saved = subscriptions.store.get('aluno-1')!;
@@ -471,6 +595,7 @@ describe('SubscriptionService — cupons', () => {
       plan: SUBSCRIPTION_PLANS.SEMIANNUAL,
       paymentMethod: PAYMENT_METHODS.CREDIT_CARD,
       couponCode: 'BEMVINDA',
+      acceptance: ACEITE,
     } as any);
 
     const saved = subscriptions.store.get('aluno-1')!;
@@ -531,6 +656,7 @@ describe('SubscriptionService — cancelamento e cobranças', () => {
     await service.choosePlan('aluno-1', {
       plan: SUBSCRIPTION_PLANS.SEMIANNUAL,
       paymentMethod: PAYMENT_METHODS.CREDIT_CARD,
+      acceptance: ACEITE,
     } as any);
 
     const upcoming = await service.getUpcomingCharges('aluno-1');
@@ -557,7 +683,10 @@ describe('SubscriptionService — ciclo de vida da assinatura no gateway', () =>
   /** Assinatura de cartão já ativa, como o webhook a deixaria. */
   async function comAssinaturaAtiva() {
     const context = build();
-    await context.service.choosePlan('aluno-1', CARTAO as any);
+    await context.service.choosePlan('aluno-1', {
+      ...CARTAO,
+      acceptance: ACEITE,
+    } as any);
     const saved = context.subscriptions.store.get('aluno-1')!;
     saved.gatewaySubscriptionId = 'preapproval_1';
     saved.status = SUBSCRIPTION_STATUS.ACTIVE;
@@ -620,7 +749,10 @@ describe('SubscriptionService — ciclo de vida da assinatura no gateway', () =>
       provider: 'MERCADOPAGO',
       outcome: 'PENDING',
     });
-    await service.choosePlan('aluno-1', CARTAO as any);
+    await service.choosePlan('aluno-1', {
+      ...CARTAO,
+      acceptance: ACEITE,
+    } as any);
 
     await service.payWithCard('aluno-1', CARTAO_TOKEN as any);
 
@@ -637,6 +769,7 @@ describe('SubscriptionService — ciclo de vida da assinatura no gateway', () =>
     await service.choosePlan('aluno-1', {
       plan: SUBSCRIPTION_PLANS.ANNUAL,
       paymentMethod: PAYMENT_METHODS.CREDIT_CARD,
+      acceptance: ACEITE,
     } as any);
 
     const result = await service.payWithCard('aluno-1', CARTAO_TOKEN as any);
@@ -658,6 +791,7 @@ describe('SubscriptionService — ciclo de vida da assinatura no gateway', () =>
     await service.choosePlan('aluno-1', {
       plan: SUBSCRIPTION_PLANS.ANNUAL,
       paymentMethod: PAYMENT_METHODS.CREDIT_CARD,
+      acceptance: ACEITE,
     } as any);
 
     const result = await service.payWithCard('aluno-1', CARTAO_TOKEN as any);
@@ -682,6 +816,7 @@ describe('SubscriptionService — ciclo de vida da assinatura no gateway', () =>
     await service.choosePlan('aluno-1', {
       plan: SUBSCRIPTION_PLANS.ANNUAL,
       paymentMethod: PAYMENT_METHODS.CREDIT_CARD,
+      acceptance: ACEITE,
     } as any);
 
     await expect(
@@ -835,6 +970,7 @@ describe('PIX em plano parcelado (spec 018)', () => {
     return service.choosePlan('aluno-1', {
       plan,
       paymentMethod: method,
+      acceptance: ACEITE,
     } as any);
   }
 
@@ -875,6 +1011,7 @@ describe('PIX em plano parcelado (spec 018)', () => {
     await service.choosePlan('aluno-1', {
       plan: SUBSCRIPTION_PLANS.ANNUAL,
       paymentMethod: PAYMENT_METHODS.CREDIT_CARD,
+      acceptance: ACEITE,
     } as any);
 
     await expect(
@@ -889,6 +1026,7 @@ describe('PIX em plano parcelado (spec 018)', () => {
     await service.choosePlan('aluno-1', {
       plan: SUBSCRIPTION_PLANS.MONTHLY,
       paymentMethod: PAYMENT_METHODS.CREDIT_CARD,
+      acceptance: ACEITE,
     } as any);
 
     await expect(

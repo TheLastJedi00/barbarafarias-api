@@ -1,16 +1,20 @@
 import {
+  Equals,
   IsBoolean,
   IsIn,
   IsInt,
   IsNotEmpty,
   IsNumber,
+  IsObject,
   IsOptional,
   IsPositive,
   IsString,
   Matches,
   MaxLength,
   Min,
+  ValidateNested,
 } from 'class-validator';
+import { Type } from 'class-transformer';
 import {
   PAYMENT_METHODS,
   SUBSCRIPTION_PLANS,
@@ -24,6 +28,28 @@ import type {
 } from '../subscription.entity';
 import type { ChargeOutcome } from '../payment.gateway';
 
+/**
+ * O aceite dos termos, **dentro** da contratação (spec 023 §7.2).
+ *
+ * Não é uma rota à parte de propósito: rota separada permitiria plano sem
+ * aceite e aceite sem plano — que é exatamente o buraco que este mecanismo
+ * existe para fechar. Aqui, ou os dois acontecem, ou nenhum.
+ */
+export class PlanAcceptanceDto {
+  /** Qual redação o aluno leu. Sem ela o histórico não sabe o que foi aceito. */
+  @IsString()
+  @IsNotEmpty({ message: 'A versão dos termos é obrigatória' })
+  @MaxLength(20)
+  termsVersion!: string;
+
+  /**
+   * `true` e nada mais. `@Equals` em vez de `@IsBoolean`: um `false` que passa
+   * pela validação vira um aceite gravado dizendo que o aluno não aceitou.
+   */
+  @Equals(true, { message: 'É preciso aceitar os termos para contratar' })
+  accepted!: boolean;
+}
+
 export class ChoosePlanDto {
   @IsIn(Object.values(SUBSCRIPTION_PLANS), { message: 'Plano inválido' })
   plan!: SubscriptionPlan;
@@ -32,6 +58,16 @@ export class ChoosePlanDto {
     message: 'Forma de pagamento inválida',
   })
   paymentMethod!: PaymentMethod;
+
+  /**
+   * **Obrigatório.** Sem ele a contratação devolve 400 e **nenhuma cobrança é
+   * criada**: um aluno debitado em R$ 2.280 sem registro de que concordou é a
+   * exposição que este campo existe para fechar.
+   */
+  @IsObject()
+  @ValidateNested()
+  @Type(() => PlanAcceptanceDto)
+  acceptance!: PlanAcceptanceDto;
 
   /** Opcional: quando presente, é validado e abate o valor da parcela (RF16). */
   @IsString()
