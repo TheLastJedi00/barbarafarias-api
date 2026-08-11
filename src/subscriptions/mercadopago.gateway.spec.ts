@@ -496,6 +496,20 @@ describe('MercadoPagoGateway — plano mensal', () => {
     expect(result.subscriptionId).toBe('preapproval_1');
   });
 
+  it('não manda `back_url`: o fluxo nunca redireciona', async () => {
+    const { gateway, clients } = build();
+
+    await gateway.createCheckout(pedidoDeCartao('MONTHLY') as any);
+
+    // O campo serve ao fluxo em que o aluno sai para autorizar numa página do
+    // provedor — proibido desde a spec 014. Conferido contra a API: sem ele a
+    // criação passa igual. E mandá-lo acoplava o mensal a `APP_BASE_URL`, que
+    // em `localhost` o provedor **recusa** — tornando o plano intestável na
+    // máquina por causa de um campo que não usamos.
+    const { body } = clients.subscriptions.create.mock.calls[0][0];
+    expect(body.back_url).toBeUndefined();
+  });
+
   it('criar a assinatura NÃO é ter recebido', async () => {
     const { gateway } = build();
 
