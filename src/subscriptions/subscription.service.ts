@@ -258,6 +258,15 @@ export class SubscriptionService {
       throw error;
     }
 
+    // **Registra o desfecho, não só a falha.** Até aqui só havia log quando o
+    // gateway recusava — e um `CHALLENGE` que chega sem URL trava a tela em
+    // "confirmando" para sempre **sem deixar rastro nenhum** no servidor.
+    this.logger.log(
+      `Cartão de ${studentId}: ${checkout.outcome} (${checkout.id})` +
+        ` | desafio: ${checkout.challengeUrl ?? 'SEM URL'}` +
+        ` | detalhe: ${checkout.detail ?? '-'}`,
+    );
+
     charge.gatewayChargeId = checkout.id;
     charge.gatewayProvider = checkout.provider;
     if (checkout.subscriptionId) {
