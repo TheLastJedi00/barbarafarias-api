@@ -16,6 +16,12 @@ export class User {
   phone!: string;
   email!: string;
   isPaying!: boolean;
+  /**
+   * Espelho do `accessUntil` da assinatura (spec 023 P1). Fica aqui porque é
+   * daqui que o guard lê: buscar a assinatura a cada rota protegida trocaria
+   * uma leitura por duas em todo o sistema.
+   */
+  accessUntil?: string;
   /** @deprecated substituído por `role`; mantido durante a migração (spec 010 §2.1). */
   isTeacher!: boolean;
   role?: Role;
@@ -27,7 +33,7 @@ export class User {
   /**
    * Só dígitos. Identifica as duas pontas do dinheiro: é dado fiscal da
    * professora (cadastrado pela gerente) e, desde a spec 013, o `taxId` do
-   * aluno pagador no gateway — sem ele o AbacatePay recusa a cobrança.
+   * aluno pagador no gateway — sem ele a cobrança é recusada.
    */
   cpf?: string;
 
@@ -60,13 +66,6 @@ export class User {
    */
   subscriptionPlan?: SubscriptionPlan;
   subscriptionStatus?: SubscriptionStatus;
-  /**
-   * Pagador no Stripe (`cus_…`), gravado na primeira contratação por cartão
-   * (spec 014). Precisa ser persistido: `customers.create` **não** deduplica
-   * por e-mail, então sem isto cada contratação criaria um cliente novo e o
-   * histórico do aluno ficaria espalhado por vários no painel.
-   */
-  stripeCustomerId?: string;
   teacherId?: string;
   teacherName?: string;
   pendingTeacher?: boolean; // professora responsável foi desativada

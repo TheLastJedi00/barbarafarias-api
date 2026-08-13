@@ -4,6 +4,7 @@ import { ThrottlerModule } from '@nestjs/throttler';
 import { AuthService } from './auth.service';
 import { AuthController } from './auth.controller';
 import { IdentityToolkitClient } from './identity-toolkit.client';
+import { SessionCookie } from './session-cookie';
 import { EmailCooldownService } from './email-cooldown.service';
 import { UserRepository } from '../users/user.repository';
 
@@ -23,6 +24,7 @@ import { UserRepository } from '../users/user.repository';
   providers: [
     AuthService,
     IdentityToolkitClient,
+    SessionCookie,
     EmailCooldownService,
     // Provido aqui, e não via UserModule, porque UserModule já importa
     // AuthModule — importar de volta criaria ciclo. O repositório é stateless

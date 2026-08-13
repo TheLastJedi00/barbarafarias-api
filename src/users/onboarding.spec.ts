@@ -60,9 +60,9 @@ describe('missingOnboardingFields', () => {
 
   it('alcança documento legado sem `role`, pelo isTeacher', () => {
     // A base ainda tem documentos anteriores ao campo `role` (spec 010).
-    expect(
-      missingOnboardingFields(new User({ isTeacher: true })),
-    ).toContain('chave PIX');
+    expect(missingOnboardingFields(new User({ isTeacher: true }))).toContain(
+      'chave PIX',
+    );
   });
 });
 

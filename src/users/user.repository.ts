@@ -97,6 +97,7 @@ export class UserRepository {
       subscriptionPlan?: string;
       subscriptionStatus?: string;
       isPaying: boolean;
+      accessUntil?: string;
     },
   ): Promise<void> {
     await this.db
@@ -107,21 +108,10 @@ export class UserRepository {
           subscriptionPlan: state.subscriptionPlan ?? null,
           subscriptionStatus: state.subscriptionStatus ?? null,
           isPaying: state.isPaying,
+          accessUntil: state.accessUntil ?? null,
         },
         { merge: true },
       );
-  }
-
-  /**
-   * Grava o pagador do Stripe (spec 014 Task 54). `merge` cirúrgico pelo mesmo
-   * motivo do espelho da assinatura: isto acontece no meio de uma contratação,
-   * em paralelo com o que o aluno esteja editando no perfil.
-   */
-  async setStripeCustomerId(id: string, customerId: string): Promise<void> {
-    await this.db
-      .collection('users')
-      .doc(id)
-      .set({ stripeCustomerId: customerId }, { merge: true });
   }
 
   async delete(id: string): Promise<void> {

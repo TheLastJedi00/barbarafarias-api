@@ -1,20 +1,26 @@
 import {
+  Equals,
   IsBoolean,
   IsIn,
   IsInt,
   IsNotEmpty,
   IsNumber,
+  IsObject,
   IsOptional,
   IsPositive,
   IsString,
   Matches,
   MaxLength,
   Min,
+  ValidateNested,
 } from 'class-validator';
+import { Type } from 'class-transformer';
 import {
   PAYMENT_METHODS,
   SUBSCRIPTION_PLANS,
   Subscription,
+  CHARGE_STATUS,
+  payerAmountsOf,
   planConfig,
 } from '../subscription.entity';
 import type {
@@ -22,6 +28,29 @@ import type {
   PaymentMethod,
   SubscriptionPlan,
 } from '../subscription.entity';
+import type { ChargeOutcome } from '../payment.gateway';
+
+/**
+ * O aceite dos termos, **dentro** da contratação (spec 023 §7.2).
+ *
+ * Não é uma rota à parte de propósito: rota separada permitiria plano sem
+ * aceite e aceite sem plano — que é exatamente o buraco que este mecanismo
+ * existe para fechar. Aqui, ou os dois acontecem, ou nenhum.
+ */
+export class PlanAcceptanceDto {
+  /** Qual redação o aluno leu. Sem ela o histórico não sabe o que foi aceito. */
+  @IsString()
+  @IsNotEmpty({ message: 'A versão dos termos é obrigatória' })
+  @MaxLength(20)
+  termsVersion!: string;
+
+  /**
+   * `true` e nada mais. `@Equals` em vez de `@IsBoolean`: um `false` que passa
+   * pela validação vira um aceite gravado dizendo que o aluno não aceitou.
+   */
+  @Equals(true, { message: 'É preciso aceitar os termos para contratar' })
+  accepted!: boolean;
+}
 
 export class ChoosePlanDto {
   @IsIn(Object.values(SUBSCRIPTION_PLANS), { message: 'Plano inválido' })
@@ -32,11 +61,52 @@ export class ChoosePlanDto {
   })
   paymentMethod!: PaymentMethod;
 
+  /**
+   * **Obrigatório.** Sem ele a contratação devolve 400 e **nenhuma cobrança é
+   * criada**: um aluno debitado em R$ 2.280 sem registro de que concordou é a
+   * exposição que este campo existe para fechar.
+   */
+  @IsObject()
+  @ValidateNested()
+  @Type(() => PlanAcceptanceDto)
+  acceptance!: PlanAcceptanceDto;
+
   /** Opcional: quando presente, é validado e abate o valor da parcela (RF16). */
   @IsString()
   @IsOptional()
   @MaxLength(40)
   couponCode?: string;
+}
+
+/**
+ * O cartão tokenizado no navegador, para `POST /subscriptions/me/card`.
+ *
+ * Repare no que **não** está aqui: número, CVC, validade e — de propósito —
+ * `installments`. O número de parcelas do plano sai do `PLAN_CONFIGS` no
+ * backend; aceitá-lo do cliente transformaria a trava do formulário na única
+ * régua, e ela é conveniência, não segurança.
+ */
+export class CardPaymentDto {
+  @IsString()
+  @IsNotEmpty({ message: 'O token do cartão é obrigatório' })
+  @MaxLength(120)
+  token!: string;
+
+  /** Bandeira resolvida pelo formulário do gateway (`master`, `visa`, …). */
+  @IsString()
+  @IsNotEmpty({ message: 'A bandeira do cartão é obrigatória' })
+  @MaxLength(40)
+  paymentMethodId!: string;
+}
+
+/** O que a tela precisa saber depois de mandar o cartão. */
+export class CardPaymentResponseDto {
+  subscription!: SubscriptionDto;
+  /** `PAID`, `PENDING`, `CHALLENGE`. `REJECTED` volta como 400. */
+  outcome!: ChargeOutcome;
+  /** Só quando `outcome === 'CHALLENGE'`: onde o aluno completa o 3DS. */
+  challengeUrl?: string;
+  warning?: string;
 }
 
 export class ChangePaymentMethodDto {
@@ -78,18 +148,20 @@ export class MonthQueryDto {
 /**
  * O que o aluno precisa para pagar, devolvido por `POST /subscriptions/me`.
  *
- * PIX volta com QR Code e copia-e-cola para o modal. Cartão volta com o
- * `clientSecret` da sessão do Stripe, que o frontend monta na própria página
- * (spec 014) — `checkoutUrl` continua existindo para o caso de o cartão voltar
- * a sair por um gateway de checkout hospedado, e os dois nunca vêm juntos.
+ * Os dois métodos saem por caminhos diferentes, e **nunca vêm juntos**:
+ *
+ * - **PIX** já volta com QR Code e copia-e-cola: a cobrança foi emitida.
+ * - **Cartão** volta com `card`, que é só o que a tela precisa para montar o
+ *   formulário — valor e parcelas. A cobrança ainda não existe, porque o token
+ *   do cartão nasce no navegador, depois desta resposta.
  */
 export class ChoosePlanResponseDto {
   subscription!: SubscriptionDto;
   paymentMethod!: PaymentMethod;
   pixQrCodeUrl?: string;
   pixCopyPaste?: string;
-  checkoutUrl?: string;
-  clientSecret?: string;
+  /** Parâmetros do formulário de cartão. Ver `CardPaymentDto`. */
+  card?: { amount: number; installments: number; chargeIndex: number };
   /** Explica por que não veio cobrança (ex.: gateway sem chave configurada). */
   warning?: string;
 }
@@ -115,6 +187,30 @@ export class SubscriptionDto {
   startDate!: string;
   nextChargeDate?: string;
   cancelledAt?: string;
+  /**
+   * Até quando o acesso vale. A tela precisa dela **antes** do cancelamento:
+   * é o que transforma "seu acesso é encerrado" em uma data que a aluna pode
+   * conferir contra o que pagou.
+   */
+  accessUntil?: string;
+  /**
+   * O total que a aluna paga, com os juros do parcelamento e o cupom já
+   * aplicados — o número que ela reconhece da fatura.
+   *
+   * `totalAmount` continua sendo o que **cobramos**, porque é dele que sai a
+   * receita por competência. São perguntas diferentes, e a tela que mostrar a
+   * errada faz a aluna procurar um valor que não existe no extrato dela.
+   */
+  payerTotal!: number;
+  payerInstallment!: number;
+  /**
+   * A parcela em aberto já tem uma cobrança emitida lá fora (spec 023 P2).
+   *
+   * É o que habilita "Recomeçar o pagamento" na tela. Vai como **booleano**, e
+   * não como o id: a aluna não tem o que fazer com um identificador do gateway,
+   * e mandá-lo seria expor o que a cobrança dupla explora.
+   */
+  hasOpenCardAttempt!: boolean;
   couponCode?: string;
   couponDiscount?: number;
   couponRemainingCharges?: number | null;
@@ -126,5 +222,14 @@ export class SubscriptionDto {
     Object.assign(this, subscription);
     this.planLabel = config.label;
     this.recurring = config.recurring;
+
+    const pagador = payerAmountsOf(subscription);
+    this.payerTotal = pagador.total;
+    this.payerInstallment = pagador.installment;
+
+    const emAberto = subscription.charges?.find(
+      (charge) => charge.status !== CHARGE_STATUS.PAID,
+    );
+    this.hasOpenCardAttempt = !!emAberto?.gatewayChargeId;
   }
 }

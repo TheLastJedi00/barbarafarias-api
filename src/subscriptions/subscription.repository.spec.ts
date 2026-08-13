@@ -8,7 +8,7 @@ import { GATEWAY_PROVIDERS } from './payment.gateway';
  * `doc().set`, `doc().delete` e a leitura da coleção inteira.
  *
  * O que justifica o fake é a Task 51: a tradução entre o campo antigo
- * (`abacatePayId`) e o novo (`gatewayChargeId`) mora aqui, e errar nela não
+ * (`abacatePayId`) e o atual (`gatewayChargeId`) mora aqui, e errar nela não
  * aparece em teste manual com aluno novo — só quebra o webhook de quem
  * contratou antes do deploy.
  */
@@ -54,7 +54,7 @@ function build() {
   return { db, repository: new SubscriptionRepository(db as any) };
 }
 
-/** Documento como o gravado antes da spec 014: só `abacatePayId`. */
+/** Documento como o gravado antes da spec 014: só o campo antigo. */
 function legacyDocument(chargeId: string) {
   return {
     studentId: 'aluno-antigo',
@@ -99,20 +99,21 @@ function subscriptionWith(charge: Record<string, any>): Subscription {
   });
 }
 
-describe('SubscriptionRepository — id de cobrança neutro (Task 51)', () => {
-  it('lê o campo antigo como `gatewayChargeId` e assume o AbacatePay', async () => {
+describe('SubscriptionRepository — id de cobrança neutro', () => {
+  it('lê o campo antigo como `gatewayChargeId`, para o histórico não sumir', async () => {
     const { db, repository } = build();
     db.store.set('subscriptions/aluno-antigo', legacyDocument('pix_legado'));
 
     const found = await repository.findByStudent('aluno-antigo');
 
+    // `abacatePayId` deixou de ser gravado na spec 023, mas continua sendo
+    // lido: as parcelas antigas do Firestore só têm esse campo, e o painel
+    // financeiro as soma. Apagar gateway é código; apagar histórico seria
+    // receita.
     expect(found!.charges[0].gatewayChargeId).toBe('pix_legado');
-    expect(found!.charges[0].gatewayProvider).toBe(
-      GATEWAY_PROVIDERS.ABACATEPAY,
-    );
   });
 
-  it('o campo novo tem precedência sobre o antigo', async () => {
+  it('preserva o provedor gravado, mesmo o de um gateway que não existe mais', async () => {
     const { db, repository } = build();
     db.store.set('subscriptions/aluno-antigo', {
       ...legacyDocument('pix_legado'),
@@ -122,65 +123,48 @@ describe('SubscriptionRepository — id de cobrança neutro (Task 51)', () => {
           dueDate: '2026-08-01',
           amount: 240,
           status: CHARGE_STATUS.PENDING,
-          abacatePayId: 'pix_legado',
-          gatewayChargeId: 'cs_novo',
-          gatewayProvider: GATEWAY_PROVIDERS.STRIPE,
+          gatewayChargeId: 'cs_antigo',
+          gatewayProvider: 'STRIPE',
         },
       ],
     });
 
     const found = await repository.findByStudent('aluno-antigo');
 
-    expect(found!.charges[0].gatewayChargeId).toBe('cs_novo');
-    expect(found!.charges[0].gatewayProvider).toBe(GATEWAY_PROVIDERS.STRIPE);
+    expect(found!.charges[0].gatewayProvider).toBe('STRIPE');
   });
 
-  it('espelha a cobrança do AbacatePay no campo antigo, para sobreviver a um rollback', async () => {
+  it('não grava mais o campo antigo', async () => {
     const { db, repository } = build();
 
     await repository.save(
       subscriptionWith({
-        gatewayChargeId: 'pix_novo',
-        gatewayProvider: GATEWAY_PROVIDERS.ABACATEPAY,
+        gatewayChargeId: 'ORD01ABC',
+        gatewayProvider: GATEWAY_PROVIDERS.MERCADOPAGO,
       }),
     );
 
     const [charge] = db.store.get('subscriptions/aluno-1')!.charges;
-    expect(charge.gatewayChargeId).toBe('pix_novo');
-    expect(charge.abacatePayId).toBe('pix_novo');
+    expect(charge.gatewayChargeId).toBe('ORD01ABC');
+    expect(charge.abacatePayId).toBeUndefined();
   });
 
-  it('não espelha a sessão do Stripe: o código antigo não saberia o que fazer com ela', async () => {
-    const { db, repository } = build();
-
-    await repository.save(
-      subscriptionWith({
-        gatewayChargeId: 'cs_test_123',
-        gatewayProvider: GATEWAY_PROVIDERS.STRIPE,
-      }),
-    );
-
-    const [charge] = db.store.get('subscriptions/aluno-1')!.charges;
-    expect(charge.gatewayChargeId).toBe('cs_test_123');
-    expect(charge.abacatePayId).toBeNull();
-  });
-
-  it('o webhook acha a assinatura pelos dois campos', async () => {
+  it('o webhook acha a assinatura pelo id da cobrança, novo ou legado', async () => {
     const { db, repository } = build();
     db.store.set('subscriptions/aluno-antigo', legacyDocument('pix_legado'));
     await repository.save(
       subscriptionWith({
-        gatewayChargeId: 'cs_test_123',
-        gatewayProvider: GATEWAY_PROVIDERS.STRIPE,
+        gatewayChargeId: 'ORD01ABC',
+        gatewayProvider: GATEWAY_PROVIDERS.MERCADOPAGO,
       }),
     );
 
     await expect(
       repository.findByChargeId('pix_legado'),
     ).resolves.toMatchObject({ studentId: 'aluno-antigo' });
-    await expect(
-      repository.findByChargeId('cs_test_123'),
-    ).resolves.toMatchObject({ studentId: 'aluno-1' });
+    await expect(repository.findByChargeId('ORD01ABC')).resolves.toMatchObject({
+      studentId: 'aluno-1',
+    });
     await expect(repository.findByChargeId('nao_existe')).resolves.toBeNull();
   });
 });
