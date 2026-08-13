@@ -2,6 +2,7 @@ import { createHmac } from 'node:crypto';
 import { ConfigService } from '@nestjs/config';
 import {
   GatewayConflictError,
+  GatewayRejectedError,
   MercadoPagoGateway,
   idempotencyKeyFor,
   payerOf,
@@ -15,6 +16,7 @@ import { PLAN_CONFIGS } from './subscription.entity';
 import {
   MPBadRequestError,
   MPIdempotencyError,
+  MPPaymentError,
 } from 'mercadopago/dist/utils/errors';
 
 /**
@@ -197,6 +199,29 @@ describe('MercadoPagoGateway — cartão parcelado', () => {
     await expect(
       gateway.createCheckout(pedidoDeCartao('ANNUAL') as any),
     ).rejects.toThrow(GatewayConflictError);
+  });
+
+  it('402 vira recusa nomeada, não erro de sistema', async () => {
+    const { gateway, clients } = build();
+    clients.orders.create.mockRejectedValue(
+      new MPPaymentError({ status: 402, message: 'MercadoPago API error' }),
+    );
+    const warn = jest
+      .spyOn((gateway as any).logger, 'warn')
+      .mockImplementation(() => undefined);
+    const error = jest
+      .spyOn((gateway as any).logger, 'error')
+      .mockImplementation(() => undefined);
+
+    // Cartão sem limite é recusa do emissor, e a Orders API a devolve como
+    // 402 — sem order, então `resultOfOrder` nunca roda. Sem esta tradução o
+    // aluno lê "Internal server error" e acha que o site quebrou.
+    await expect(
+      gateway.createCheckout(pedidoDeCartao('SEMIANNUAL') as any),
+    ).rejects.toThrow(GatewayRejectedError);
+    // E não acende alarme de erro no painel: 402 é desfecho de negócio.
+    expect(warn).toHaveBeenCalled();
+    expect(error).not.toHaveBeenCalled();
   });
 
   it('liga o 3DS com liability shift', async () => {
