@@ -10,6 +10,7 @@ import {
 import {
   MPIdempotencyError,
   MPNotFoundError,
+  MPPaymentError,
   MPRateLimitError,
   MercadoPagoError,
 } from 'mercadopago/dist/utils/errors';
@@ -223,6 +224,36 @@ export class GatewayConflictError extends Error {
   constructor(message: string) {
     super(message);
     this.name = 'GatewayConflictError';
+  }
+}
+
+/**
+ * Cobrança **recusada** — 402, o `MPPaymentError` do SDK.
+ *
+ * Existe porque a Orders API tem **duas** formas de dizer "não passou", e só
+ * uma delas chega em `resultOfOrder`. Quando o processamento acontece e o
+ * emissor nega, a resposta é 200 com `status: rejected` e o desfecho vira
+ * `REJECTED` normalmente. Quando a negativa é imediata — limite insuficiente é
+ * o caso comum —, a API responde **402 com corpo de erro**: o SDK levanta, a
+ * order nem é devolvida, e `resultOfOrder` nunca roda.
+ *
+ * Sem esta tradução, o segundo caminho passava batido pelo `rethrow` e subia
+ * como erro qualquer, virando **500 "Internal server error"** na tela — para
+ * um cartão sem limite, que é a recusa mais banal que existe. O aluno lia uma
+ * falha do sistema onde o correto era "o emissor recusou, tente outro cartão".
+ *
+ * Não confundir com `GatewayBusyError`: lá o pedido é válido e o momento é
+ * ruim; aqui o pedido chegou, foi avaliado e negado. Tentar de novo com o
+ * mesmo cartão dá o mesmo resultado.
+ */
+export class GatewayRejectedError extends Error {
+  constructor(
+    message: string,
+    /** Motivo do provedor, quando ele manda algum. */
+    readonly detail?: string,
+  ) {
+    super(message);
+    this.name = 'GatewayRejectedError';
   }
 }
 
@@ -772,9 +803,11 @@ export class MercadoPagoGateway extends CardGateway implements PixGateway {
   }
 
   /**
-   * Traduz o erro do SDK. Só o 429 muda de natureza; todo o resto continua
-   * estourando com a mensagem do provedor, porque engolir erro de cobrança é
-   * como o bug de origem desta spec passou despercebido.
+   * Traduz o erro do SDK. Três status mudam de natureza — 402 (recusa do
+   * emissor), 409 (chave de idempotência) e 429 (congestionamento) —, porque
+   * nos três o desfecho certo é uma frase para o aluno, não um 500. Todo o
+   * resto continua estourando com a mensagem do provedor, porque engolir erro
+   * de cobrança é como o bug de origem desta spec passou despercebido.
    */
   protected rethrow(
     error: unknown,
@@ -809,6 +842,27 @@ export class MercadoPagoGateway extends CardGateway implements PixGateway {
       );
       throw new GatewayConflictError(
         `${context}: cobrança já tentada com outros dados`,
+      );
+    }
+
+    /*
+     * **402 é resposta de negócio, não defeito.** Vai em `warn` de propósito:
+     * cartão sem limite é o desfecho mais comum de uma cobrança e não deve
+     * acender alarme de erro no painel — o que precisa aparecer lá é o 400 de
+     * payload inválido, que some no meio se toda recusa for logada como erro.
+     *
+     * A mensagem do provedor não sobrevive ao SDK (ver o bloco acima), então
+     * não há motivo de recusa a repassar: o que vai para a tela é a frase
+     * genérica de `payWithCard`.
+     */
+    if (error instanceof MPPaymentError) {
+      this.logger.warn(
+        `${context} recusado pelo emissor (402): ` +
+          `${error.error || error.message}${enviado}`,
+      );
+      throw new GatewayRejectedError(
+        `${context}: recusado pelo emissor do cartão`,
+        error.error || error.message,
       );
     }
 

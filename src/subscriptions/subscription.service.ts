@@ -19,7 +19,11 @@ import {
   toCents,
 } from './payment.gateway';
 import type { ChargeOutcome, CheckoutResult } from './payment.gateway';
-import { GatewayBusyError, GatewayConflictError } from './mercadopago.gateway';
+import {
+  GatewayBusyError,
+  GatewayConflictError,
+  GatewayRejectedError,
+} from './mercadopago.gateway';
 import { MP_TOPICS } from './mercadopago.gateway';
 import type { MercadoPagoDomainEvent } from './mercadopago.gateway';
 import {
@@ -79,6 +83,18 @@ interface ResolvedCoupon {
 /** Mensagem única do bloqueio — a tela repete exatamente esta frase. */
 export const PIX_INSTALLMENT_BLOCKED =
   'O parcelamento está disponível apenas no cartão de crédito.';
+
+/**
+ * A frase da recusa, **uma só para os dois caminhos**.
+ *
+ * A Orders API nega de duas formas — 200 com `status: rejected` e 402 com
+ * corpo de erro (ver `GatewayRejectedError`) —, e elas chegam aqui por lugares
+ * diferentes: uma pelo desfecho, outra pelo `catch`. Duas frases fariam o
+ * mesmo cartão sem limite produzir textos diferentes conforme o humor do
+ * provedor.
+ */
+export const CARD_REJECTED_MESSAGE =
+  'Pagamento recusado pelo emissor do cartão. Confira os dados, verifique o limite disponível ou tente outro cartão.';
 
 /**
  * PIX não fecha plano parcelado (spec 018 Task 114).
@@ -265,6 +281,18 @@ export class SubscriptionService {
         );
       }
 
+      if (error instanceof GatewayRejectedError) {
+        // **Recusa não é falha nossa.** O 402 chega como exceção porque o
+        // provedor nega antes de devolver a order — mas o desfecho é o mesmo
+        // do `REJECTED` logo abaixo, e o aluno precisa da mesma frase. Deixar
+        // subir daqui virava "Internal server error" na tela de um cartão sem
+        // limite.
+        this.logger.warn(
+          `Cobrança de ${studentId} recusada pelo emissor: ${error.detail ?? error.message}`,
+        );
+        throw new BadRequestException(CARD_REJECTED_MESSAGE);
+      }
+
       if (error instanceof GatewayBusyError) {
         // 429 é caminho previsto pela doc, não falha de programação: o plano
         // continua gravado e o aluno tenta de novo em instantes.
@@ -306,9 +334,7 @@ export class SubscriptionService {
     }
 
     if (checkout.outcome === CHARGE_OUTCOMES.REJECTED) {
-      throw new BadRequestException(
-        'Pagamento recusado pelo emissor do cartão. Confira os dados ou tente outro cartão.',
-      );
+      throw new BadRequestException(CARD_REJECTED_MESSAGE);
     }
 
     return {

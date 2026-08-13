@@ -1,5 +1,10 @@
 import { BadRequestException, ForbiddenException } from '@nestjs/common';
-import { SubscriptionService, addMonths } from './subscription.service';
+import {
+  CARD_REJECTED_MESSAGE,
+  SubscriptionService,
+  addMonths,
+} from './subscription.service';
+import { GatewayRejectedError } from './mercadopago.gateway';
 import {
   CHARGE_STATUS,
   PAYMENT_METHODS,
@@ -1251,6 +1256,25 @@ describe('SubscriptionService — ciclo de vida da assinatura no gateway', () =>
     await expect(
       service.payWithCard('aluno-1', CARTAO_TOKEN as any),
     ).rejects.toThrow(BadRequestException);
+  });
+
+  it('recusa que chega como exceção (402) também volta como 400', async () => {
+    const { service, card } = build();
+    card.createCheckout.mockRejectedValue(
+      new GatewayRejectedError('Cartão parcelado: recusado pelo emissor'),
+    );
+    await service.choosePlan('aluno-1', {
+      plan: SUBSCRIPTION_PLANS.ANNUAL,
+      paymentMethod: PAYMENT_METHODS.CREDIT_CARD,
+      acceptance: ACEITE,
+    } as any);
+
+    // O mesmo cartão sem limite pode voltar como desfecho `REJECTED` (200) ou
+    // como 402. Se só um dos caminhos virasse 400, o aluno leria "Internal
+    // server error" conforme o humor do provedor.
+    await expect(
+      service.payWithCard('aluno-1', CARTAO_TOKEN as any),
+    ).rejects.toThrow(CARD_REJECTED_MESSAGE);
   });
 
   it('a renovação creditada confirma a próxima parcela e projeta mais uma', async () => {
