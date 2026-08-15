@@ -155,13 +155,31 @@ export class SubscriptionService {
     assertMethodAllowed(dto.plan, dto.paymentMethod);
 
     const existing = await this.subscriptions.findByStudent(studentId);
-    if (existing && existing.status === SUBSCRIPTION_STATUS.ACTIVE) {
-      // Trocar de plano com assinatura ativa exigiria pró-rata e estorno da
-      // parcela em curso — regra que a spec não define. Cancelar antes deixa
-      // a decisão com o aluno e evita cobrar duas vezes o mesmo mês.
-      throw new BadRequestException(
-        'Cancele o plano atual antes de contratar outro.',
-      );
+    if (existing) {
+      // **Período fechado ainda vigente barra a contratação, e não manda
+      // cancelar** (spec 025). Mandar cancelar era o único efeito que o botão
+      // de cancelamento tinha num plano fechado — e o que ele destravava era
+      // pagar de novo meses que já foram pagos. O status nem entra na conta:
+      // o que importa é haver acesso comprado de pé.
+      if (
+        !planConfig(existing.plan).recurring &&
+        existing.accessUntil &&
+        this.hoje() <= existing.accessUntil
+      ) {
+        throw new BadRequestException(
+          `Você já tem o plano ${planConfig(existing.plan).label} contratado até ${existing.accessUntil.split('-').reverse().join('/')}. Contrate um plano novo quando este período terminar.`,
+        );
+      }
+
+      if (existing.status === SUBSCRIPTION_STATUS.ACTIVE) {
+        // Trocar de plano mensal com assinatura ativa exigiria pró-rata e
+        // estorno da parcela em curso — regra que a spec não define. Cancelar
+        // antes deixa a decisão com o aluno e evita cobrar o mesmo mês duas
+        // vezes. Aqui cancelar de fato interrompe alguma coisa.
+        throw new BadRequestException(
+          'Cancele o plano atual antes de contratar outro.',
+        );
+      }
     }
 
     const coupon = dto.couponCode
@@ -737,6 +755,7 @@ export class SubscriptionService {
       return new SubscriptionDto(subscription);
     }
 
+    this.assertCancellable(subscription);
     await this.releaseGatewaySubscription(subscription);
 
     const now = new Date().toISOString();
@@ -756,6 +775,36 @@ export class SubscriptionService {
     await this.subscriptions.save(subscription);
     await this.syncUser(subscription);
     return new SubscriptionDto(subscription);
+  }
+
+  /**
+   * **Plano fechado não se cancela** (spec 025).
+   *
+   * No Semestral e no Anual o aluno *comprou* seis ou doze meses: o valor foi
+   * debitado de uma vez, quem parcela é o emissor do cartão, e o acesso é dele
+   * até o fim do período. Não há renovação a interromper — e um botão que não
+   * interrompe nada acabava fazendo só o que ninguém queria: derrubar o status
+   * para `CANCELLED`, marcar como "Pagamento Pendente" quem pagou o ano
+   * inteiro, apagar do histórico as parcelas que o banco **ainda vai** cobrar,
+   * e liberar a contratação de um plano novo por cima de meses já pagos.
+   *
+   * Quem não quer continuar simplesmente não recontrata quando o período
+   * vence. Devolução de dinheiro é conversa com a dona, não botão.
+   */
+  /** Hoje em 'YYYY-MM-DD'. O acesso vale o **dia** inteiro do vencimento. */
+  private hoje(): string {
+    return new Date().toISOString().slice(0, 10);
+  }
+
+  private assertCancellable(subscription: Subscription): void {
+    if (planConfig(subscription.plan).recurring) return;
+
+    const ate = subscription.accessUntil
+      ? ` Seu acesso segue até ${subscription.accessUntil.split('-').reverse().join('/')}.`
+      : '';
+    throw new BadRequestException(
+      `O plano ${planConfig(subscription.plan).label} é comprado por período, não é assinatura: não há renovação a cancelar.${ate}`,
+    );
   }
 
   /** Parcelas ainda não pagas, da mais próxima para a mais distante (RF5). */
