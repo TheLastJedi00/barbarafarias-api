@@ -12,6 +12,7 @@ import { pickDefined } from '../common/patch';
 import { ResponseUserDto } from './dto/ResponseUser.dto';
 import { UserRepository } from './user.repository';
 import { onboardingCompletedAt } from './onboarding';
+import { extendGrant } from './access-grant';
 import { AuthService } from '../auth/auth.service';
 import { ROLES, Role, resolveRole } from '../types/role';
 import type { AuthenticatedUser } from '../decorators/current-user.decorator';
@@ -155,6 +156,47 @@ export class UserService {
     });
     await this.userRepository.update(user);
     return user;
+  }
+
+  /**
+   * Libera ou revoga o acesso à mão (spec 025).
+   *
+   * **Rota própria, e não um campo do `PUT /users/:id`.** O toggle passou por
+   * lá até agora e não funcionava: `isPaying` no corpo era descartado sempre
+   * que o aluno tinha assinatura, a resposta vinha 200, a tela mostrava "Em
+   * dia" e nada tinha sido gravado — a gerente só descobria quando a professora
+   * não conseguia agendar. Descartar estava certo enquanto o toggle era um
+   * booleano concorrendo com o gateway; o que mudou é que ele deixou de ser
+   * booleano.
+   *
+   * Conceder **soma 30 dias** ao que ainda restava (`extendGrant`); revogar
+   * apaga na hora, sem carência — se a gerente descobriu que o pagamento não
+   * entrou, o acesso não pode sobreviver ao clique.
+   */
+  async setAccessGrant(id: string, active: boolean): Promise<User> {
+    const foundUser = await this.userRepository.findById(id);
+    if (!foundUser) {
+      throw new NotFoundException('User not found');
+    }
+    if (resolveRole(foundUser) !== ROLES.STUDENT) {
+      // Professora e gerente não passam pela barreira de pagamento; conceder
+      // acesso a elas gravaria um campo que ninguém lê e sugeriria, na ficha,
+      // uma mensalidade que não existe.
+      throw new BadRequestException(
+        'Concessão de acesso só se aplica a aluno.',
+      );
+    }
+
+    const until = active
+      ? extendGrant(foundUser.manualAccessUntil, new Date())
+      : null;
+    await this.userRepository.updateManualAccess(id, until);
+
+    return new User({
+      ...foundUser,
+      id,
+      manualAccessUntil: until ?? undefined,
+    });
   }
 
   /**

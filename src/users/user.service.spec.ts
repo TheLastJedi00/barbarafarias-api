@@ -1,4 +1,8 @@
-import { ForbiddenException, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ForbiddenException,
+  NotFoundException,
+} from '@nestjs/common';
 import { UserService } from './user.service';
 import { User } from './user.entity';
 import { ROLES, resolveRole } from '../types/role';
@@ -11,6 +15,7 @@ describe('UserService', () => {
     save: jest.Mock;
     findAll: jest.Mock;
     delete: jest.Mock;
+    updateManualAccess: jest.Mock;
   };
   let authService: {
     createAccount: jest.Mock;
@@ -25,6 +30,7 @@ describe('UserService', () => {
       save: jest.fn().mockResolvedValue('uid-1'),
       findAll: jest.fn().mockResolvedValue([]),
       delete: jest.fn().mockResolvedValue(undefined),
+      updateManualAccess: jest.fn().mockResolvedValue(undefined),
     };
     authService = {
       createAccount: jest.fn().mockResolvedValue(undefined),
@@ -442,6 +448,97 @@ describe('UserService', () => {
 
       const users = await service.getUsersForRequester(teacher);
       expect(users).toHaveLength(0);
+    });
+  });
+
+  /**
+   * Concessão manual de acesso (spec 025).
+   *
+   * O sintoma que originou a rota: a gerente ligava o toggle, recebia 200, a
+   * tela dizia "Em dia" — e nada tinha sido gravado, porque o `isPaying` do
+   * corpo era descartado quando havia assinatura. A gravação em campo próprio,
+   * por rota própria, é o que fecha essa distância entre o que a tela afirma e
+   * o que o banco guarda.
+   */
+  describe('setAccessGrant (spec 025)', () => {
+    const aluno = (extra: Partial<User> = {}) =>
+      new User({
+        id: 'a1',
+        fullName: 'Ana',
+        isPaying: false,
+        role: ROLES.STUDENT,
+        ...extra,
+      });
+
+    it('concede 30 dias e devolve o aluno com a data', async () => {
+      jest.useFakeTimers().setSystemTime(new Date('2026-08-14T12:00:00.000Z'));
+      userRepository.findById.mockResolvedValue(aluno());
+
+      const result = await service.setAccessGrant('a1', true);
+
+      expect(userRepository.updateManualAccess).toHaveBeenCalledWith(
+        'a1',
+        '2026-09-13',
+      );
+      expect(result.manualAccessUntil).toBe('2026-09-13');
+      jest.useRealTimers();
+    });
+
+    it('conceder de novo soma ao que restava', async () => {
+      jest.useFakeTimers().setSystemTime(new Date('2026-08-20T12:00:00.000Z'));
+      userRepository.findById.mockResolvedValue(
+        aluno({ manualAccessUntil: '2026-08-31' }),
+      );
+
+      await service.setAccessGrant('a1', true);
+
+      expect(userRepository.updateManualAccess).toHaveBeenCalledWith(
+        'a1',
+        '2026-09-30',
+      );
+      jest.useRealTimers();
+    });
+
+    it('revogar apaga a concessão na hora, sem carência', async () => {
+      userRepository.findById.mockResolvedValue(
+        aluno({ manualAccessUntil: '2027-01-01' }),
+      );
+
+      const result = await service.setAccessGrant('a1', false);
+
+      // `null`, e não `undefined`: no Firestore, chave ausente num `merge`
+      // significa "não mexi nisso" — e revogar precisa apagar de fato.
+      expect(userRepository.updateManualAccess).toHaveBeenCalledWith('a1', null);
+      expect(result.manualAccessUntil).toBeUndefined();
+    });
+
+    /**
+     * A gravação é cirúrgica de propósito: `update(user)` reescreveria o
+     * documento inteiro a partir de uma cópia lida antes, desfazendo o que um
+     * webhook do gateway tivesse salvo no meio do caminho.
+     */
+    it('não reescreve o documento inteiro', async () => {
+      userRepository.findById.mockResolvedValue(aluno());
+      await service.setAccessGrant('a1', true);
+      expect(userRepository.update).not.toHaveBeenCalled();
+    });
+
+    it('recusa quem não é aluno', async () => {
+      userRepository.findById.mockResolvedValue(
+        new User({ id: 't1', fullName: 'Bárbara', role: ROLES.TEACHER }),
+      );
+
+      await expect(service.setAccessGrant('t1', true)).rejects.toThrow(
+        BadRequestException,
+      );
+      expect(userRepository.updateManualAccess).not.toHaveBeenCalled();
+    });
+
+    it('404 para quem não existe', async () => {
+      userRepository.findById.mockResolvedValue(null);
+      await expect(service.setAccessGrant('x', true)).rejects.toThrow(
+        NotFoundException,
+      );
     });
   });
 });

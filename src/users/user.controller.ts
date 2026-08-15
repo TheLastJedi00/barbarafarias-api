@@ -18,6 +18,7 @@ import { CurrentUser } from '../decorators/current-user.decorator';
 import type { AuthenticatedUser } from '../decorators/current-user.decorator';
 import { ResponseUserDto } from './dto/ResponseUser.dto';
 import { InviteUserDto } from './dto/InviteUser.dto';
+import { AccessGrantDto } from './dto/AccessGrant.dto';
 import { UserService, missingOnboardingFields } from './user.service';
 import { ROLES } from '../types/role';
 import type { Role } from '../types/role';
@@ -49,6 +50,21 @@ export class UserController {
   @Roles(ROLES.MANAGER)
   async resendInvite(@Param('id') id: string): Promise<void> {
     return this.service.resendInvite(id);
+  }
+
+  /**
+   * Libera ou revoga o acesso à mão (spec 025). **Só a gerente**: é ela quem
+   * recebe a mensalidade por fora do gateway, e é o dinheiro que este clique
+   * registra. A professora edita a ficha pedagógica do aluno dela — nível e
+   * prognóstico —, não o que ele pagou.
+   */
+  @Post(':id/access-grant')
+  @Roles(ROLES.MANAGER)
+  async setAccessGrant(
+    @Param('id') id: string,
+    @Body() dto: AccessGrantDto,
+  ): Promise<User> {
+    return this.service.setAccessGrant(id, dto.active);
   }
 
   /**
