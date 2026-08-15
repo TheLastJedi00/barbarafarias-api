@@ -1014,6 +1014,85 @@ describe('SubscriptionService — cupons', () => {
 });
 
 describe('SubscriptionService — cancelamento e cobranças', () => {
+  /**
+   * A falha silenciosa que motiva a spec 025: contratar por cima de um período
+   * já pago cobra duas vezes os mesmos meses.
+   *
+   * O caminho existia e era **recomendado pela própria mensagem de erro** —
+   * "Cancele o plano atual antes de contratar outro" —, e cancelar um plano
+   * fechado não devolvia dinheiro nem encurtava nada. O aluno seguia a
+   * instrução da tela e pagava de novo por meses que já eram dele.
+   */
+  it('não deixa contratar por cima de um período fechado ainda vigente', async () => {
+    const { service, card } = build();
+    card.createCheckout.mockResolvedValue({
+      id: 'ORD01ABC',
+      provider: 'MERCADOPAGO',
+      outcome: 'PAID',
+    });
+    await service.choosePlan('aluno-1', {
+      plan: SUBSCRIPTION_PLANS.ANNUAL,
+      paymentMethod: PAYMENT_METHODS.CREDIT_CARD,
+      acceptance: ACEITE,
+    } as any);
+    await service.payWithCard('aluno-1', CARTAO_TOKEN as any);
+
+    await expect(
+      service.choosePlan('aluno-1', {
+        plan: SUBSCRIPTION_PLANS.MONTHLY,
+        paymentMethod: PAYMENT_METHODS.CREDIT_CARD,
+        acceptance: ACEITE,
+      } as any),
+    ).rejects.toThrow(/já tem o plano/);
+  });
+
+  /**
+   * E a recusa não pode mandar cancelar: a saída que a mensagem antiga
+   * apontava agora está fechada, e apontar para ela seria um beco.
+   */
+  it('a recusa do período vigente não manda cancelar', async () => {
+    const { service, card } = build();
+    card.createCheckout.mockResolvedValue({
+      id: 'ORD01ABC',
+      provider: 'MERCADOPAGO',
+      outcome: 'PAID',
+    });
+    await service.choosePlan('aluno-1', {
+      plan: SUBSCRIPTION_PLANS.ANNUAL,
+      paymentMethod: PAYMENT_METHODS.CREDIT_CARD,
+      acceptance: ACEITE,
+    } as any);
+    await service.payWithCard('aluno-1', CARTAO_TOKEN as any);
+
+    await expect(
+      service.choosePlan('aluno-1', {
+        plan: SUBSCRIPTION_PLANS.ANNUAL,
+        paymentMethod: PAYMENT_METHODS.CREDIT_CARD,
+        acceptance: ACEITE,
+      } as any),
+    ).rejects.not.toThrow(/[Cc]ancele/);
+  });
+
+  /**
+   * Contrapartida: plano fechado escolhido e **nunca pago** não tem acesso a
+   * proteger. Barrar aqui prenderia para sempre quem abandonou o pagamento no
+   * meio — que é justamente o fluxo de recomeço da spec 023.
+   */
+  it('plano fechado sem parcela paga não impede contratar outro', async () => {
+    const { service, subscriptions } = build();
+    await service.choosePlan('aluno-1', {
+      plan: SUBSCRIPTION_PLANS.ANNUAL,
+      paymentMethod: PAYMENT_METHODS.CREDIT_CARD,
+      acceptance: ACEITE,
+    } as any);
+
+    await service.choosePlan('aluno-1', PIX as any);
+
+    expect(subscriptions.store.get('aluno-1')!.plan).toBe(
+      SUBSCRIPTION_PLANS.MONTHLY,
+    );
+  });
+
   it('cancelar guarda a data e apaga as parcelas ainda não pagas', async () => {
     const { service, subscriptions } = build();
     await service.choosePlan('aluno-1', PIX as any);
@@ -1027,7 +1106,17 @@ describe('SubscriptionService — cancelamento e cobranças', () => {
     expect(subscriptions.store.get('aluno-1')!.charges).toHaveLength(1);
   });
 
-  it('cancelar o parcelado preserva o acesso do período comprado', async () => {
+  /**
+   * Spec 025. Este teste afirmava que **cancelar o Anual preservava o acesso**
+   * — e essa era a denúncia: um cancelamento que não cancela nada.
+   *
+   * No plano fechado o dinheiro já saiu inteiro, o emissor continua faturando
+   * e o período é do aluno. Não havia recorrência a interromper; o que o botão
+   * de fato fazia era derrubar o status, marcar como pendente quem pagou o ano
+   * e apagar do histórico as parcelas que o banco ainda vai cobrar. Agora o
+   * acesso é preservado por construção, porque não há por onde derrubá-lo.
+   */
+  it('o parcelado recusa o cancelamento, e o acesso segue de pé', async () => {
     const { service, subscriptions, card } = build();
     card.createCheckout.mockResolvedValue({
       id: 'ORD01ABC',
@@ -1042,14 +1131,64 @@ describe('SubscriptionService — cancelamento e cobranças', () => {
     await service.payWithCard('aluno-1', CARTAO_TOKEN as any);
     const { startDate } = subscriptions.store.get('aluno-1')!;
 
-    const cancelled = await service.cancelSubscription('aluno-1');
-
-    // O dinheiro já saiu inteiro e o emissor continua faturando. Derrubar o
-    // acesso aqui seria cobrar por um ano e entregar o dia do cancelamento.
-    expect(cancelled.status).toBe(SUBSCRIPTION_STATUS.CANCELLED);
-    expect(subscriptions.store.get('aluno-1')!.accessUntil).toBe(
-      addMonths(startDate, 12),
+    await expect(service.cancelSubscription('aluno-1')).rejects.toThrow(
+      BadRequestException,
     );
+
+    const gravada = subscriptions.store.get('aluno-1')!;
+    expect(gravada.status).toBe(SUBSCRIPTION_STATUS.ACTIVE);
+    expect(gravada.accessUntil).toBe(addMonths(startDate, 12));
+    // As parcelas que o emissor ainda vai cobrar continuam no histórico: era
+    // isso que o cancelamento apagava, e é o que o aluno precisa conferir
+    // contra a fatura.
+    expect(gravada.charges).toHaveLength(12);
+  });
+
+  it('o Semestral recusa pelo mesmo motivo, e diz até quando o acesso vale', async () => {
+    const { service, subscriptions, card } = build();
+    card.createCheckout.mockResolvedValue({
+      id: 'ORD01ABC',
+      provider: 'MERCADOPAGO',
+      outcome: 'PAID',
+    });
+    await service.choosePlan('aluno-1', {
+      plan: SUBSCRIPTION_PLANS.SEMIANNUAL,
+      paymentMethod: PAYMENT_METHODS.CREDIT_CARD,
+      acceptance: ACEITE,
+    } as any);
+    await service.payWithCard('aluno-1', CARTAO_TOKEN as any);
+
+    await expect(service.cancelSubscription('aluno-1')).rejects.toThrow(
+      /comprado por período/,
+    );
+    expect(subscriptions.store.get('aluno-1')!.status).toBe(
+      SUBSCRIPTION_STATUS.ACTIVE,
+    );
+  });
+
+  /**
+   * Dado antigo: quem cancelou um Anual antes desta spec está em `CANCELLED`
+   * com acesso vigente. Chamar cancelar de novo não pode explodir — a
+   * idempotência responde antes da recusa, porque não há o que impedir.
+   */
+  it('parcelado já cancelado continua respondendo, sem estourar', async () => {
+    const { service, subscriptions, card } = build();
+    card.createCheckout.mockResolvedValue({
+      id: 'ORD01ABC',
+      provider: 'MERCADOPAGO',
+      outcome: 'PAID',
+    });
+    await service.choosePlan('aluno-1', {
+      plan: SUBSCRIPTION_PLANS.ANNUAL,
+      paymentMethod: PAYMENT_METHODS.CREDIT_CARD,
+      acceptance: ACEITE,
+    } as any);
+    await service.payWithCard('aluno-1', CARTAO_TOKEN as any);
+    subscriptions.store.get('aluno-1')!.status = SUBSCRIPTION_STATUS.CANCELLED;
+
+    const resposta = await service.cancelSubscription('aluno-1');
+
+    expect(resposta.status).toBe(SUBSCRIPTION_STATUS.CANCELLED);
   });
 
   it('cancelar o mensal vale até o fim do ciclo já pago', async () => {
