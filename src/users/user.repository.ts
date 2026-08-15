@@ -114,6 +114,23 @@ export class UserRepository {
       );
   }
 
+  /**
+   * Grava só a concessão manual da gerente (spec 025). `merge` cirúrgico pelo
+   * mesmo motivo do método acima, e com uma simetria proposital: os dois campos
+   * de acesso têm gravações separadas porque têm autores separados — o gateway
+   * e a gerente —, e nenhum dos dois pode apagar o do outro.
+   *
+   * `null` revoga: no Firestore, ausência de chave num `merge` significa "não
+   * mexi nisso", e revogar precisa de um valor explícito para apagar o que está
+   * lá.
+   */
+  async updateManualAccess(id: string, until: string | null): Promise<void> {
+    await this.db
+      .collection('users')
+      .doc(id)
+      .set({ manualAccessUntil: until }, { merge: true });
+  }
+
   async delete(id: string): Promise<void> {
     await this.db.collection('users').doc(id).delete();
   }
