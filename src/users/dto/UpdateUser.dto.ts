@@ -20,9 +20,15 @@ export class UpdateUserDto {
   @IsOptional()
   email?: string;
 
-  @IsBoolean()
-  @IsOptional()
-  isPaying?: boolean;
+  /*
+   * `isPaying` **não é campo desta rota** (spec 025).
+   *
+   * Ele esteve aqui e não funcionava: quando o aluno tinha assinatura, o valor
+   * era descartado em silêncio, a resposta vinha 200 e a tela dizia "Em dia"
+   * sobre algo que nunca foi gravado. Com `forbidNonWhitelisted`, mandá-lo
+   * agora recusa o pedido — que é o certo: acesso passa por
+   * `POST /users/:id/access-grant`, e falhar alto é melhor que fingir sucesso.
+   */
 
   @IsBoolean()
   @IsOptional()

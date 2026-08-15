@@ -149,11 +149,7 @@ export class UserService {
     this.assertCanReach(requester, id, foundUser);
     // merge over the existing user and pin the id from the route param,
     // so partial updates don't wipe fields nor depend on the request body id
-    const user = new User({
-      ...foundUser,
-      ...this.withDerivedIsPaying(foundUser, dto),
-      id,
-    });
+    const user = new User({ ...foundUser, ...dto, id });
     await this.userRepository.update(user);
     return user;
   }
@@ -235,26 +231,19 @@ export class UserService {
     return new User(rest);
   }
 
-  /**
-   * `isPaying` deixa de ser um interruptor manual assim que o aluno tem uma
-   * assinatura (spec 012 Task 18): quem manda passa a ser o status dela, que o
-   * `SubscriptionService` espelha aqui. Uma edição manual seria desfeita na
-   * próxima cobrança de qualquer jeito — descartá-la já evita que o painel da
-   * gerente e a barreira de acesso discordem no meio do caminho.
+  /*
+   * `withDerivedIsPaying` foi removido na spec 025.
    *
-   * **Retrocompatibilidade:** aluno sem assinatura continua exatamente como
-   * antes, com a gerente marcando o pagamento à mão. Não há migração forçada.
+   * Ele descartava o `isPaying` do corpo quando o aluno tinha assinatura, e a
+   * intenção era correta: o status da assinatura manda, e uma edição manual
+   * seria desfeita na cobrança seguinte de qualquer forma. O que estava errado
+   * era **descartar calado** — o pedido voltava 200, a tela mostrava "Em dia" e
+   * o banco não mudava. A gerente descobria quando a professora não conseguia
+   * agendar.
+   *
+   * Agora o campo não existe nesta rota: com `forbidNonWhitelisted`, mandá-lo
+   * é 400. Acesso passa por `setAccessGrant`, que grava de verdade.
    */
-  private withDerivedIsPaying(
-    current: User,
-    dto: UpdateUserDto,
-  ): UpdateUserDto {
-    if (!current.subscriptionStatus || dto.isPaying === undefined) {
-      return dto;
-    }
-    const { isPaying, ...rest } = dto;
-    return rest;
-  }
 
   private assertCanReach(
     requester: AuthenticatedUser,

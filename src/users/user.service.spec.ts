@@ -292,37 +292,38 @@ describe('UserService', () => {
       expect(userRepository.update).toHaveBeenCalledTimes(1);
     });
 
-    // spec 012 Task 18 — isPaying derivado da assinatura, com retrocompat.
-    it('aluno sem assinatura continua com o isPaying manual', async () => {
-      userRepository.findById.mockResolvedValue(
-        new User({ id: 'a1', fullName: 'Ana', isPaying: false }),
-      );
-
-      const result = await service.updateUser(manager, 'a1', {
-        isPaying: true,
-      } as any);
-
-      expect(result.isPaying).toBe(true);
-    });
-
-    it('aluno com assinatura ignora o isPaying enviado à mão', async () => {
+    /**
+     * Spec 025. Os dois testes que viviam aqui provavam o contrato antigo: o
+     * `isPaying` do corpo era **descartado em silêncio** quando havia
+     * assinatura. A intenção era certa — o status da assinatura manda —, mas o
+     * silêncio era a falha: 200, tela dizendo "Em dia", banco intacto.
+     *
+     * O campo saiu do `UpdateUserDto`, e com `forbidNonWhitelisted` mandá-lo
+     * agora é 400 na fronteira, antes de chegar aqui. O que este teste
+     * garante é o outro lado: sem o descarte, a rota parou de mexer em acesso
+     * por conta própria.
+     */
+    it('a edição não altera o acesso do aluno', async () => {
       userRepository.findById.mockResolvedValue(
         new User({
           id: 'a1',
           fullName: 'Ana',
-          isPaying: true,
-          subscriptionStatus: 'ACTIVE',
+          isPaying: false,
+          manualAccessUntil: '2026-09-13',
+          subscriptionStatus: 'PAST_DUE',
         }),
       );
 
       const result = await service.updateUser(manager, 'a1', {
-        isPaying: false,
         fullName: 'Ana Paula',
+        level: 'B1',
       } as any);
 
-      expect(result.isPaying).toBe(true);
-      // os demais campos do mesmo PATCH continuam valendo
       expect(result.fullName).toBe('Ana Paula');
+      expect(result.level).toBe('B1');
+      // Nem o booleano nem a concessão foram tocados pela edição da ficha.
+      expect(result.isPaying).toBe(false);
+      expect(result.manualAccessUntil).toBe('2026-09-13');
     });
   });
 
