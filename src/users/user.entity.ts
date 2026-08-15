@@ -22,6 +22,20 @@ export class User {
    * uma leitura por duas em todo o sistema.
    */
   accessUntil?: string;
+  /**
+   * Acesso liberado à mão pela gerente (spec 025). Vale 30 dias por concessão,
+   * porque o gesto dela é o registro de uma mensalidade recebida fora do
+   * gateway — e um mês recebido vale um mês, como no PIX pré-pago (spec 024 §2).
+   *
+   * **Campo próprio, e não o `accessUntil` acima**, apesar de os dois
+   * responderem "até quando este aluno tem acesso". O que os separa é quem
+   * escreve: `accessUntil` é espelho da assinatura, e o `syncUser` o reescreve
+   * a cada evento do gateway. Uma concessão manual gravada lá é apagada pelo
+   * webhook seguinte sem erro nenhum — e a gerente só descobre quando a
+   * professora não consegue agendar de novo. Quem soma as duas metades é o
+   * `hasPaidAccess`.
+   */
+  manualAccessUntil?: string;
   /** @deprecated substituído por `role`; mantido durante a migração (spec 010 §2.1). */
   isTeacher!: boolean;
   role?: Role;
