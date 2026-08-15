@@ -45,4 +45,54 @@ describe('hasPaidAccess', () => {
     // Aluno anterior à spec 012 não tem o campo, e a barreira nunca foi dele.
     expect(hasPaidAccess({})).toBe(true);
   });
+
+  /**
+   * Concessão manual (spec 025). A gerente recebe a mensalidade por fora do
+   * gateway e liga o toggle: é o mesmo fato — um mês recebido —, registrado à
+   * mão.
+   */
+  describe('concessão da gerente', () => {
+    it('libera quem tem concessão vigente, sem assinatura nenhuma', () => {
+      expect(
+        hasPaidAccess(
+          { isPaying: false, manualAccessUntil: '2026-09-13' },
+          em('2026-08-14'),
+        ),
+      ).toBe(true);
+    });
+
+    it('não libera com a concessão vencida', () => {
+      expect(
+        hasPaidAccess(
+          { isPaying: false, manualAccessUntil: '2026-08-13' },
+          em('2026-08-14'),
+        ),
+      ).toBe(false);
+    });
+
+    /**
+     * O motivo de o campo existir. `syncUser` reescreve `accessUntil` a cada
+     * evento do gateway — aqui ele chegou como `null`, que é o que uma
+     * assinatura sem parcela paga produz. Se a concessão morasse naquele
+     * campo, este webhook a teria apagado, e a gerente descobriria pela
+     * professora que não consegue agendar.
+     */
+    it('sobrevive ao webhook que zera o espelho da assinatura', () => {
+      const aluno = {
+        isPaying: false,
+        accessUntil: undefined,
+        manualAccessUntil: '2026-09-13',
+      };
+      expect(hasPaidAccess(aluno, em('2026-08-14'))).toBe(true);
+    });
+
+    it('basta uma das metades: a da assinatura vale sozinha', () => {
+      expect(
+        hasPaidAccess(
+          { isPaying: false, accessUntil: '2027-08-11', manualAccessUntil: '2026-01-01' },
+          em('2026-08-14'),
+        ),
+      ).toBe(true);
+    });
+  });
 });
