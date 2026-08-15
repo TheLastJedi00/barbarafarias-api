@@ -17,12 +17,24 @@
  * para de rodar.
  */
 export function hasPaidAccess(
-  user: { isPaying?: boolean; accessUntil?: string },
+  user: {
+    isPaying?: boolean;
+    accessUntil?: string;
+    manualAccessUntil?: string;
+  },
   hoje: Date = new Date(),
 ): boolean {
   if (user.isPaying !== false) return true;
-  if (!user.accessUntil) return false;
+
   // Comparação por data, não por instante: o acesso vale o **dia** inteiro do
   // vencimento. Cortar às 00:00 tiraria da aluna o último dia que ela comprou.
-  return hoje.toISOString().slice(0, 10) <= user.accessUntil;
+  const dia = hoje.toISOString().slice(0, 10);
+
+  // Duas metades, e basta uma. A da assinatura é o que o gateway confirmou; a
+  // manual é o que a gerente recebeu por fora e registrou (spec 025). Somar
+  // aqui é o que permite ao `syncUser` continuar reescrevendo o espelho da
+  // assinatura sem derrubar a concessão dela.
+  if (user.accessUntil && dia <= user.accessUntil) return true;
+  if (user.manualAccessUntil && dia <= user.manualAccessUntil) return true;
+  return false;
 }
