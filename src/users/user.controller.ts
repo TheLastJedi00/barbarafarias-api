@@ -61,10 +61,17 @@ export class UserController {
   @Post(':id/access-grant')
   @Roles(ROLES.MANAGER)
   async setAccessGrant(
+    @CurrentUser() manager: AuthenticatedUser,
     @Param('id') id: string,
     @Body() dto: AccessGrantDto,
   ): Promise<User> {
-    return this.service.setAccessGrant(id, dto.active);
+    // `amount` só vale na concessão e `refund` só na revogação (spec 026);
+    // o que vier fora do lugar é ignorado em vez de virar erro.
+    return this.service.setAccessGrant(id, dto.active, {
+      amount: dto.active ? dto.amount : undefined,
+      refund: dto.active ? undefined : dto.refund,
+      actorId: manager.sub,
+    });
   }
 
   /**
