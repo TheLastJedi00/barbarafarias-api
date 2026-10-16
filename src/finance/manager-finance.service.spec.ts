@@ -10,6 +10,7 @@ import {
   netOfGatewayFee,
 } from '../subscriptions/subscription.entity';
 import type { Charge } from '../subscriptions/subscription.entity';
+import { ManualPayment } from '../manual-payments/manual-payment.entity';
 
 function charges(
   from: string,
@@ -49,6 +50,7 @@ function build(
     closings?: { isManager: boolean; total: number }[];
     infraByMonth?: number;
     goal?: Partial<RevenueGoal>;
+    manual?: ManualPayment[];
   } = {},
 ) {
   const billingSummary = {
@@ -72,11 +74,23 @@ function build(
       .mockResolvedValue(new RevenueGoal({ year: 2026, ...options.goal })),
   };
 
+  const manualPayments = {
+    findByMonth: jest.fn(async (month: string) =>
+      (options.manual ?? []).filter((payment) => payment.month === month),
+    ),
+    findByYear: jest.fn(async (year: number) =>
+      (options.manual ?? []).filter((payment) =>
+        payment.month.startsWith(String(year)),
+      ),
+    ),
+  };
+
   const service = new ManagerFinanceService(
     billingSummary as any,
     subscriptionRepository as any,
     infra as any,
     goals as any,
+    manualPayments as any,
   );
   return { service, billingSummary, subscriptionRepository, infra, goals };
 }

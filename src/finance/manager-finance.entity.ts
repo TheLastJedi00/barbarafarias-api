@@ -3,8 +3,13 @@
 export interface MonthlyOverview {
   /** 'YYYY-MM'. */
   month: string;
-  /** Soma das parcelas programadas para o mês nas assinaturas ativas (§5). */
+  /**
+   * Parcelas programadas para o mês nas assinaturas ativas (§5) **mais** o
+   * recebido por fora (spec 026).
+   */
   revenue: number;
+  /** Parte da receita que entrou por fora do gateway (spec 026 §9). */
+  manualRevenue: number;
   /** Folha das professoras no fechamento do mês, sem a gerente (RF11). */
   teacherExpenses: number;
   /** Snapshot de infraestrutura vigente naquele mês (RF10). */
