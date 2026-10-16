@@ -18,6 +18,10 @@ import { ROLES, Role, resolveRole } from '../types/role';
 import type { AuthenticatedUser } from '../decorators/current-user.decorator';
 import { randomUUID } from 'node:crypto';
 import { ManualPaymentRepository } from '../manual-payments/manual-payment.repository';
+import {
+  ManualPayment,
+  isCounted,
+} from '../manual-payments/manual-payment.entity';
 import { todayInAppTimezone } from '../common/time';
 
 /** Opções da concessão manual (spec 026 §9–§10). */
@@ -209,6 +213,9 @@ export class UserService {
     if (active && options.amount !== undefined) {
       await this.recordManualPayment(id, foundUser, until!, now, options);
     }
+    if (!active && options.refund) {
+      await this.voidLastManualPayment(id, now, options.actorId);
+    }
 
     return new User({
       ...foundUser,
@@ -250,6 +257,36 @@ export class UserService {
       );
       throw error;
     }
+  }
+
+  /**
+   * Último lançamento **não estornado** do aluno — o que corresponde à
+   * concessão que está sendo desfeita (spec 026 §10.1). O form de revogação o
+   * mostra para a gerente saber o que está estornando.
+   */
+  async lastManualPayment(studentId: string): Promise<ManualPayment | null> {
+    const payments = await this.manualPayments.findByStudent(studentId);
+    return payments.find(isCounted) ?? null;
+  }
+
+  /**
+   * Estorno **não apaga** (spec 026 §10.1): marca `voidedAt` e o lançamento
+   * sai da receita do mês em que entrou, mas segue no histórico. Sem
+   * lançamento a estornar (concessão anterior à spec, ou já estornada), não há
+   * o que fazer — a revogação do acesso, que já aconteceu, é o que importa.
+   */
+  private async voidLastManualPayment(
+    studentId: string,
+    now: Date,
+    actorId?: string,
+  ): Promise<void> {
+    const last = await this.lastManualPayment(studentId);
+    if (!last) return;
+    await this.manualPayments.markVoided(
+      last.id,
+      now.toISOString(),
+      actorId ?? '',
+    );
   }
 
   /**
