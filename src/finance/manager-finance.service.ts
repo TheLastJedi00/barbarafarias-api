@@ -185,7 +185,7 @@ export class ManagerFinanceService {
     return {
       total: round2(sumScheduledCharges(active, month) + manualTotal),
       manual: manualTotal,
-      activeStudents: active.length,
+      activeStudents: countPayingStudents(active, manual, month),
     };
   }
 
@@ -258,6 +258,25 @@ export function sumManualPayments(
         .map((payment) => payment.amount),
     ),
   );
+}
+
+/**
+ * Alunos ativos **pagantes** do mês: quem tem assinatura ativa, mais quem pagou
+ * por fora naquele mês (spec 026 §10.3). Cortesia não entra — não é aluno
+ * pagante —, nem lançamento estornado. Quem tem as duas coisas conta uma vez.
+ */
+export function countPayingStudents(
+  subscriptions: Subscription[],
+  payments: ManualPayment[],
+  month: string,
+): number {
+  const paying = new Set(subscriptions.map((subscription) => subscription.studentId));
+  for (const payment of payments) {
+    if (payment.month === month && isCounted(payment) && payment.amount > 0) {
+      paying.add(payment.studentId);
+    }
+  }
+  return paying.size;
 }
 
 export const MONTH_LABELS = [
