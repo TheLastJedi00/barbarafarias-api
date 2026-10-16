@@ -13,6 +13,7 @@ import { monthsOfYear } from './infra-expense.entity';
 import {
   AnnualOverview,
   ChartData,
+  ManualPaymentsMonth,
   MonthData,
   MonthlyOverview,
 } from './manager-finance.entity';
@@ -21,6 +22,7 @@ import { ManualPaymentRepository } from '../manual-payments/manual-payment.repos
 import {
   ManualPayment,
   isCounted,
+  isCourtesy,
 } from '../manual-payments/manual-payment.entity';
 
 /**
@@ -140,6 +142,27 @@ export class ManagerFinanceService {
           kind: 'line',
         },
       ],
+    };
+  }
+
+  /** Lista "Recebido por fora" do mês (spec 026 §10.3), do mais antigo ao mais novo. */
+  async getManualPayments(month: string): Promise<ManualPaymentsMonth> {
+    const payments = await this.manualPayments.findByMonth(month);
+    return {
+      month,
+      total: sumManualPayments(payments, month),
+      courtesies: payments.filter(isCourtesy).length,
+      items: payments.map((payment) => ({
+        id: payment.id,
+        studentId: payment.studentId,
+        studentName: payment.studentName,
+        amount: payment.amount,
+        grantedAt: payment.grantedAt,
+        accessUntil: payment.accessUntil,
+        courtesy: isCourtesy(payment),
+        voided: !isCounted(payment),
+        voidedAt: payment.voidedAt,
+      })),
     };
   }
 

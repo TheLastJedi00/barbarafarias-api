@@ -55,3 +55,29 @@ export interface ChartData {
   labels: string[];
   datasets: ChartDataset[];
 }
+
+/**
+ * Linha da lista "Recebido por fora" (spec 026 §10.3). Traz cortesias e
+ * estornados, marcados, para a gerente conferir o mês — a soma do overview só
+ * conta os que valem.
+ */
+export interface ManualPaymentLine {
+  id: string;
+  studentId: string;
+  studentName?: string;
+  amount: number;
+  grantedAt: string;
+  accessUntil: string;
+  courtesy: boolean;
+  voided: boolean;
+  voidedAt?: string;
+}
+
+export interface ManualPaymentsMonth {
+  month: string;
+  /** Soma do que vale (sem estornados). */
+  total: number;
+  /** Quantas cortesias o mês teve, estornadas ou não. */
+  courtesies: number;
+  items: ManualPaymentLine[];
+}
