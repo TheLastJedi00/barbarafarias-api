@@ -3,12 +3,12 @@
 
 O projeto adotará um modelo baseado no **GitHub Flow simplificado**, focado em agilidade de entrega e rastreabilidade atômica das tarefas.
 
-> **Contexto deste projeto:** dois repositórios — front (`fariasbarbara`, Angular na Vercel) e back (`barbarafarias-api`, NestJS). Cada spec pode tocar um ou os dois. Os PRs são abertos via **GitHub CLI** (`gh`, já autenticado na máquina).
+> **Contexto deste projeto:** dois repositórios — front (`fariasbarbara`, Angular no Firebase Hosting) e back (`barbarafarias-api`, NestJS na Vercel). Cada spec pode tocar um ou os dois. Os PRs são abertos via **GitHub CLI** (`gh`, já autenticado na máquina).
 
 ## 5.1. Estrutura de Branches
 
-- **`main`:** branch de **produção**. Só recebe código já validado em staging, via promoção `dev → main`. É o que a Vercel publica em produção — nunca se abre PR de feature/release direto contra ela.
-- **`dev`:** branch de **staging/homologação** (integração). É o **alvo de todos os PRs** de feature/release/fix. O dono mescla aqui, **valida em staging** (preview da Vercel), e só então promove para a `main`. Criada a partir da `main`; mantida viva entre specs (normalmente fica alguns commits à frente da `main`, com trabalho já testado ainda não promovido).
+- **`main`:** branch de **produção**. Só recebe código já validado em staging, via promoção `dev → main`. É o que vai para produção (ver 5.4) — nunca se abre PR de feature/release direto contra ela.
+- **`dev`:** branch de **staging/homologação** (integração). É o **alvo de todos os PRs** de feature/release/fix. O dono mescla aqui, **valida em staging** (front no projeto Firebase `barbarafarias-dev`, back no ambiente de staging da Vercel), e só então promove para a `main`. Criada a partir da `main`; mantida viva entre specs (normalmente fica alguns commits à frente da `main`, com trabalho já testado ainda não promovido).
 - **`feature/nome-da-feature`:** branches temporárias e paralelas onde o desenvolvimento acontece (ex.: `feature/fase1-curriculum-api`, `feature/fase2-prompt-manager`).
 
 > **Por que staging (`dev`):** a `dev` dá uma casa para validar cada spec **antes** de chegar à produção — o dono confere o comportamento no preview antes de promover. Regra de ouro: **PR de trabalho sempre contra `dev`; `main` só via promoção.**
@@ -100,8 +100,9 @@ git push origin feature/fase1-infra-backend
 
 ## 5.4. Deploy
 
-O deploy é feito pela **Vercel** em ambos os repositórios:
+Cada repositório publica num lugar diferente, mas os dois seguem as mesmas branches — **`main` → produção**; **`dev` → staging** (é onde o dono valida cada spec antes de promover):
 
-- **`main` → produção**; **`dev` → preview/staging** (é onde o dono valida cada spec antes de promover).
-- O deploy acompanha o merge nas branches — não há passos manuais de publicação fora da Vercel.
+- **Front (`fariasbarbara`) → Firebase Hosting**, via GitHub Actions (`.github/workflows/`). O push na `dev` builda com `--configuration development` e publica no projeto `barbarafarias-dev`; o push na `main` builda com `--configuration production` e publica no projeto `barbarafarias`.
+- **Back (`barbarafarias-api`) → Vercel** (`vercel.json`), pela integração Git da própria Vercel.
+- O deploy acompanha o merge nas branches — não há passos manuais de publicação.
 - **Sem deploy de Firestore Rules:** este projeto **não** publica `firestore.rules`. O cliente (front) não acessa o Firestore diretamente — fala com a **API NestJS**, que usa o **Admin SDK** (ignora as rules). Logo, alterações de dados não exigem nenhum passo separado de deploy de regras. (`firebase.json` no FE cobre apenas hosting estático.)
