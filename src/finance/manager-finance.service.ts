@@ -13,10 +13,17 @@ import { monthsOfYear } from './infra-expense.entity';
 import {
   AnnualOverview,
   ChartData,
+  ManualPaymentsMonth,
   MonthData,
   MonthlyOverview,
 } from './manager-finance.entity';
 import { todayInAppTimezone } from '../common/time';
+import { ManualPaymentRepository } from '../manual-payments/manual-payment.repository';
+import {
+  ManualPayment,
+  isCounted,
+  isCourtesy,
+} from '../manual-payments/manual-payment.entity';
 
 /**
  * Visão consolidada do negócio para a gerente (spec 012 RF6, RF7, RF12).
@@ -34,6 +41,7 @@ export class ManagerFinanceService {
     private readonly subscriptions: SubscriptionRepository,
     private readonly infraExpenses: InfraExpenseService,
     private readonly goals: RevenueGoalService,
+    private readonly manualPayments: ManualPaymentRepository,
   ) {}
 
   async getMonthlyOverview(month: string): Promise<MonthlyOverview> {
@@ -47,6 +55,7 @@ export class ManagerFinanceService {
     return {
       month,
       revenue: revenue.total,
+      manualRevenue: revenue.manual,
       teacherExpenses,
       infraExpenses,
       profit: round2(revenue.total - teacherExpenses - infraExpenses),
@@ -63,15 +72,19 @@ export class ManagerFinanceService {
    */
   async getAnnualOverview(year: number): Promise<AnnualOverview> {
     const months = monthsOfYear(year);
-    const [active, infraBreakdown, goals, teacherExpenses] = await Promise.all([
-      this.activeSubscriptions(),
-      this.infraExpenses.getAnnualBreakdown(year),
-      this.goals.getGoals(year),
-      Promise.all(months.map((month) => this.teacherExpensesForMonth(month))),
-    ]);
+    const [active, infraBreakdown, goals, teacherExpenses, manual] =
+      await Promise.all([
+        this.activeSubscriptions(),
+        this.infraExpenses.getAnnualBreakdown(year),
+        this.goals.getGoals(year),
+        Promise.all(months.map((month) => this.teacherExpensesForMonth(month))),
+        this.manualPayments.findByYear(year),
+      ]);
 
     const data: MonthData[] = months.map((month, index) => {
-      const revenue = sumScheduledCharges(active, month);
+      const revenue = round2(
+        sumScheduledCharges(active, month) + sumManualPayments(manual, month),
+      );
       const infra = infraBreakdown[index].amount;
       const teachers = teacherExpenses[index];
       return {
@@ -132,20 +145,47 @@ export class ManagerFinanceService {
     };
   }
 
+  /** Lista "Recebido por fora" do mês (spec 026 §10.3), do mais antigo ao mais novo. */
+  async getManualPayments(month: string): Promise<ManualPaymentsMonth> {
+    const payments = await this.manualPayments.findByMonth(month);
+    return {
+      month,
+      total: sumManualPayments(payments, month),
+      courtesies: payments.filter(isCourtesy).length,
+      items: payments.map((payment) => ({
+        id: payment.id,
+        studentId: payment.studentId,
+        studentName: payment.studentName,
+        amount: payment.amount,
+        grantedAt: payment.grantedAt,
+        accessUntil: payment.accessUntil,
+        courtesy: isCourtesy(payment),
+        voided: !isCounted(payment),
+        voidedAt: payment.voidedAt,
+      })),
+    };
+  }
+
   // ------------------------------------------------------------ internos
 
   /**
    * Receita do mês = soma das parcelas com vencimento nele, entre as
-   * assinaturas ativas (§5). Não é a soma do valor dos planos: um anual de
-   * R$ 2.280 pesa R$ 190 em cada mês, não R$ 2.280 no mês da contratação.
+   * assinaturas ativas (§5), **mais o recebido por fora** (spec 026 §9). Não é
+   * a soma do valor dos planos: um anual de R$ 2.280 pesa R$ 190 em cada mês,
+   * não R$ 2.280 no mês da contratação.
    */
   private async revenueForMonth(
     month: string,
-  ): Promise<{ total: number; activeStudents: number }> {
-    const active = await this.activeSubscriptions();
+  ): Promise<{ total: number; manual: number; activeStudents: number }> {
+    const [active, manual] = await Promise.all([
+      this.activeSubscriptions(),
+      this.manualPayments.findByMonth(month),
+    ]);
+    const manualTotal = sumManualPayments(manual, month);
     return {
-      total: sumScheduledCharges(active, month),
-      activeStudents: active.length,
+      total: round2(sumScheduledCharges(active, month) + manualTotal),
+      manual: manualTotal,
+      activeStudents: countPayingStudents(active, manual, month),
     };
   }
 
@@ -197,6 +237,48 @@ function sumScheduledCharges(
       ),
     ),
   );
+}
+
+/**
+ * Recebido por fora do gateway num mês (spec 026 §9). **Regime de caixa**,
+ * como o PIX da spec 024: o valor inteiro é receita do mês em que a gerente o
+ * registrou. **Sem** `netOfGatewayFee` — o dinheiro não passou por gateway,
+ * não há taxa a descontar. Estornado não soma: o estorno existe para "o
+ * pagamento não entrou", e dinheiro que não entrou nunca foi receita daquele
+ * mês. Cortesia soma zero, mas continua na lista do mês.
+ */
+export function sumManualPayments(
+  payments: ManualPayment[],
+  month: string,
+): number {
+  return round2(
+    sum(
+      payments
+        .filter((payment) => payment.month === month && isCounted(payment))
+        .map((payment) => payment.amount),
+    ),
+  );
+}
+
+/**
+ * Alunos ativos **pagantes** do mês: quem tem assinatura ativa, mais quem pagou
+ * por fora naquele mês (spec 026 §10.3). Cortesia não entra — não é aluno
+ * pagante —, nem lançamento estornado. Quem tem as duas coisas conta uma vez.
+ */
+export function countPayingStudents(
+  subscriptions: Subscription[],
+  payments: ManualPayment[],
+  month: string,
+): number {
+  const paying = new Set(
+    subscriptions.map((subscription) => subscription.studentId),
+  );
+  for (const payment of payments) {
+    if (payment.month === month && isCounted(payment) && payment.amount > 0) {
+      paying.add(payment.studentId);
+    }
+  }
+  return paying.size;
 }
 
 export const MONTH_LABELS = [

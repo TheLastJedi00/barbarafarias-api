@@ -28,6 +28,7 @@ import { RevenueGoal } from './revenue-goal.entity';
 import {
   AnnualOverview,
   ChartData,
+  ManualPaymentsMonth,
   MonthlyOverview,
 } from './manager-finance.entity';
 import { Roles } from '../decorators/roles.decorator';
@@ -67,6 +68,17 @@ export class ManagerFinanceController {
   @Get('chart')
   chart(@Query('year') year?: string): Promise<ChartData> {
     return this.finance.getChartData(this.resolveYear(year));
+  }
+
+  /**
+   * "Recebido por fora" do mês (spec 026 §10.3): concessões manuais com valor,
+   * cortesias e estornados, marcados. `month` ausente = mês corrente.
+   */
+  @Get('manual-payments')
+  manualPayments(@Query('month') month?: string): Promise<ManualPaymentsMonth> {
+    return this.finance.getManualPayments(
+      /^\d{4}-\d{2}$/.test(month ?? '') ? month! : currentMonth(),
+    );
   }
 
   // ----------------------------------------------------------------- metas
