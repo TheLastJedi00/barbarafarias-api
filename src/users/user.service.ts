@@ -204,6 +204,19 @@ export class UserService {
       );
     }
 
+    if (!active && options.refund === undefined) {
+      // Spec 026 Sprint 9: com valor registrado, revogar sem dizer se estorna
+      // deixaria a decisão para o acaso. Conferido **antes** de qualquer
+      // gravação, para a recusa não revogar o acesso pela metade. Cortesia e
+      // concessão sem lançamento não têm o que estornar e passam direto.
+      const last = await this.lastManualPayment(id);
+      if (last && last.amount > 0) {
+        throw new BadRequestException(
+          'Informe se o valor do último lançamento é estornado (refund).',
+        );
+      }
+    }
+
     const now = new Date();
     const until = active ? extendGrant(foundUser.manualAccessUntil, now) : null;
     await this.userRepository.updateManualAccess(id, until);
