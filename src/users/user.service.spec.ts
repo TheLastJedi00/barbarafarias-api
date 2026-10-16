@@ -523,7 +523,10 @@ describe('UserService', () => {
 
       // `null`, e não `undefined`: no Firestore, chave ausente num `merge`
       // significa "não mexi nisso" — e revogar precisa apagar de fato.
-      expect(userRepository.updateManualAccess).toHaveBeenCalledWith('a1', null);
+      expect(userRepository.updateManualAccess).toHaveBeenCalledWith(
+        'a1',
+        null,
+      );
       expect(result.manualAccessUntil).toBeUndefined();
     });
 
