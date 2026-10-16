@@ -27,7 +27,8 @@ export class ManualPayment {
    * 'YYYY-MM' no fuso da operação. Regime de caixa (igual ao PIX da spec 024):
    * o valor é receita **deste** mês, integral. Gravado em vez de derivado para
    * o financeiro consultar por igualdade/intervalo de um campo só — sem índice
-   * composto, que este projeto não publica.
+   * composto, que exigiria publicar `firestore.indexes.json` à mão em cada
+   * projeto (ver "Índices do Firestore" no README).
    */
   month!: string;
   /** Até quando a concessão vale ('YYYY-MM-DD') — o mesmo `manualAccessUntil` gravado no aluno. */
