@@ -205,9 +205,7 @@ export class UserService {
     }
 
     const now = new Date();
-    const until = active
-      ? extendGrant(foundUser.manualAccessUntil, now)
-      : null;
+    const until = active ? extendGrant(foundUser.manualAccessUntil, now) : null;
     await this.userRepository.updateManualAccess(id, until);
 
     if (active && options.amount !== undefined) {

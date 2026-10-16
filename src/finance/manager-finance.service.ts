@@ -270,7 +270,9 @@ export function countPayingStudents(
   payments: ManualPayment[],
   month: string,
 ): number {
-  const paying = new Set(subscriptions.map((subscription) => subscription.studentId));
+  const paying = new Set(
+    subscriptions.map((subscription) => subscription.studentId),
+  );
   for (const payment of payments) {
     if (payment.month === month && isCounted(payment) && payment.amount > 0) {
       paying.add(payment.studentId);

@@ -54,7 +54,11 @@ export class ManualPaymentRepository {
     return snapshot.docs.map((doc) => this.toEntity(doc.id, doc.data()));
   }
 
-  async markVoided(id: string, voidedAt: string, voidedBy: string): Promise<void> {
+  async markVoided(
+    id: string,
+    voidedAt: string,
+    voidedBy: string,
+  ): Promise<void> {
     await this.payments.doc(id).update({ voidedAt, voidedBy });
   }
 
