@@ -8,7 +8,8 @@ import { ManualPayment } from './manual-payment.entity';
  * Coleção `manualPayments` (spec 026 §9). Só consultas de **um campo** —
  * igualdade em `studentId`, igualdade ou intervalo em `month` — e a ordenação
  * em memória: um `where` + `orderBy` em campos diferentes pediria índice
- * composto, e este projeto não publica `firestore.indexes`.
+ * composto, e índice composto aqui é publicado à mão por projeto
+ * (`firestore.indexes.json`). Assim a coleção não precisa de índice nenhum.
  */
 @Injectable()
 export class ManualPaymentRepository {
