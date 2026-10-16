@@ -17,6 +17,11 @@ describe('UserService', () => {
     delete: jest.Mock;
     updateManualAccess: jest.Mock;
   };
+  let manualPayments: {
+    create: jest.Mock;
+    findByStudent: jest.Mock;
+    markVoided: jest.Mock;
+  };
   let authService: {
     createAccount: jest.Mock;
     deleteAccount: jest.Mock;
@@ -37,7 +42,16 @@ describe('UserService', () => {
       deleteAccount: jest.fn().mockResolvedValue(undefined),
       sendPasswordReset: jest.fn().mockResolvedValue(undefined),
     };
-    service = new UserService(userRepository as any, authService as any);
+    manualPayments = {
+      create: jest.fn(async (payment) => ({ id: 'mp-1', ...payment })),
+      findByStudent: jest.fn().mockResolvedValue([]),
+      markVoided: jest.fn().mockResolvedValue(undefined),
+    };
+    service = new UserService(
+      userRepository as any,
+      authService as any,
+      manualPayments as any,
+    );
   });
 
   describe('createUser', () => {
@@ -509,7 +523,10 @@ describe('UserService', () => {
 
       // `null`, e não `undefined`: no Firestore, chave ausente num `merge`
       // significa "não mexi nisso" — e revogar precisa apagar de fato.
-      expect(userRepository.updateManualAccess).toHaveBeenCalledWith('a1', null);
+      expect(userRepository.updateManualAccess).toHaveBeenCalledWith(
+        'a1',
+        null,
+      );
       expect(result.manualAccessUntil).toBeUndefined();
     });
 

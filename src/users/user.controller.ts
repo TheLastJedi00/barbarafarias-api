@@ -21,6 +21,7 @@ import { InviteUserDto } from './dto/InviteUser.dto';
 import { AccessGrantDto } from './dto/AccessGrant.dto';
 import { UserService, missingOnboardingFields } from './user.service';
 import { ROLES } from '../types/role';
+import { ManualPayment } from '../manual-payments/manual-payment.entity';
 import type { Role } from '../types/role';
 
 @Controller('/users')
@@ -61,10 +62,31 @@ export class UserController {
   @Post(':id/access-grant')
   @Roles(ROLES.MANAGER)
   async setAccessGrant(
+    @CurrentUser() manager: AuthenticatedUser,
     @Param('id') id: string,
     @Body() dto: AccessGrantDto,
   ): Promise<User> {
-    return this.service.setAccessGrant(id, dto.active);
+    // `amount` só vale na concessão e `refund` só na revogação (spec 026);
+    // o que vier fora do lugar é ignorado em vez de virar erro.
+    return this.service.setAccessGrant(id, dto.active, {
+      amount: dto.active ? dto.amount : undefined,
+      refund: dto.active ? undefined : dto.refund,
+      actorId: manager.sub,
+    });
+  }
+
+  /**
+   * Último lançamento não estornado do aluno (spec 026 §10.1) — valor e data
+   * que o form de revogação mostra antes de a gerente escolher entre estornar
+   * e manter. `null` quando não há (concessão anterior à spec, ou cortesia
+   * já estornada). Só a gerente, como a própria concessão.
+   */
+  @Get(':id/manual-payments/last')
+  @Roles(ROLES.MANAGER)
+  async lastManualPayment(
+    @Param('id') id: string,
+  ): Promise<ManualPayment | null> {
+    return this.service.lastManualPayment(id);
   }
 
   /**

@@ -17,6 +17,22 @@ import { AuthService } from '../auth/auth.service';
 import { ROLES, Role, resolveRole } from '../types/role';
 import type { AuthenticatedUser } from '../decorators/current-user.decorator';
 import { randomUUID } from 'node:crypto';
+import { ManualPaymentRepository } from '../manual-payments/manual-payment.repository';
+import {
+  ManualPayment,
+  isCounted,
+} from '../manual-payments/manual-payment.entity';
+import { todayInAppTimezone } from '../common/time';
+
+/** Opções da concessão manual (spec 026 §9–§10). */
+export interface AccessGrantOptions {
+  /** R$ recebidos; presente = registra lançamento (zero = cortesia). */
+  amount?: number;
+  /** Na revogação: estorna o último lançamento não estornado. */
+  refund?: boolean;
+  /** Gerente que fez o gesto. */
+  actorId?: string;
+}
 
 /**
  * A régua do onboarding mora em `./onboarding` desde a Fase 7 da spec 018 —
@@ -31,6 +47,7 @@ export class UserService {
   constructor(
     private userRepository: UserRepository,
     private authService: AuthService,
+    private manualPayments: ManualPaymentRepository,
   ) {}
 
   async createUser(dto: CreateUserDto): Promise<ResponseUserDto> {
@@ -169,7 +186,11 @@ export class UserService {
    * apaga na hora, sem carência — se a gerente descobriu que o pagamento não
    * entrou, o acesso não pode sobreviver ao clique.
    */
-  async setAccessGrant(id: string, active: boolean): Promise<User> {
+  async setAccessGrant(
+    id: string,
+    active: boolean,
+    options: AccessGrantOptions = {},
+  ): Promise<User> {
     const foundUser = await this.userRepository.findById(id);
     if (!foundUser) {
       throw new NotFoundException('User not found');
@@ -183,16 +204,87 @@ export class UserService {
       );
     }
 
-    const until = active
-      ? extendGrant(foundUser.manualAccessUntil, new Date())
-      : null;
+    const now = new Date();
+    const until = active ? extendGrant(foundUser.manualAccessUntil, now) : null;
     await this.userRepository.updateManualAccess(id, until);
+
+    if (active && options.amount !== undefined) {
+      await this.recordManualPayment(id, foundUser, until!, now, options);
+    }
+    if (!active && options.refund) {
+      await this.voidLastManualPayment(id, now, options.actorId);
+    }
 
     return new User({
       ...foundUser,
       id,
       manualAccessUntil: until ?? undefined,
     });
+  }
+
+  /**
+   * Grava o lançamento da concessão (spec 026 §9) com o mesmo `accessUntil`
+   * que acabou de ir para o aluno.
+   *
+   * São duas gravações em coleções diferentes. Se a segunda falhar, a primeira
+   * é desfeita — devolvendo o `manualAccessUntil` anterior — e o erro sobe:
+   * acesso liberado sem o dinheiro registrado é exatamente o furo que a spec
+   * fecha, e deixá-lo passar em silêncio o reabriria.
+   */
+  private async recordManualPayment(
+    studentId: string,
+    student: User,
+    accessUntil: string,
+    now: Date,
+    options: AccessGrantOptions,
+  ): Promise<void> {
+    try {
+      await this.manualPayments.create({
+        studentId,
+        studentName: student.fullName,
+        amount: Math.round(options.amount! * 100) / 100,
+        grantedAt: now.toISOString(),
+        month: todayInAppTimezone(now).slice(0, 7),
+        accessUntil,
+        grantedBy: options.actorId ?? '',
+      });
+    } catch (error) {
+      await this.userRepository.updateManualAccess(
+        studentId,
+        student.manualAccessUntil ?? null,
+      );
+      throw error;
+    }
+  }
+
+  /**
+   * Último lançamento **não estornado** do aluno — o que corresponde à
+   * concessão que está sendo desfeita (spec 026 §10.1). O form de revogação o
+   * mostra para a gerente saber o que está estornando.
+   */
+  async lastManualPayment(studentId: string): Promise<ManualPayment | null> {
+    const payments = await this.manualPayments.findByStudent(studentId);
+    return payments.find(isCounted) ?? null;
+  }
+
+  /**
+   * Estorno **não apaga** (spec 026 §10.1): marca `voidedAt` e o lançamento
+   * sai da receita do mês em que entrou, mas segue no histórico. Sem
+   * lançamento a estornar (concessão anterior à spec, ou já estornada), não há
+   * o que fazer — a revogação do acesso, que já aconteceu, é o que importa.
+   */
+  private async voidLastManualPayment(
+    studentId: string,
+    now: Date,
+    actorId?: string,
+  ): Promise<void> {
+    const last = await this.lastManualPayment(studentId);
+    if (!last) return;
+    await this.manualPayments.markVoided(
+      last.id,
+      now.toISOString(),
+      actorId ?? '',
+    );
   }
 
   /**
