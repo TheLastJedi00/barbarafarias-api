@@ -2,15 +2,19 @@ import { plainToInstance } from 'class-transformer';
 import { validate } from 'class-validator';
 import { AccessGrantDto } from './AccessGrant.dto';
 
-/** Spec 026: `amount` e `refund` opcionais nesta fase (BE aceita → FE manda → BE exige). */
+/** Spec 026: `amount` obrigatório ao conceder (Sprint 9); `refund` decidido pelo service. */
 async function errorsOf(body: object): Promise<string[]> {
   const errors = await validate(plainToInstance(AccessGrantDto, body));
   return errors.map((error) => error.property);
 }
 
 describe('AccessGrantDto', () => {
-  it('aceita o corpo antigo, só com active', async () => {
-    await expect(errorsOf({ active: true })).resolves.toEqual([]);
+  it('conceder sem valor é recusado (Sprint 9)', async () => {
+    await expect(errorsOf({ active: true })).resolves.toEqual(['amount']);
+  });
+
+  it('revogar só com active passa no DTO — o refund é conferido no service', async () => {
+    await expect(errorsOf({ active: false })).resolves.toEqual([]);
   });
 
   it('aceita valor com até 2 casas e zero (cortesia)', async () => {

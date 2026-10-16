@@ -657,6 +657,58 @@ Atualiza os dados de um usuário.
 
 ---
 
+#### `POST /users/:id/access-grant` (specs 025 e 026)
+
+Libera ou revoga o acesso do aluno **à mão**, quando a mensalidade é recebida por fora do
+gateway (dinheiro, transferência, PIX direto). Conceder soma 30 dias a `max(vigente, hoje)`;
+revogar apaga `manualAccessUntil` na hora.
+
+| Propriedade | Valor |
+|---|---|
+| **Autenticação** | 🔒 Requerida |
+| **Roles** | `manager` |
+
+**Request Body (`AccessGrantDto`):**
+
+```json
+{ "active": true, "amount": 199.9 }
+{ "active": false, "refund": true }
+```
+
+| Campo | Regra |
+|---|---|
+| `active` | obrigatório (`boolean`) |
+| `amount` | **obrigatório quando `active: true`** — R$ recebidos, `≥ 0`, até 2 casas. **Zero = cortesia.** Ignorado ao revogar |
+| `refund` | ao revogar: `true` estorna o último lançamento não estornado, `false` mantém. **Obrigatório quando o último lançamento tem valor > 0**; cortesia ou ausência de lançamento dispensam. Ignorado ao conceder |
+
+- Conceder grava um documento em [`manualPayments`](#14-manualpayments) com o mesmo
+  `accessUntil` do aluno. Se essa gravação falhar, o `manualAccessUntil` anterior é restaurado e
+  o erro sobe — acesso liberado sem o dinheiro registrado é o furo que a spec 026 fecha.
+- Estornar **não apaga**: marca `voidedAt`, e o valor sai da receita do mês em que entrou (não
+  vira lançamento negativo no mês da revogação).
+- `400` para quem não é aluno, para concessão sem `amount` e para revogação sem `refund` quando
+  há valor a estornar — a recusa vem **antes** de qualquer gravação.
+
+**Response (200) — `User`** com o `manualAccessUntil` novo (ausente na revogação).
+
+> **Ordem de implantação (spec 026):** com `forbidNonWhitelisted`, os campos entraram em três
+> fases — o back aceitou opcional, o front passou a mandar, e só então o back passou a exigir.
+> Inverter derruba a liberação de acesso com 400.
+
+---
+
+#### `GET /users/:id/manual-payments/last` (spec 026)
+
+Último lançamento **não estornado** do aluno — o que o form de revogação mostra (valor e data)
+antes de a gerente escolher entre estornar e manter. `null` quando não há.
+
+| Propriedade | Valor |
+|---|---|
+| **Autenticação** | 🔒 Requerida |
+| **Roles** | `manager` |
+
+---
+
 #### `DELETE /users/:id`
 
 Remove um usuário.
@@ -1617,13 +1669,19 @@ próprio para não herdar a audiência de `/finance/teacher`, que a professora e
 | `GET` | `/finance/manager/coupons` | Lista cupons |
 | `POST` | `/finance/manager/coupons` | Cria cupom |
 | `PATCH` | `/finance/manager/coupons/:id` | Ativa/desativa cupom |
+| `GET` | `/finance/manager/manual-payments?month=YYYY-MM` | "Recebido por fora" do mês (spec 026): `{ month, total, courtesies, items[] }`, com `courtesy`/`voided` marcados |
 
 **Como cada número é apurado:**
 
 - **Receita do mês** = soma das parcelas com `dueDate` naquele mês entre as assinaturas
-  `ACTIVE`. Não é a soma dos planos: um anual de R$ 2.280 pesa R$ 190 em cada mês.
-  Parcela já paga **continua contando** — ela é receita daquele mês, e removê-la faria o
-  faturamento passado encolher com o tempo.
+  `ACTIVE`, **mais o recebido por fora** (spec 026). Não é a soma dos planos: um anual de
+  R$ 2.280 pesa R$ 190 em cada mês. Parcela já paga **continua contando** — ela é receita
+  daquele mês, e removê-la faria o faturamento passado encolher com o tempo.
+- **Recebido por fora** (`manualRevenue` no overview) = lançamentos de `manualPayments` com
+  `month` igual ao mês, **sem estornados**, em **regime de caixa** e **sem** `netOfGatewayFee` —
+  o dinheiro não passou por gateway. Cortesia soma zero, mas aparece na lista.
+- **Alunos ativos** = assinaturas `ACTIVE` + quem pagou por fora no mês com valor > 0 (contado
+  uma vez). Cortesia e estornado não contam como aluno pagante.
 - **Despesa com professoras** = `BillingSummaryService.summary(mês)` **sem as linhas com
   `isManager`** (RF11): a gerente não recebe valor-hora, o lucro é dela.
 - **Despesa de infraestrutura** = snapshot vigente naquele mês (abaixo).
@@ -2174,6 +2232,30 @@ configuração que já guarda `settings/billing`.
 > Sem histórico de propósito: a meta é um alvo declarado, e mudar de ideia sobre ela não
 > reescreve nenhum resultado apurado. Mês sem meta própria usa a anual dividida por doze
 > como referência na tela.
+
+### 14. `manualPayments`
+Dinheiro recebido por fora do gateway, registrado na concessão manual de acesso (spec 026).
+**Um documento por concessão** — não um campo no usuário, porque o aluno acumula concessões e
+o financeiro precisa de todas, cada uma no mês em que entrou.
+- **Doc ID:** UUID gerado na criação
+```json
+{
+  "studentId": "string — uid do aluno",
+  "studentName": "string — cópia do nome, para a lista do financeiro não ler a ficha",
+  "amount": "number — R$, 2 casas; 0 = cortesia",
+  "grantedAt": "string ISO",
+  "month": "string 'YYYY-MM' no fuso da operação — o mês em que é receita",
+  "accessUntil": "string 'YYYY-MM-DD' — o mesmo manualAccessUntil gravado no aluno",
+  "grantedBy": "string — uid da gerente",
+  "voidedAt": "string ISO (opcional) — estornado",
+  "voidedBy": "string (opcional) — uid de quem estornou"
+}
+```
+
+> **Sem índice composto:** as consultas são de um campo só (igualdade em `studentId`,
+> igualdade ou intervalo em `month`), com a ordenação em memória — nada a publicar em
+> `firestore.indexes.json`. Concessões anteriores à spec 026 não têm lançamento (não havia
+> valor para reconstruir).
 
 ---
 
