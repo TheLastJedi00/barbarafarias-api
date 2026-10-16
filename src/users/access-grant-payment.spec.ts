@@ -1,3 +1,4 @@
+import { BadRequestException } from '@nestjs/common';
 import { UserService } from './user.service';
 import { User } from './user.entity';
 import { ROLES } from '../types/role';
@@ -130,6 +131,31 @@ describe('UserService.setAccessGrant — valor e estorno (spec 026)', () => {
 
     expect(userRepository.updateManualAccess).toHaveBeenCalledWith('a1', null);
     expect(manualPayments.markVoided).not.toHaveBeenCalled();
+  });
+
+  it('revogar sem dizer se estorna é recusado quando há valor a estornar (Sprint 9)', async () => {
+    manualPayments.findByStudent.mockResolvedValue([{ id: 'x', amount: 200 }]);
+
+    await expect(service.setAccessGrant('a1', false)).rejects.toThrow(
+      BadRequestException,
+    );
+    // Recusa antes de gravar: o acesso não pode ser revogado pela metade.
+    expect(userRepository.updateManualAccess).not.toHaveBeenCalled();
+    expect(manualPayments.markVoided).not.toHaveBeenCalled();
+  });
+
+  it('revogar sem refund passa quando a última liberação foi cortesia', async () => {
+    manualPayments.findByStudent.mockResolvedValue([{ id: 'c', amount: 0 }]);
+
+    await service.setAccessGrant('a1', false);
+
+    expect(userRepository.updateManualAccess).toHaveBeenCalledWith('a1', null);
+  });
+
+  it('revogar sem refund passa quando não há lançamento (concessão anterior à spec)', async () => {
+    await service.setAccessGrant('a1', false);
+
+    expect(userRepository.updateManualAccess).toHaveBeenCalledWith('a1', null);
   });
 
   it('revogar com estorno sem lançamento nenhum só revoga', async () => {
