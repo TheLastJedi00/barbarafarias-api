@@ -17,6 +17,7 @@ import {
 import { ROLES } from '../types/role';
 import { VideoLessonService } from './video-lesson.service';
 import {
+  CreateMaterialDto,
   CreateVideoLessonDto,
   ReorderVideoLessonsDto,
   UpdateVideoLessonDto,
@@ -79,5 +80,35 @@ export class VideoLessonController {
   @HttpCode(204)
   remove(@Param('id') id: string) {
     return this.service.remove(id);
+  }
+
+  @Post(':id/materials')
+  @Roles(ROLES.TEACHER)
+  addMaterial(
+    @Param('id') id: string,
+    @Body() dto: CreateMaterialDto,
+    @Headers('origin') origin?: string,
+  ) {
+    return this.service.addMaterial(id, dto, origin);
+  }
+
+  @Post(':id/materials/:materialId/complete')
+  @Roles(ROLES.TEACHER)
+  @HttpCode(200)
+  completeMaterial(
+    @Param('id') id: string,
+    @Param('materialId') materialId: string,
+  ) {
+    return this.service.completeMaterial(id, materialId);
+  }
+
+  @Delete(':id/materials/:materialId')
+  @Roles(ROLES.TEACHER)
+  @HttpCode(204)
+  removeMaterial(
+    @Param('id') id: string,
+    @Param('materialId') materialId: string,
+  ) {
+    return this.service.removeMaterial(id, materialId);
   }
 }

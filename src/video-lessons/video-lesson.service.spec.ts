@@ -295,6 +295,110 @@ describe('VideoLessonService — escrita (spec 027)', () => {
     });
   });
 
+  describe('materiais', () => {
+    const pdf = {
+      fileName: 'Lição 1.pdf',
+      mimeType: 'application/pdf',
+      size: 2048,
+    };
+    const material = (overrides = {}) => ({
+      id: 'mat-1',
+      fileName: 'Lição 1.pdf',
+      storagePath: 'video-lessons/v1/materials/mat-1.pdf',
+      mimeType: 'application/pdf',
+      size: 2048,
+      status: 'uploading' as const,
+      uploadedAt: '2026-10-24T00:00:00.000Z',
+      ...overrides,
+    });
+
+    it('reserva o material em uploading e devolve a URL', async () => {
+      const { service, repository, storage } = setup();
+      repository.findById.mockResolvedValue(lesson({ status: 'ready' }));
+
+      const result = await service.addMaterial('v1', pdf);
+
+      expect(result.uploadUrl).toBe('https://upload');
+      expect(result.material).not.toHaveProperty('storagePath');
+      const path = storage.createUploadSession.mock.calls[0][0];
+      expect(path).toMatch(/^video-lessons\/v1\/materials\/.+\.pdf$/);
+      expect(repository.save.mock.calls[0][0].materials[0]).toMatchObject({
+        status: 'uploading',
+        storagePath: path,
+      });
+    });
+
+    it('recusa tipo, tamanho e quantidade fora do limite', async () => {
+      const { service, repository } = setup();
+      repository.findById.mockResolvedValue(lesson());
+
+      await expect(
+        service.addMaterial('v1', {
+          ...pdf,
+          mimeType: 'application/x-msdownload',
+        }),
+      ).rejects.toThrow('Tipo de arquivo não aceito');
+      await expect(
+        service.addMaterial('v1', { ...pdf, size: 51 * 1024 * 1024 }),
+      ).rejects.toThrow('50 MB');
+
+      repository.findById.mockResolvedValue(
+        lesson({
+          materials: Array.from({ length: 10 }, (_, i) =>
+            material({ id: `m${i}` }),
+          ),
+        }),
+      );
+      await expect(service.addMaterial('v1', pdf)).rejects.toThrow('até 10');
+    });
+
+    it('confirma com o tamanho real e libera', async () => {
+      const { service, repository, storage } = setup();
+      repository.findById.mockResolvedValue(
+        lesson({ materials: [material()] }),
+      );
+      storage.getObjectInfo.mockResolvedValue({ size: 3000 });
+
+      const view = await service.completeMaterial('v1', 'mat-1');
+      expect(view).toMatchObject({ status: 'ready', size: 3000 });
+    });
+
+    it('confirmação de arquivo grande demais apaga e descarta', async () => {
+      const { service, repository, storage } = setup();
+      repository.findById.mockResolvedValue(
+        lesson({ materials: [material()] }),
+      );
+      storage.getObjectInfo.mockResolvedValue({ size: 60 * 1024 * 1024 });
+
+      await expect(service.completeMaterial('v1', 'mat-1')).rejects.toThrow(
+        '50 MB',
+      );
+      expect(storage.remove).toHaveBeenCalled();
+      expect(repository.save.mock.calls[0][0].materials).toEqual([]);
+    });
+
+    it('remove o arquivo e o registro', async () => {
+      const { service, repository, storage } = setup();
+      repository.findById.mockResolvedValue(
+        lesson({ materials: [material({ status: 'ready' })] }),
+      );
+
+      await service.removeMaterial('v1', 'mat-1');
+      expect(storage.remove).toHaveBeenCalledWith(
+        'video-lessons/v1/materials/mat-1.pdf',
+      );
+      expect(repository.save.mock.calls[0][0].materials).toEqual([]);
+    });
+
+    it('404 para material inexistente', async () => {
+      const { service, repository } = setup();
+      repository.findById.mockResolvedValue(lesson());
+      await expect(service.removeMaterial('v1', 'nope')).rejects.toThrow(
+        'Material não encontrado',
+      );
+    });
+  });
+
   describe('edição, ordem e remoção', () => {
     it('mover de tópico vai para o fim do novo tópico', async () => {
       const { service, repository } = setup();

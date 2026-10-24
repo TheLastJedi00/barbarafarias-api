@@ -6,6 +6,7 @@ import {
   NotFoundException,
   ServiceUnavailableException,
 } from '@nestjs/common';
+import { randomUUID } from 'node:crypto';
 import { CurriculumService } from '../curriculum/curriculum.service';
 import { StorageService } from '../uploads/storage.service';
 import { UserRepository } from '../users/user.repository';
@@ -18,14 +19,20 @@ import {
 } from './mux.gateway';
 import { VideoLessonRepository } from './video-lesson.repository';
 import {
+  MATERIAL_EXTENSION_BY_MIME,
+  MATERIAL_STATUS,
+  MAX_MATERIALS_PER_LESSON,
+  MAX_MATERIAL_BYTES,
   MAX_VIDEO_BYTES,
   VIDEO_EXTENSION_BY_MIME,
   VIDEO_LESSON_STATUS,
   VideoLesson,
+  VideoLessonMaterial,
   VideoLessonStatus,
   lessonStoragePrefix,
 } from './video-lesson.model';
 import {
+  CreateMaterialDto,
   CreateVideoLessonDto,
   ReorderVideoLessonsDto,
   UpdateVideoLessonDto,
@@ -36,6 +43,15 @@ import {
  * propósito: a ingestão de um vídeo grande pode entrar em fila.
  */
 const INGEST_URL_TTL_MS = 24 * 60 * 60 * 1000;
+
+/** Material como o painel e o aluno o veem: sem o caminho no Storage. */
+export interface MaterialView {
+  id: string;
+  fileName: string;
+  mimeType: string;
+  size: number;
+  status: string;
+}
 
 /** O que o painel da professora recebe de uma aula. */
 export interface VideoLessonView {
@@ -50,13 +66,7 @@ export interface VideoLessonView {
   aspectRatio?: string;
   errorMessage?: string;
   source: { fileName: string; size: number };
-  materials: {
-    id: string;
-    fileName: string;
-    mimeType: string;
-    size: number;
-    status: string;
-  }[];
+  materials: MaterialView[];
   createdAt: string;
   updatedAt: string;
 }
@@ -248,6 +258,119 @@ export class VideoLessonService {
   }
 
   /**
+   * Reserva o material e devolve a URL de upload direto — o mesmo caminho do
+   * vídeo, em duas etapas. Até a confirmação ele fica `uploading` e o aluno
+   * não o vê.
+   *
+   * O teto de quantidade conta também os `uploading`: um upload abandonado
+   * ocupa a vaga até a professora apagá-lo, e o painel mostra qual é.
+   */
+  async addMaterial(
+    id: string,
+    dto: CreateMaterialDto,
+    origin?: string,
+  ): Promise<{ material: MaterialView; uploadUrl: string }> {
+    const lesson = await this.getOrThrow(id);
+    const extension = MATERIAL_EXTENSION_BY_MIME[dto.mimeType];
+    if (!extension) {
+      throw new BadRequestException(
+        'Tipo de arquivo não aceito. Use PDF, Word, PowerPoint, Excel, MP3, M4A, JPG, PNG ou ZIP.',
+      );
+    }
+    if (dto.size > MAX_MATERIAL_BYTES) {
+      throw new BadRequestException('O material passa do limite de 50 MB.');
+    }
+    if (lesson.materials.length >= MAX_MATERIALS_PER_LESSON) {
+      throw new BadRequestException(
+        `Cada vídeo aceita até ${MAX_MATERIALS_PER_LESSON} materiais.`,
+      );
+    }
+
+    const materialId = randomUUID();
+    const material: VideoLessonMaterial = {
+      id: materialId,
+      fileName: dto.fileName,
+      storagePath: `${lessonStoragePrefix(lesson.id)}materials/${materialId}.${extension}`,
+      mimeType: dto.mimeType,
+      size: dto.size,
+      status: MATERIAL_STATUS.UPLOADING,
+      uploadedAt: new Date().toISOString(),
+    };
+    const uploadUrl = await this.storage.createUploadSession(
+      material.storagePath,
+      dto.mimeType,
+      origin,
+    );
+    await this.repository.save({
+      ...lesson,
+      materials: [...lesson.materials, material],
+      updatedAt: new Date().toISOString(),
+    });
+    return { material: toMaterialView(material), uploadUrl };
+  }
+
+  /** Confere o que chegou ao bucket e libera o material para o aluno. */
+  async completeMaterial(
+    id: string,
+    materialId: string,
+  ): Promise<MaterialView> {
+    const lesson = await this.getOrThrow(id);
+    const material = this.findMaterial(lesson, materialId);
+    if (material.status === MATERIAL_STATUS.READY) {
+      return toMaterialView(material);
+    }
+
+    const info = await this.storage.getObjectInfo(material.storagePath);
+    if (!info) {
+      throw new ConflictException(
+        'O arquivo ainda não chegou ao armazenamento. Envie de novo.',
+      );
+    }
+    if (info.size > MAX_MATERIAL_BYTES) {
+      await this.storage.remove(material.storagePath);
+      await this.repository.save({
+        ...lesson,
+        materials: lesson.materials.filter((m) => m.id !== materialId),
+        updatedAt: new Date().toISOString(),
+      });
+      throw new BadRequestException('O material passa do limite de 50 MB.');
+    }
+
+    const ready: VideoLessonMaterial = {
+      ...material,
+      size: info.size,
+      status: MATERIAL_STATUS.READY,
+      uploadedAt: new Date().toISOString(),
+    };
+    await this.repository.save({
+      ...lesson,
+      materials: lesson.materials.map((m) => (m.id === materialId ? ready : m)),
+      updatedAt: new Date().toISOString(),
+    });
+    return toMaterialView(ready);
+  }
+
+  async removeMaterial(id: string, materialId: string): Promise<void> {
+    const lesson = await this.getOrThrow(id);
+    const material = this.findMaterial(lesson, materialId);
+    await this.storage.remove(material.storagePath);
+    await this.repository.save({
+      ...lesson,
+      materials: lesson.materials.filter((m) => m.id !== materialId),
+      updatedAt: new Date().toISOString(),
+    });
+  }
+
+  private findMaterial(
+    lesson: VideoLesson,
+    materialId: string,
+  ): VideoLessonMaterial {
+    const material = lesson.materials.find((m) => m.id === materialId);
+    if (!material) throw new NotFoundException('Material não encontrado.');
+    return material;
+  }
+
+  /**
    * Leva o estado do Mux para a aula. Idempotente: o webhook pode chegar
    * depois do `sync` (ou duas vezes) sem regravar nada.
    */
@@ -299,6 +422,16 @@ export class VideoLessonService {
   }
 }
 
+function toMaterialView(material: VideoLessonMaterial): MaterialView {
+  return {
+    id: material.id,
+    fileName: material.fileName,
+    mimeType: material.mimeType,
+    size: material.size,
+    status: material.status,
+  };
+}
+
 function nextOrder(siblings: VideoLesson[]): number {
   return siblings.reduce((max, l) => Math.max(max, l.order + 1), 0);
 }
@@ -319,13 +452,7 @@ export function toView(lesson: VideoLesson): VideoLessonView {
     ...(lesson.mux?.aspectRatio ? { aspectRatio: lesson.mux.aspectRatio } : {}),
     ...(lesson.errorMessage ? { errorMessage: lesson.errorMessage } : {}),
     source: { fileName: lesson.source.fileName, size: lesson.source.size },
-    materials: lesson.materials.map((m) => ({
-      id: m.id,
-      fileName: m.fileName,
-      mimeType: m.mimeType,
-      size: m.size,
-      status: m.status,
-    })),
+    materials: lesson.materials.map(toMaterialView),
     createdAt: lesson.createdAt,
     updatedAt: lesson.updatedAt,
   };
