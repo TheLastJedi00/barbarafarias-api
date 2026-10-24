@@ -52,7 +52,10 @@ export class CandidateService {
    * E-mail já usado (aluno, professora ou outro candidato) volta 409 do
    * `createAccount`: uma pessoa, um papel.
    */
-  async signup(dto: CandidateSignupDto): Promise<CandidateView> {
+  async signup(
+    dto: CandidateSignupDto,
+    meta: AcceptanceMeta,
+  ): Promise<CandidateView> {
     const uid = randomUUID();
     await this.authService.createAccount({
       uid,
@@ -81,7 +84,30 @@ export class CandidateService {
       await this.authService.deleteAccount(uid);
       throw error;
     }
+    await this.acceptAtSignup(uid, meta);
     return toCandidateView(candidate, terms);
+  }
+
+  /**
+   * Prova dos três aceites do cadastro (spec 029): Termos de Uso, Política de
+   * Privacidade e termo do recrutamento — só os já publicados; um que ainda
+   * não exista é pedido depois, pelo modal de aceite.
+   */
+  private async acceptAtSignup(uid: string, meta: AcceptanceMeta) {
+    const types = ['terms-of-use', 'privacy-policy', 'recruitment'] as const;
+    const published = await Promise.all(
+      types.map(async (type) => {
+        const { publishedVersion } = await this.legal.requirement(type);
+        return publishedVersion ? type : null;
+      }),
+    );
+    const toAccept = published.filter((t): t is (typeof types)[number] => !!t);
+    if (toAccept.length === 0) return;
+    await this.legal.accept(
+      { sub: uid, email: '', role: ROLES.CANDIDATE },
+      toAccept,
+      meta,
+    );
   }
 
   async getMe(id: string): Promise<CandidateView> {

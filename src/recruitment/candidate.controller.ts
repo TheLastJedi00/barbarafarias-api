@@ -43,8 +43,15 @@ export class CandidateController {
   @UseGuards(ThrottlerGuard)
   @Throttle({ default: { limit: 5, ttl: 60_000 } })
   @Post('signup')
-  signup(@Body() dto: CandidateSignupDto) {
-    return this.service.signup(dto);
+  signup(
+    @Body() dto: CandidateSignupDto,
+    @Ip() ip: string,
+    @Headers('user-agent') userAgent?: string,
+  ) {
+    return this.service.signup(dto, {
+      ip,
+      userAgent: (userAgent ?? '').slice(0, 300),
+    });
   }
 
   @Get('me')
