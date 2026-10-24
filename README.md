@@ -65,6 +65,9 @@ npm run start:prod
 | `MP_ACCESS_TOKEN_SUBSCRIPTIONS` | Token para **Assinaturas** (`/preapproval`) — plano mensal. Em teste os prefixos divergem (`APP_USR` vs `TEST-`) e os dois valem |
 | `MP_PUBLIC_KEY` | Chave **pública**. O backend não a usa — fica aqui para os dois jogos serem copiados juntos do painel |
 | `MP_WEBHOOK_SECRET` | Assinatura das notificações. **Ausente = webhook recusado**, nunca aceito sem conferir |
+| `MUX_TOKEN_ID` / `MUX_TOKEN_SECRET` | Access token do [Mux](https://mux.com) — streaming das vídeo aulas (Spec 027). Ausentes = criação de vídeo responde 503 "streaming indisponível" |
+| `MUX_SIGNING_KEY_ID` / `MUX_SIGNING_KEY_PRIVATE` | Signing key (privada em **base64**) para assinar a reprodução e as miniaturas — os vídeos são `signed` |
+| `MUX_WEBHOOK_SECRET` | Assinatura do webhook `POST /webhooks/mux`. **Ausente = webhook recusado** |
 | `DEV_MODE` | `true` libera `POST /subscriptions/dev/mock-pay` (simulação de PIX). **Nunca em produção** |
 | `APP_BASE_URL` | Base do frontend, usada nas URLs de retorno do checkout de cartão |
 
@@ -114,15 +117,15 @@ src/
 │   │   └── Consolidate.dto.ts # DTO de consolidação (material completo)
 │   └── gemini/
 │       └── gemini.service.ts  # Provider de integração com Google Gemini
-├── video/                 # Módulo de vídeos
-│   ├── video.controller.ts    # CRUD de módulos de vídeo
-│   ├── video.service.ts       # Lógica de negócios de vídeos
-│   ├── video.repository.ts    # Persistência no Firestore
-│   ├── video.entity.ts        # Entidade de vídeo (Video, VideoTopic, VideoInfo)
-│   └── dtos/
-│       └── video.dto.ts       # DTOs de vídeo
+├── video-lessons/         # Vídeo aulas: Storage (original) + Mux (stream) (Spec 027)
+│   ├── video-lesson.controller.ts  # /video-lessons (painel, árvore do aluno, playback, materiais)
+│   ├── mux-webhook.controller.ts   # POST /webhooks/mux (assinatura obrigatória)
+│   ├── video-lesson.service.ts     # Ciclo uploading → processing → ready, regra de quem vê
+│   ├── video-lesson.repository.ts  # Coleção `videoLessons`
+│   ├── mux.gateway.ts              # Ingestão, consulta, JWT de playback, webhook
+│   └── video-lesson.model.ts       # Status, tetos de upload, tipos aceitos
 ├── curriculum/            # Painel de prompts + estrutura curricular (Spec 008)
-│   ├── curriculum.controller.ts # /curriculum (principal, nível, blueprint)
+│   ├── curriculum.controller.ts # /curriculum (principal, nível, blueprint, tópico só de vídeo)
 │   ├── curriculum.service.ts    # Normalização de ordem + projeção de blueprint
 │   ├── curriculum.repository.ts # Persistência (coleção `curriculum`)
 │   ├── curriculum.model.ts      # Interfaces (Module, Topic, LevelCurriculum)
@@ -1061,127 +1064,57 @@ Retorna o material didático de um aluno em um nível específico.
 
 ---
 
-### 🎬 Videos — `/videos`
+### 🎬 Vídeo aulas — `/video-lessons` (Spec 027)
 
-Módulos de vídeo organizados por nível e tópico.
+Vídeo aulas presas a um **tópico do currículo** do nível (`curriculum`), com materiais de
+apoio para download. O original fica no **Firebase Storage** (backup e fonte) e o **Mux** faz o
+streaming. Substitui o antigo `/videos` (YouTube), que nenhuma tela usava.
 
-#### `GET /videos/:level`
+| Método | Rota | Quem | Descrição |
+|---|---|---|---|
+| `GET` | `/video-lessons/me` | aluno, plano ativo | Árvore do **próprio nível**, só aulas `ready`, sem módulos/tópicos vazios |
+| `GET` | `/video-lessons/levels/:level` | teacher | Árvore completa do nível (tópicos vazios inclusos) com aulas em qualquer status |
+| `GET` | `/video-lessons/:id` | aluno do nível / teacher | Detalhe + `module`, `topic`, `previousId`, `nextId` |
+| `GET` | `/video-lessons/:id/playback` | aluno do nível / teacher | `{ playbackId, tokens: { playback, thumbnail, storyboard } }` — JWT de 6 h |
+| `GET` | `/video-lessons/:id/materials/:materialId/download` | aluno do nível / teacher | `{ url }` — URL v4 de 15 min, baixa com o nome original |
+| `POST` | `/video-lessons` | teacher | Cria a aula em `uploading` e devolve `{ lesson, uploadUrl }` |
+| `POST` | `/video-lessons/:id/upload-complete` | teacher | Confere o objeto no bucket e manda o Mux ingerir → `processing` |
+| `POST` | `/video-lessons/:id/sync` | teacher | Consulta o Mux direto (webhook perdido, teste local) |
+| `PATCH` | `/video-lessons/:id` | teacher | `title`, `description`, `topicId` (mover vai para o fim do tópico) |
+| `PUT` | `/video-lessons/topics/:topicId/order` | teacher | `{ ids }` na ordem desejada — exatamente os vídeos do tópico |
+| `DELETE` | `/video-lessons/:id` | teacher | Apaga doc, asset no Mux e `video-lessons/{id}/` no Storage (best-effort) |
+| `POST` | `/video-lessons/:id/materials` | teacher | Reserva o material (`uploading`) e devolve `{ material, uploadUrl }` |
+| `POST` | `/video-lessons/:id/materials/:materialId/complete` | teacher | Confere o objeto e libera (`ready`) |
+| `DELETE` | `/video-lessons/:id/materials/:materialId` | teacher | Remove arquivo e registro |
+| `POST` | `/webhooks/mux` | público | `video.asset.ready` / `video.asset.errored`; assinatura `mux-signature` sobre o corpo cru |
 
-Retorna todos os módulos de vídeo de um nível.
+**Upload direto ao Storage.** O binário **não passa pela API**: a Vercel corta o corpo em
+~4,5 MB e o `main.ts` em 1 MB. `POST /video-lessons` (e `/materials`) abre uma **sessão
+resumable** do GCS para um único objeto, com caminho e content-type decididos no servidor, e o
+navegador faz o `PUT` direto nela. Depois, `upload-complete` (ou `/complete`) confere o que
+**chegou** ao bucket — tamanho real, não o declarado. O bucket continua fechado e não há regras
+do Firebase a publicar.
 
-| Propriedade | Valor |
-|---|---|
-| **Autenticação** | 🔒 Requerida |
-| **Roles** | Nenhuma (qualquer autenticado) |
-
-**Parâmetros de rota:**
-
-| Parâmetro | Tipo | Descrição |
-|---|---|---|
-| `level` | `string` | Nível do módulo (`A1`, `A2`, `B1`, `B2`) |
-
-**Response (200) — `Video[]`:**
-
-```json
-[
-  {
-    "index": 1,
-    "level": "A1",
-    "topic": [
-      {
-        "title": "Greetings",
-        "description": "Cumprimentos básicos",
-        "videos": [
-          {
-            "youtubeId": "dQw4w9WgXcQ",
-            "title": "Aula 1 - Cumprimentos",
-            "internalHash": "abc123",
-            "order": 1
-          }
-        ]
-      }
-    ]
-  }
-]
+**Fluxo do vídeo:**
 ```
-
-**Erros:**
-
-| Status | Descrição |
-|---|---|
-| `404` | Módulo de nível não encontrado |
-
----
-
-#### `POST /videos`
-
-Cria ou atualiza um módulo de vídeo.
-
-| Propriedade | Valor |
-|---|---|
-| **Autenticação** | 🔒 Requerida |
-| **Roles** | `teacher` |
-
-**Request Body (`VideoModuleDto`):**
-
-```json
-{
-  "index": 1,
-  "level": "A1",
-  "topic": [
-    {
-      "title": "Greetings",
-      "description": "Cumprimentos básicos em inglês",
-      "videos": [
-        {
-          "youtubeId": "dQw4w9WgXcQ",
-          "title": "Aula 1 - Cumprimentos",
-          "internalHash": "abc123",
-          "order": 1
-        }
-      ]
-    }
-  ]
-}
+POST /video-lessons ──► doc {status:"uploading"} + uploadUrl
+PUT  <uploadUrl>     ──► Storage video-lessons/{id}/source.{ext}
+POST /:id/upload-complete ──► URL v4 de leitura (24 h) → Mux cria o asset (playback "signed")
+                              {status:"processing", mux.assetId}
+Mux ──► POST /webhooks/mux (ou POST /:id/sync) ──► {status:"ready", playbackId, duração}
 ```
+Uma única subida serve de backup e de stream: o Mux puxa o original do Storage.
 
-**Response:** `201 Created` (sem body)
+**Quem vê o quê.** Professora e gerente veem tudo. O aluno vê aula **`ready` do próprio
+nível** (`users.level`), com plano ativo (`ActivePlanGuard`); fora disso a resposta é **404**,
+não 403, para não confirmar que a aula existe. Material ainda `uploading` não aparece.
 
-> O documento é salvo com ID `{level}_{index}` (ex: `A1_1`)
+**Tetos e tipos:** vídeo até **5 GB** (mp4, mov, webm, mkv, avi); material até **50 MB**, no
+máximo **10 por vídeo** (pdf, docx, pptx, xlsx, mp3, m4a, jpg, png, zip).
 
----
-
-#### `DELETE /videos/:level/:index/:topic/:youtubeId`
-
-Remove um vídeo específico de dentro de um tópico de um módulo.
-
-| Propriedade | Valor |
-|---|---|
-| **Autenticação** | 🔒 Requerida |
-| **Roles** | `teacher` |
-
-**Parâmetros de rota:**
-
-| Parâmetro | Tipo | Descrição |
-|---|---|---|
-| `level` | `string` | Nível do módulo |
-| `index` | `number` | Índice do módulo |
-| `topic` | `string` | Título do tópico |
-| `youtubeId` | `string` | ID do vídeo no YouTube |
-
-**Response:** `200 OK` (sem body)
-
-**Erros:**
-
-| Status | Descrição |
-|---|---|
-| `404` | Módulo ou tópico não encontrado |
-
-**Fluxo interno:**
-1. Busca o módulo de vídeo pelo nível e índice
-2. Localiza o tópico pelo título
-3. Remove o vídeo com o `youtubeId` correspondente do array de vídeos
-4. Salva o documento atualizado no Firestore
+**Sem chaves do Mux** o módulo sobe; criar vídeo responde **503** antes de qualquer gravação
+(a professora não sobe 1 GB para ver o erro no fim). Sem signing key, a lista sai sem
+miniaturas e o playback responde 503.
 
 ---
 
@@ -1802,6 +1735,7 @@ que alimenta a geração de material: prompt principal (global), prompt por nív
 | `GET` | `/curriculum/levels/:level` | Estrutura completa do nível — `{ level, prompt, modules[] }` |
 | `PUT` | `/curriculum/levels/:level` | Salva o nível inteiro (prompt + árvore) — body `{ prompt, modules[] }` |
 | `GET` | `/curriculum/levels/:level/blueprint` | Planta baixa ordenada e enxuta para a geração paralela |
+| `POST` | `/curriculum/levels/:level/modules/:moduleId/topics` | Cria um **tópico só de vídeo** (`videoOnly`) no fim do módulo — body `{ title }` (Spec 027) |
 
 - `:level` ∈ `A1|A2|B1|B2` (400 se inválido).
 - **Ordem = posição no array.** O cliente envia `modules`/`topics` na ordem desejada; o
@@ -1828,6 +1762,12 @@ que alimenta a geração de material: prompt principal (global), prompt por nív
   A leitura aceita os dois campos (`title ?? prompt`), então docs anteriores ao rename
   continuam válidos e migram no primeiro salvamento — não há script de migração.
 - **Blueprint (`GET /levels/:level/blueprint`)** retorna `{ level, modules: [{ id, title, context, topics: [{ id, title }] }] }`, já ordenado.
+  Tópicos `videoOnly` ficam **de fora**: existem para as vídeo aulas, não para a geração.
+- **Tópico só de vídeo (Spec 027):** `topics[].videoOnly: true`. Aparece na árvore de vídeo
+  aulas e no Prompt Manager; a geração por IA não o enxerga. O `PUT` aceita o campo.
+- **Trava de vídeo aulas (Spec 027):** o `PUT /levels/:level` responde **409** se a nova
+  árvore deixa de fora um tópico (ou módulo) que tem vídeo aula. Renomear e reordenar seguem
+  livres — o vídeo aponta para o **id** do tópico.
 - **Composição do prompt final** (spec 020, uma requisição por tópico):
   `[Prompt Principal] + [Prompt do Nível] + [Dados do Aluno] + [Título do Módulo] + [Contexto do Módulo] + [Título do Tópico]`.
   > Este é o **contrato vivo** da geração: `SupplyService` lê esta coleção, e só ela.
@@ -2009,29 +1949,10 @@ trafegava numa requisição só.
 }
 ```
 
-### 4. `videos`
-Armazena os módulos de vídeos, agrupados por nível.
-- **Doc ID:** `{level}_{index}`
-```json
-{
-  "index": "number",
-  "level": "string (ex: 'A1')",
-  "topic": [
-    {
-      "title": "string",
-      "description": "string",
-      "videos": [
-        {
-          "youtubeId": "string",
-          "title": "string",
-          "internalHash": "string",
-          "order": "number"
-        }
-      ]
-    }
-  ]
-}
-```
+### 4. `videos` — **legada (spec 027)**
+Módulos de vídeo do YouTube por nível (`{level}_{index}`). **Nada no código lê ou escreve mais
+nesta coleção**: as vídeo aulas moram em `videoLessons` (item 15). Os documentos foram deixados
+como estão.
 
 ### 5. `prompts` — **removida (spec 020)**
 Guardava um prompt-base por nível para a geração. Nenhum endpoint jamais escreveu
@@ -2093,7 +2014,12 @@ Planta baixa editável de prompts/estrutura curricular (Spec 008).
       "context": "string (diretriz temática do módulo)",
       "order": "number (índice)",
       "topics": [
-        { "id": "string", "title": "string (título do tópico)", "order": "number" }
+        {
+          "id": "string",
+          "title": "string (título do tópico)",
+          "order": "number",
+          "videoOnly": "boolean (opcional) — só para vídeo aulas, fora do blueprint (spec 027)"
+        }
       ]
     }
   ]
@@ -2255,6 +2181,53 @@ o financeiro precisa de todas, cada uma no mês em que entrou.
 > igualdade ou intervalo em `month`), com a ordenação em memória — nada a publicar em
 > `firestore.indexes.json`. Concessões anteriores à spec 026 não têm lançamento (não havia
 > valor para reconstruir).
+
+### 15. `videoLessons`
+Vídeo aulas (spec 027). **Um documento por vídeo**, preso a um tópico do `curriculum`.
+- **Doc ID:** id automático do Firestore
+```json
+{
+  "level": "string ('A1'..'B2')",
+  "topicId": "string — id do tópico em curriculum/<level>",
+  "title": "string",
+  "description": "string",
+  "order": "number — posição dentro do tópico",
+  "status": "'uploading' | 'processing' | 'ready' | 'errored'",
+  "source": {
+    "storagePath": "string — video-lessons/{id}/source.{ext}",
+    "fileName": "string — nome original",
+    "mimeType": "string",
+    "size": "number — bytes (o real, conferido no upload-complete)"
+  },
+  "mux": {
+    "assetId": "string",
+    "playbackId": "string (quando ready) — política signed",
+    "durationSec": "number (quando ready)",
+    "aspectRatio": "string (quando ready)"
+  },
+  "errorMessage": "string (opcional) — motivo do errored, como o Mux o descreveu",
+  "materials": [
+    {
+      "id": "string (UUID)",
+      "fileName": "string — nome original, usado no download",
+      "storagePath": "string — video-lessons/{id}/materials/{materialId}.{ext}",
+      "mimeType": "string",
+      "size": "number",
+      "status": "'uploading' | 'ready'",
+      "uploadedAt": "string ISO"
+    }
+  ],
+  "createdBy": "string — uid de quem postou",
+  "createdAt": "string ISO",
+  "updatedAt": "string ISO"
+}
+```
+
+> **Guarda `topicId`, não `moduleId`:** o módulo é derivado da árvore do currículo na leitura,
+> então mover um tópico de módulo no Prompt Manager leva os vídeos junto.
+>
+> **Sem índice composto:** consultas de um campo só (`level`, `topicId`, `mux.assetId`), com
+> ordenação e agrupamento em memória.
 
 ---
 
