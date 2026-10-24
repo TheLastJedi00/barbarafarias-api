@@ -4,6 +4,7 @@ import {
   Controller,
   Get,
   Param,
+  Post,
   Put,
 } from '@nestjs/common';
 import { Roles } from '../decorators/roles.decorator';
@@ -11,6 +12,7 @@ import { ROLES } from '../types/role';
 import { LEVELS, Level } from '../types/student.level';
 import { CurriculumService } from './curriculum.service';
 import { UpsertLevelDto } from './dto/upsert-level.dto';
+import { CreateVideoTopicDto } from './dto/create-video-topic.dto';
 import { UpsertPrincipalDto } from './dto/upsert-principal.dto';
 
 @Controller('curriculum')
@@ -39,6 +41,17 @@ export class CurriculumController {
   @Roles(ROLES.TEACHER)
   upsertLevel(@Param('level') level: string, @Body() dto: UpsertLevelDto) {
     return this.service.upsertLevel(this.parseLevel(level), dto);
+  }
+
+  /** Tópico só de vídeo, criado pelo painel de vídeo aulas (spec 027). */
+  @Post('levels/:level/modules/:moduleId/topics')
+  @Roles(ROLES.TEACHER)
+  createVideoTopic(
+    @Param('level') level: string,
+    @Param('moduleId') moduleId: string,
+    @Body() dto: CreateVideoTopicDto,
+  ) {
+    return this.service.createVideoTopic(this.parseLevel(level), moduleId, dto);
   }
 
   @Get('levels/:level/blueprint')

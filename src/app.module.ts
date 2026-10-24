@@ -4,7 +4,6 @@ import { UserModule } from './users/user.module';
 import { SupplyModule } from './supply/supply.module';
 import { ConfigModule } from '@nestjs/config';
 import { AuthModule } from './auth/auth.module';
-import { VideoModule } from './video/video.module';
 import { TurmaModule } from './turmas/turma.module';
 import { AgendaModule } from './agenda/agenda.module';
 import { CurriculumModule } from './curriculum/curriculum.module';
@@ -18,6 +17,7 @@ import { BillingModule } from './billing/billing.module';
 import { SubscriptionModule } from './subscriptions/subscription.module';
 import { ManagerFinanceModule } from './finance/manager-finance.module';
 import { FeedbackModule } from './feedbacks/feedback.module';
+import { VideoLessonModule } from './video-lessons/video-lesson.module';
 import { AuthGuard } from './guards/auth.guard';
 import { RolesGuard } from './guards/roles.guard';
 import { ActivePlanGuard } from './guards/active-plan.guard';
@@ -32,7 +32,6 @@ import { FirebaseAuthModule } from './firestore/firebase-auth.module';
     UserModule,
     SupplyModule,
     AuthModule,
-    VideoModule,
     TurmaModule,
     AgendaModule,
     CurriculumModule,
@@ -46,6 +45,7 @@ import { FirebaseAuthModule } from './firestore/firebase-auth.module';
     SubscriptionModule,
     ManagerFinanceModule,
     FeedbackModule,
+    VideoLessonModule,
   ],
   providers: [
     {

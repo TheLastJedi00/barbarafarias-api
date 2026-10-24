@@ -1,12 +1,18 @@
-import { Injectable } from '@nestjs/common';
+import {
+  ConflictException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
 import { Level } from '../types/student.level';
 import { CurriculumRepository } from './curriculum.repository';
 import {
   CurriculumModule,
+  CurriculumTopic,
   LevelCurriculum,
   PrincipalPrompt,
 } from './curriculum.model';
+import { CreateVideoTopicDto } from './dto/create-video-topic.dto';
 import { UpsertLevelDto } from './dto/upsert-level.dto';
 import { UpsertPrincipalDto } from './dto/upsert-principal.dto';
 
@@ -48,6 +54,17 @@ export class CurriculumService {
     level: Level,
     dto: UpsertLevelDto,
   ): Promise<LevelCurriculum> {
+    // `videoOnly` ausente no corpo = mantém o que estava gravado. A flag nasce
+    // no painel de vídeo aulas; um Prompt Manager que não a reenvie (inclusive
+    // o anterior à spec 027, ainda em cache no navegador) não pode apagá-la e
+    // jogar o tópico na geração por IA. Desligar é mandar `false`.
+    const stored = await this.repository.getLevel(level);
+    const storedVideoOnly = new Set(
+      (stored?.modules ?? []).flatMap((m) =>
+        m.topics.filter((t) => t.videoOnly).map((t) => t.id),
+      ),
+    );
+
     const modules: CurriculumModule[] = dto.modules.map((m, mi) => ({
       id: m.id ?? randomUUID(),
       title: m.title,
@@ -57,15 +74,80 @@ export class CurriculumService {
         id: t.id ?? randomUUID(),
         title: t.title,
         order: ti,
+        // Só grava a flag quando ligada: o Firestore recusa `undefined` e o
+        // tópico comum continua com a forma de antes da spec 027.
+        ...((t.videoOnly ?? (t.id ? storedVideoOnly.has(t.id) : false))
+          ? { videoOnly: true }
+          : {}),
       })),
     }));
+
+    await this.assertNoVideoOrphaned(level, modules);
 
     const data: LevelCurriculum = { level, prompt: dto.prompt, modules };
     await this.repository.upsertLevel(data);
     return data;
   }
 
-  /** Planta baixa: módulos e tópicos ordenados, sem campos de controle. */
+  /**
+   * Acrescenta um tópico só de vídeo ao fim do módulo (spec 027), sem que o
+   * painel de vídeo aulas precise reenviar a árvore inteira do nível.
+   */
+  async createVideoTopic(
+    level: Level,
+    moduleId: string,
+    dto: CreateVideoTopicDto,
+  ): Promise<CurriculumTopic> {
+    const curriculum = await this.getLevel(level);
+    const module = curriculum.modules.find((m) => m.id === moduleId);
+    if (!module) {
+      throw new NotFoundException('Módulo não encontrado neste nível.');
+    }
+
+    const topic: CurriculumTopic = {
+      id: randomUUID(),
+      title: dto.title.trim(),
+      order: module.topics.length,
+      videoOnly: true,
+    };
+    module.topics.push(topic);
+    await this.repository.upsertLevel(curriculum);
+    return topic;
+  }
+
+  /**
+   * O vídeo aponta para o **id** do tópico. Renomear ou reordenar não o afeta;
+   * remover o tópico (ou o módulo que o contém) deixaria o vídeo sem lugar na
+   * árvore do aluno — então a gravação é recusada e a professora move ou apaga
+   * os vídeos antes (spec 027).
+   */
+  private async assertNoVideoOrphaned(
+    level: Level,
+    modules: CurriculumModule[],
+  ): Promise<void> {
+    const counts = await this.repository.countVideosByTopic(level);
+    if (counts.size === 0) return;
+
+    const kept = new Set(modules.flatMap((m) => m.topics.map((t) => t.id)));
+    const orphaned = [...counts.entries()].filter(([id]) => !kept.has(id));
+    if (orphaned.length === 0) return;
+
+    const videos = orphaned.reduce((sum, [, n]) => sum + n, 0);
+    const topics =
+      orphaned.length === 1
+        ? 'um tópico que tem'
+        : `${orphaned.length} tópicos que têm`;
+    const count = videos === 1 ? '1 vídeo' : `${videos} vídeos`;
+    throw new ConflictException(
+      `Não é possível remover ${topics} vídeo aula (${count}). Mova ou apague os vídeos antes.`,
+    );
+  }
+
+  /**
+   * Planta baixa: módulos e tópicos ordenados, sem campos de controle. Tópicos
+   * `videoOnly` ficam de fora — eles existem para as vídeo aulas, não para a
+   * geração (spec 027).
+   */
   async getBlueprint(level: Level): Promise<Blueprint> {
     return this.toBlueprint(await this.getLevel(level));
   }
@@ -84,6 +166,7 @@ export class CurriculumService {
         context: m.context,
         topics: [...m.topics]
           .sort((a, b) => a.order - b.order)
+          .filter((t) => !t.videoOnly)
           .map((t) => ({ id: t.id, title: t.title })),
       })),
     };
