@@ -13,6 +13,12 @@ export interface CurriculumTopic {
   id: string;
   title: string;
   order: number;
+  /**
+   * Tópico criado só para agrupar vídeo aulas (spec 027). Aparece na árvore de
+   * vídeos e no Prompt Manager, mas fica fora do blueprint — a geração por IA
+   * não o enxerga. Ausente = tópico comum, que serve às duas coisas.
+   */
+  videoOnly?: boolean;
 }
 
 /** Módulo: agrupador ordenado de tópicos, com contexto temático próprio. */

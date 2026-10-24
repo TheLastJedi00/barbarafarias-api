@@ -1,6 +1,7 @@
 import { Type } from 'class-transformer';
 import {
   IsArray,
+  IsBoolean,
   IsOptional,
   IsString,
   ValidateNested,
@@ -22,6 +23,11 @@ export class TopicInputDto {
 
   @IsString()
   title!: string;
+
+  /** Tópico só de vídeo (spec 027): fica fora da geração por IA. */
+  @IsOptional()
+  @IsBoolean()
+  videoOnly?: boolean;
 }
 
 export class ModuleInputDto {

@@ -15,7 +15,13 @@ interface StoredModule {
   title: string;
   context?: string;
   order: number;
-  topics?: { id: string; order: number; title?: string; prompt?: string }[];
+  topics?: {
+    id: string;
+    order: number;
+    title?: string;
+    prompt?: string;
+    videoOnly?: boolean;
+  }[];
 }
 
 @Injectable()
@@ -66,6 +72,7 @@ export class CurriculumRepository {
         id: topic.id,
         title: topic.title ?? topic.prompt ?? '',
         order: topic.order,
+        ...(topic.videoOnly ? { videoOnly: true } : {}),
       })),
     }));
   }

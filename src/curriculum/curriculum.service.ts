@@ -57,6 +57,9 @@ export class CurriculumService {
         id: t.id ?? randomUUID(),
         title: t.title,
         order: ti,
+        // Só grava a flag quando ligada: o Firestore recusa `undefined` e o
+        // tópico comum continua com a forma de antes da spec 027.
+        ...(t.videoOnly ? { videoOnly: true } : {}),
       })),
     }));
 
@@ -65,7 +68,11 @@ export class CurriculumService {
     return data;
   }
 
-  /** Planta baixa: módulos e tópicos ordenados, sem campos de controle. */
+  /**
+   * Planta baixa: módulos e tópicos ordenados, sem campos de controle. Tópicos
+   * `videoOnly` ficam de fora — eles existem para as vídeo aulas, não para a
+   * geração (spec 027).
+   */
   async getBlueprint(level: Level): Promise<Blueprint> {
     return this.toBlueprint(await this.getLevel(level));
   }
@@ -84,6 +91,7 @@ export class CurriculumService {
         context: m.context,
         topics: [...m.topics]
           .sort((a, b) => a.order - b.order)
+          .filter((t) => !t.videoOnly)
           .map((t) => ({ id: t.id, title: t.title })),
       })),
     };

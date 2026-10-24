@@ -88,6 +88,25 @@ describe('CurriculumService', () => {
       expect(mod.topics[1].id).toBe('fixo');
       expect(repository.upsertLevel).toHaveBeenCalledTimes(1);
     });
+
+    it('grava videoOnly só quando ligado', async () => {
+      const result = await service.upsertLevel('A1', {
+        prompt: '',
+        modules: [
+          {
+            title: 'Mod',
+            context: '',
+            topics: [
+              { title: 'comum' },
+              { title: 'só vídeo', videoOnly: true },
+            ],
+          },
+        ],
+      });
+
+      expect(result.modules[0].topics[0]).not.toHaveProperty('videoOnly');
+      expect(result.modules[0].topics[1].videoOnly).toBe(true);
+    });
   });
 
   describe('getBlueprint', () => {
@@ -120,6 +139,30 @@ describe('CurriculumService', () => {
           { id: 't2', title: 'segundo' },
         ],
       });
+    });
+
+    it('deixa tópicos videoOnly fora da planta baixa da geração', async () => {
+      repository.getLevel.mockResolvedValue({
+        level: 'A1',
+        prompt: 'p',
+        modules: [
+          {
+            id: 'm1',
+            title: 'Mod',
+            context: '',
+            order: 0,
+            topics: [
+              { id: 't1', title: 'Alphabet', order: 0 },
+              { id: 'v1', title: 'Pronúncia', order: 1, videoOnly: true },
+            ],
+          },
+        ],
+      });
+
+      const blueprint = await service.getBlueprint('A1');
+      expect(blueprint.modules[0].topics).toEqual([
+        { id: 't1', title: 'Alphabet' },
+      ]);
     });
   });
 });
