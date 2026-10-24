@@ -352,3 +352,53 @@ describe('LegalAdminService — resumo e aceites (spec 029)', () => {
     });
   });
 });
+
+describe('LegalAdminService — semeadura (spec 029)', () => {
+  it('publica a 1.0 dos três tipos sem versão, exigindo aceite', async () => {
+    const { service, repository } = setup();
+    repository.getDocument.mockResolvedValue(null);
+    const writes: PublishWrite[] = [];
+    repository.publish.mockImplementation(
+      (_type: string, build: (c: LegalDocument | null) => PublishWrite) => {
+        const write = build(null);
+        writes.push(write);
+        return Promise.resolve(write);
+      },
+    );
+
+    const result = await service.seed(manager);
+
+    expect(result).toEqual([
+      { type: 'terms-of-use', status: 'published', version: '1.0' },
+      { type: 'privacy-policy', status: 'published', version: '1.0' },
+      { type: 'recruitment', status: 'published', version: '1.0' },
+    ]);
+    for (const write of writes) {
+      expect(write.version).toMatchObject({
+        version: '1.0',
+        requiresReacceptance: true,
+        publishedBy: 'manager-1',
+      });
+      expect(write.version.markdown.length).toBeGreaterThan(5000);
+      expect(write.header).toMatchObject({
+        publishedVersion: '1.0',
+        requiredVersion: '1.0',
+      });
+    }
+    // O termo do recrutamento mantém a vigência original da spec 028.
+    expect(writes[2].version.effectiveDate).toBe('2026-10-24');
+  });
+
+  it('rodar de novo não toca em documento já publicado', async () => {
+    const { service, repository } = setup();
+    repository.getDocument.mockResolvedValue(
+      header({ publishedVersion: '1.1' }),
+    );
+
+    const result = await service.seed(manager);
+
+    expect(result.every((r) => r.status === 'skipped')).toBe(true);
+    expect(result[0].version).toBe('1.1');
+    expect(repository.publish).not.toHaveBeenCalled();
+  });
+});
