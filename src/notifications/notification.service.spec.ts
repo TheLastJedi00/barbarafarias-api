@@ -33,10 +33,7 @@ describe('NotificationService', () => {
         .fn()
         .mockResolvedValue([{ id: 'm1', email: 'gerente@x.com' }]),
     };
-    service = new NotificationService(
-      resend as any,
-      userRepository as any,
-    );
+    service = new NotificationService(resend as any, userRepository as any);
   });
 
   it('avisa a gerente quando a professora pede reagendamento', async () => {
@@ -137,5 +134,59 @@ describe('templates', () => {
       }),
     );
     expect(noShow.html).toContain('após ausência não avisada');
+  });
+});
+
+describe('NotificationService — recrutamento (spec 028)', () => {
+  let service: NotificationService;
+  let resend: { send: jest.Mock };
+  let userRepository: { findById: jest.Mock; findAll: jest.Mock };
+
+  beforeEach(() => {
+    resend = { send: jest.fn().mockResolvedValue(true) };
+    userRepository = {
+      findById: jest.fn(),
+      findAll: jest
+        .fn()
+        .mockResolvedValue([{ id: 'm1', email: 'gerente@x.com' }]),
+    };
+    service = new NotificationService(resend as any, userRepository as any);
+  });
+
+  it('avisa as gerentes de nova candidatura', async () => {
+    await service.applicationReceived('Professora de inglês', 'Ana Souza');
+
+    expect(userRepository.findAll).toHaveBeenCalledWith(ROLES.MANAGER);
+    const message = resend.send.mock.calls[0][0];
+    expect(message.to).toEqual(['gerente@x.com']);
+    expect(message.subject).toContain('Professora de inglês');
+    expect(message.html).toContain('Ana Souza');
+  });
+
+  it('avisa o candidato da nova etapa, pelo e-mail do próprio candidato', async () => {
+    await service.applicationStatusChanged(
+      'ana@exemplo.com',
+      'Ana Souza',
+      'Professora de inglês',
+      'interview',
+    );
+
+    const message = resend.send.mock.calls[0][0];
+    expect(message.to).toEqual(['ana@exemplo.com']);
+    expect(message.html).toContain('Entrevista');
+    expect(userRepository.findById).not.toHaveBeenCalled();
+  });
+
+  it('escapa o nome digitado pelo candidato', async () => {
+    await service.applicationReceived('Vaga', '<img src=x onerror=alert(1)>');
+
+    expect(resend.send.mock.calls[0][0].html).not.toContain('<img');
+  });
+
+  it('falha de e-mail não propaga', async () => {
+    resend.send.mockRejectedValueOnce(new Error('resend fora do ar'));
+    await expect(
+      service.applicationReceived('Vaga', 'Ana'),
+    ).resolves.toBeUndefined();
   });
 });

@@ -69,12 +69,17 @@ function setup() {
     findById: jest.fn().mockResolvedValue(candidate()),
     findAll: jest.fn().mockResolvedValue([]),
   };
+  const notifications = {
+    applicationReceived: jest.fn().mockResolvedValue(undefined),
+    applicationStatusChanged: jest.fn().mockResolvedValue(undefined),
+  };
   const service = new ApplicationService(
     applications as any,
     jobs as any,
     candidates as any,
+    notifications as any,
   );
-  return { service, applications, jobs, candidates };
+  return { service, applications, jobs, candidates, notifications };
 }
 
 describe('ApplicationService — candidato (spec 028)', () => {
@@ -294,5 +299,40 @@ describe('ApplicationService — gerente (spec 028)', () => {
     await expect(service.updateStatus('x', 'interview')).rejects.toBeInstanceOf(
       NotFoundException,
     );
+  });
+
+describe('ApplicationService — avisos por e-mail (spec 028)', () => {
+  it('nova candidatura avisa as gerentes com a vaga e o nome', async () => {
+    const { service, notifications } = setup();
+
+    await service.apply('cand-1', 'j1');
+
+    expect(notifications.applicationReceived).toHaveBeenCalledWith(
+      'Professora de inglês',
+      'Ana Souza',
+    );
+  });
+
+  it('mudança de etapa avisa o candidato', async () => {
+    const { service, applications, notifications } = setup();
+    applications.findById.mockResolvedValue(application());
+
+    await service.updateStatus('j1_cand-1', 'reviewing');
+
+    expect(notifications.applicationStatusChanged).toHaveBeenCalledWith(
+      'ana@exemplo.com',
+      'Ana Souza',
+      'Professora de inglês',
+      'reviewing',
+    );
+  });
+
+  it('mesma etapa não avisa ninguém', async () => {
+    const { service, applications, notifications } = setup();
+    applications.findById.mockResolvedValue(application());
+
+    await service.updateStatus('j1_cand-1', 'received');
+
+    expect(notifications.applicationStatusChanged).not.toHaveBeenCalled();
   });
 });
