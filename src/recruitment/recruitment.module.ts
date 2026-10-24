@@ -2,7 +2,9 @@ import { Module } from '@nestjs/common';
 import { ThrottlerModule } from '@nestjs/throttler';
 import { AuthModule } from '../auth/auth.module';
 import { UploadModule } from '../uploads/upload.module';
+import { ApplicationController } from './application.controller';
 import { ApplicationRepository } from './application.repository';
+import { ApplicationService } from './application.service';
 import { CandidateController } from './candidate.controller';
 import { CandidateRepository } from './candidate.repository';
 import { CandidateService } from './candidate.service';
@@ -22,12 +24,13 @@ import { JobService } from './job.service';
     // ThrottlerGuard não é global de propósito).
     ThrottlerModule.forRoot([{ ttl: 60_000, limit: 10 }]),
   ],
-  controllers: [JobController, CandidateController],
+  controllers: [JobController, CandidateController, ApplicationController],
   providers: [
     JobService,
     JobRepository,
     CandidateService,
     CandidateRepository,
+    ApplicationService,
     ApplicationRepository,
   ],
 })
