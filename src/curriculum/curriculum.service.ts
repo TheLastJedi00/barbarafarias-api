@@ -1,12 +1,18 @@
-import { Injectable } from '@nestjs/common';
+import {
+  ConflictException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
 import { Level } from '../types/student.level';
 import { CurriculumRepository } from './curriculum.repository';
 import {
   CurriculumModule,
+  CurriculumTopic,
   LevelCurriculum,
   PrincipalPrompt,
 } from './curriculum.model';
+import { CreateVideoTopicDto } from './dto/create-video-topic.dto';
 import { UpsertLevelDto } from './dto/upsert-level.dto';
 import { UpsertPrincipalDto } from './dto/upsert-principal.dto';
 
@@ -63,9 +69,65 @@ export class CurriculumService {
       })),
     }));
 
+    await this.assertNoVideoOrphaned(level, modules);
+
     const data: LevelCurriculum = { level, prompt: dto.prompt, modules };
     await this.repository.upsertLevel(data);
     return data;
+  }
+
+  /**
+   * Acrescenta um tópico só de vídeo ao fim do módulo (spec 027), sem que o
+   * painel de vídeo aulas precise reenviar a árvore inteira do nível.
+   */
+  async createVideoTopic(
+    level: Level,
+    moduleId: string,
+    dto: CreateVideoTopicDto,
+  ): Promise<CurriculumTopic> {
+    const curriculum = await this.getLevel(level);
+    const module = curriculum.modules.find((m) => m.id === moduleId);
+    if (!module) {
+      throw new NotFoundException('Módulo não encontrado neste nível.');
+    }
+
+    const topic: CurriculumTopic = {
+      id: randomUUID(),
+      title: dto.title.trim(),
+      order: module.topics.length,
+      videoOnly: true,
+    };
+    module.topics.push(topic);
+    await this.repository.upsertLevel(curriculum);
+    return topic;
+  }
+
+  /**
+   * O vídeo aponta para o **id** do tópico. Renomear ou reordenar não o afeta;
+   * remover o tópico (ou o módulo que o contém) deixaria o vídeo sem lugar na
+   * árvore do aluno — então a gravação é recusada e a professora move ou apaga
+   * os vídeos antes (spec 027).
+   */
+  private async assertNoVideoOrphaned(
+    level: Level,
+    modules: CurriculumModule[],
+  ): Promise<void> {
+    const counts = await this.repository.countVideosByTopic(level);
+    if (counts.size === 0) return;
+
+    const kept = new Set(modules.flatMap((m) => m.topics.map((t) => t.id)));
+    const orphaned = [...counts.entries()].filter(([id]) => !kept.has(id));
+    if (orphaned.length === 0) return;
+
+    const videos = orphaned.reduce((sum, [, n]) => sum + n, 0);
+    const topics =
+      orphaned.length === 1
+        ? 'um tópico que tem'
+        : `${orphaned.length} tópicos que têm`;
+    const count = videos === 1 ? '1 vídeo' : `${videos} vídeos`;
+    throw new ConflictException(
+      `Não é possível remover ${topics} vídeo aula (${count}). Mova ou apague os vídeos antes.`,
+    );
   }
 
   /**

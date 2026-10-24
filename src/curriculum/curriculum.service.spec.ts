@@ -7,6 +7,7 @@ describe('CurriculumService', () => {
     upsertPrincipal: jest.Mock;
     getLevel: jest.Mock;
     upsertLevel: jest.Mock;
+    countVideosByTopic: jest.Mock;
   };
 
   beforeEach(() => {
@@ -15,6 +16,7 @@ describe('CurriculumService', () => {
       upsertPrincipal: jest.fn().mockResolvedValue(undefined),
       getLevel: jest.fn(),
       upsertLevel: jest.fn().mockResolvedValue(undefined),
+      countVideosByTopic: jest.fn().mockResolvedValue(new Map()),
     };
     service = new CurriculumService(repository as any);
   });
@@ -106,6 +108,75 @@ describe('CurriculumService', () => {
 
       expect(result.modules[0].topics[0]).not.toHaveProperty('videoOnly');
       expect(result.modules[0].topics[1].videoOnly).toBe(true);
+    });
+  });
+
+  describe('trava de vídeo aulas (spec 027)', () => {
+    const tree = (topicIds: string[]) => ({
+      prompt: '',
+      modules: [
+        {
+          id: 'm1',
+          title: 'Mod',
+          context: '',
+          topics: topicIds.map((id) => ({ id, title: id })),
+        },
+      ],
+    });
+
+    it('recusa remover tópico que tem vídeo', async () => {
+      repository.countVideosByTopic.mockResolvedValue(new Map([['t2', 3]]));
+
+      await expect(service.upsertLevel('A1', tree(['t1']))).rejects.toThrow(
+        'um tópico que tem vídeo aula (3 vídeos)',
+      );
+      expect(repository.upsertLevel).not.toHaveBeenCalled();
+    });
+
+    it('permite renomear e reordenar tópicos com vídeo', async () => {
+      repository.countVideosByTopic.mockResolvedValue(new Map([['t2', 1]]));
+
+      await service.upsertLevel('A1', tree(['t2', 't1']));
+      expect(repository.upsertLevel).toHaveBeenCalledTimes(1);
+    });
+
+    it('cria tópico só de vídeo no fim do módulo', async () => {
+      repository.getLevel.mockResolvedValue({
+        level: 'A1',
+        prompt: 'p',
+        modules: [
+          {
+            id: 'm1',
+            title: 'Mod',
+            context: '',
+            order: 0,
+            topics: [{ id: 't1', title: 'Alphabet', order: 0 }],
+          },
+        ],
+      });
+
+      const topic = await service.createVideoTopic('A1', 'm1', {
+        title: '  Pronúncia  ',
+      });
+
+      expect(topic).toMatchObject({
+        title: 'Pronúncia',
+        order: 1,
+        videoOnly: true,
+      });
+      const saved = repository.upsertLevel.mock.calls[0][0];
+      expect(saved.prompt).toBe('p');
+      expect(saved.modules[0].topics.map((t) => t.id)).toEqual([
+        't1',
+        topic.id,
+      ]);
+    });
+
+    it('404 quando o módulo não existe', async () => {
+      repository.getLevel.mockResolvedValue(null);
+      await expect(
+        service.createVideoTopic('A1', 'nope', { title: 'x' }),
+      ).rejects.toThrow('Módulo não encontrado');
     });
   });
 
