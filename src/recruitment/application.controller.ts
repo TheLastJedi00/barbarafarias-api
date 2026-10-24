@@ -1,10 +1,12 @@
 import {
+  Body,
   Controller,
   Delete,
   Get,
   HttpCode,
   HttpStatus,
   Param,
+  Patch,
   Post,
 } from '@nestjs/common';
 import { Roles } from '../decorators/roles.decorator';
@@ -14,6 +16,7 @@ import {
 } from '../decorators/current-user.decorator';
 import { ROLES } from '../types/role';
 import { ApplicationService } from './application.service';
+import { UpdateApplicationStatusDto } from './dto/application.dto';
 
 /** Candidaturas (spec 028). O candidato só age sobre as próprias (`sub`). */
 @Controller('recruitment')
@@ -37,5 +40,21 @@ export class ApplicationController {
   @Roles(ROLES.CANDIDATE)
   listMine(@CurrentUser() user: AuthenticatedUser) {
     return this.service.listMine(user.sub);
+  }
+
+  @Get('jobs/:id/applications')
+  @Roles(ROLES.MANAGER)
+  listByJob(@Param('id') jobId: string) {
+    return this.service.listByJob(jobId);
+  }
+
+  @Patch('applications/:id')
+  @Roles(ROLES.MANAGER)
+  async updateStatus(
+    @Param('id') id: string,
+    @Body() dto: UpdateApplicationStatusDto,
+  ) {
+    const { application } = await this.service.updateStatus(id, dto.status);
+    return application;
   }
 }
