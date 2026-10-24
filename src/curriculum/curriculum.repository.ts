@@ -2,6 +2,7 @@ import { Inject, Injectable } from '@nestjs/common';
 import { Firestore } from 'firebase-admin/firestore';
 import { FIRESTORE } from '../firestore/firestore.module';
 import { Level } from '../types/student.level';
+import { VIDEO_LESSONS_COLLECTION } from '../video-lessons/video-lesson.collection';
 import {
   CurriculumModule,
   LevelCurriculum,
@@ -15,7 +16,13 @@ interface StoredModule {
   title: string;
   context?: string;
   order: number;
-  topics?: { id: string; order: number; title?: string; prompt?: string }[];
+  topics?: {
+    id: string;
+    order: number;
+    title?: string;
+    prompt?: string;
+    videoOnly?: boolean;
+  }[];
 }
 
 @Injectable()
@@ -66,8 +73,28 @@ export class CurriculumRepository {
         id: topic.id,
         title: topic.title ?? topic.prompt ?? '',
         order: topic.order,
+        ...(topic.videoOnly ? { videoOnly: true } : {}),
       })),
     }));
+  }
+
+  /**
+   * Quantas vídeo aulas cada tópico do nível tem (spec 027). Uma consulta de um
+   * campo só — o projeto não publica índice composto — e o agrupamento em
+   * memória: um nível tem dezenas de vídeos, não milhares.
+   */
+  async countVideosByTopic(level: Level): Promise<Map<string, number>> {
+    const snapshot = await this.db
+      .collection(VIDEO_LESSONS_COLLECTION)
+      .where('level', '==', level)
+      .select('topicId')
+      .get();
+    const counts = new Map<string, number>();
+    for (const doc of snapshot.docs) {
+      const topicId = doc.get('topicId') as string | undefined;
+      if (topicId) counts.set(topicId, (counts.get(topicId) ?? 0) + 1);
+    }
+    return counts;
   }
 
   async upsertLevel(data: LevelCurriculum): Promise<void> {
