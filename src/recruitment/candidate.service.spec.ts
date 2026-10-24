@@ -1,4 +1,4 @@
-import { ConflictException } from '@nestjs/common';
+import { ConflictException, NotFoundException } from '@nestjs/common';
 import { CandidateService } from './candidate.service';
 import { Candidate, RECRUITMENT_TERMS_VERSION } from './candidate.model';
 
@@ -109,5 +109,89 @@ describe('CandidateService — cadastro (spec 028)', () => {
     expect(authService.deleteAccount).toHaveBeenCalledWith(
       authService.createAccount.mock.calls[0][0].uid,
     );
+  });
+});
+
+describe('CandidateService — meus dados (spec 028)', () => {
+  it('devolve a visão sem caminhos do Storage, com a versão vigente do termo', async () => {
+    const { service, candidates } = setup();
+    candidates.findById.mockResolvedValue(
+      candidate({
+        resume: {
+          storagePath: 'candidates/cand-1/resume-x.pdf',
+          fileName: 'cv.pdf',
+          mimeType: 'application/pdf',
+          size: 1000,
+          uploadedAt: '2026-10-24T00:00:00.000Z',
+        },
+        pendingResume: {
+          storagePath: 'candidates/cand-1/resume-y.pdf',
+          fileName: 'novo.pdf',
+          mimeType: 'application/pdf',
+          size: 1,
+        },
+      }),
+    );
+
+    const view = await service.getMe('cand-1');
+
+    expect(candidates.findById).toHaveBeenCalledWith('cand-1');
+    expect(view.resume).toEqual({
+      fileName: 'cv.pdf',
+      size: 1000,
+      uploadedAt: '2026-10-24T00:00:00.000Z',
+    });
+    expect(view).not.toHaveProperty('pendingResume');
+    expect(view.termsVersion).toBe(RECRUITMENT_TERMS_VERSION);
+    expect(view.needsConsent).toBe(false);
+  });
+
+  it('aceite de versão anterior pede novo aceite', async () => {
+    const { service, candidates } = setup();
+    candidates.findById.mockResolvedValue(candidate({ consentVersion: '0.9' }));
+
+    await expect(service.getMe('cand-1')).resolves.toMatchObject({
+      needsConsent: true,
+    });
+  });
+
+  it('404 quando o doc não existe', async () => {
+    const { service, candidates } = setup();
+    candidates.findById.mockResolvedValue(null);
+
+    await expect(service.getMe('cand-1')).rejects.toBeInstanceOf(
+      NotFoundException,
+    );
+  });
+
+  it('edita nome, telefone e remove o LinkedIn com string vazia', async () => {
+    const { service, candidates } = setup();
+    candidates.findById.mockResolvedValue(
+      candidate({ linkedinUrl: 'https://www.linkedin.com/in/ana' }),
+    );
+
+    const view = await service.updateMe('cand-1', {
+      name: 'Ana S.',
+      linkedinUrl: '',
+    });
+
+    const saved: Candidate = candidates.save.mock.calls[0][0];
+    expect(saved.name).toBe('Ana S.');
+    expect(saved.phone).toBe('62999998888');
+    expect(saved).not.toHaveProperty('linkedinUrl');
+    expect(saved.updatedAt).not.toBe('2026-10-24T00:00:00.000Z');
+    expect(view.name).toBe('Ana S.');
+  });
+
+  it('novo aceite grava a versão vigente e a data', async () => {
+    const { service, candidates } = setup();
+    candidates.findById.mockResolvedValue(candidate({ consentVersion: '0.9' }));
+
+    const view = await service.acceptTerms('cand-1');
+
+    const saved: Candidate = candidates.save.mock.calls[0][0];
+    expect(saved.consentVersion).toBe(RECRUITMENT_TERMS_VERSION);
+    expect(saved.consentAt).not.toBe('2026-10-24T00:00:00.000Z');
+    expect(view.needsConsent).toBe(false);
   });
 });
