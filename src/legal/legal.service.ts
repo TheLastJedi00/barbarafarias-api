@@ -32,8 +32,11 @@ export interface AcceptanceMeta {
   userAgent: string;
 }
 
-/** Linha do histórico: a versão sem o texto. */
-export type LegalVersionSummary = Omit<LegalVersion, 'markdown'>;
+/** O que a leitura pública devolve: sem quem publicou (uid da gerente). */
+export type PublicLegalVersion = Omit<LegalVersion, 'publishedBy'>;
+
+/** Linha do histórico: a versão pública sem o texto. */
+export type LegalVersionSummary = Omit<PublicLegalVersion, 'markdown'>;
 
 /**
  * Documentos jurídicos (spec 029): leitura pública, painel da gerente e o
@@ -46,7 +49,7 @@ export class LegalService {
     private readonly candidates: CandidateRepository,
   ) {}
 
-  async getCurrent(type: string): Promise<LegalVersion> {
+  async getCurrent(type: string): Promise<PublicLegalVersion> {
     const header = await this.getPublishedHeader(type);
     return this.getVersion(header.type, header.publishedVersion!);
   }
@@ -58,10 +61,10 @@ export class LegalService {
       .map(toSummary);
   }
 
-  async getVersion(type: string, version: string): Promise<LegalVersion> {
+  async getVersion(type: string, version: string): Promise<PublicLegalVersion> {
     const found = await this.repository.getVersion(assertType(type), version);
     if (!found) throw new NotFoundException('Versão não encontrada');
-    return found;
+    return toPublic(found);
   }
 
   /**
@@ -186,8 +189,14 @@ export class LegalService {
   }
 }
 
+function toPublic(version: LegalVersion): PublicLegalVersion {
+  const result: Partial<LegalVersion> = { ...version };
+  delete result.publishedBy;
+  return result as PublicLegalVersion;
+}
+
 function toSummary(version: LegalVersion): LegalVersionSummary {
-  const summary: Partial<LegalVersion> = { ...version };
+  const summary: Partial<LegalVersion> = toPublic(version);
   delete summary.markdown;
   return summary as LegalVersionSummary;
 }

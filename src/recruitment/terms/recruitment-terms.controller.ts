@@ -1,27 +1,26 @@
-import { Controller, Get, NotFoundException, Param } from '@nestjs/common';
+import { Controller, Get, Param } from '@nestjs/common';
 import { Public } from '../../decorators/public.decorator';
-import type { RecruitmentTerms } from './recruitment-terms';
-import { currentTerms, termsByVersion } from './recruitment-terms';
+import { LegalService } from '../../legal/legal.service';
 
 /**
- * Termo de tratamento de dados do Trabalhe Conosco (spec 028 §4). Público: o
- * cadastro mostra o link antes de existir conta, e é texto, não dado de
- * ninguém.
+ * Termo do Trabalhe Conosco (spec 028 §4). Desde a spec 029 o texto mora no
+ * Painel Jurídico (documento `recruitment`); estas rotas ficam pelo contrato
+ * que o front já consome.
  */
 @Controller('recruitment/terms')
 export class RecruitmentTermsController {
+  constructor(private readonly legal: LegalService) {}
+
   @Public()
   @Get()
-  current(): RecruitmentTerms {
-    return currentTerms();
+  current() {
+    return this.legal.getCurrent('recruitment');
   }
 
   /** Versões anteriores, para conferir o que cada aceite aceitou. */
   @Public()
   @Get(':version')
-  byVersion(@Param('version') version: string): RecruitmentTerms {
-    const terms = termsByVersion(version);
-    if (!terms) throw new NotFoundException('Versão do termo não encontrada');
-    return terms;
+  byVersion(@Param('version') version: string) {
+    return this.legal.getVersion('recruitment', version);
   }
 }
