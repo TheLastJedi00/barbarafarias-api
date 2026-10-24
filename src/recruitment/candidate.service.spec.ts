@@ -338,3 +338,68 @@ describe('CandidateService — currículo (spec 028)', () => {
     );
   });
 });
+
+describe('CandidateService — exclusão LGPD (spec 028)', () => {
+  it('apaga candidaturas, arquivos, o doc e a conta, nessa ordem', async () => {
+    const { service, applications, storage, candidates, authService } =
+      setup();
+    applications.findByCandidate.mockResolvedValue([
+      { id: 'j1_cand-1' },
+      { id: 'j2_cand-1' },
+    ]);
+    const order: string[] = [];
+    applications.deleteMany.mockImplementation(() => {
+      order.push('applications');
+      return Promise.resolve();
+    });
+    storage.removePrefix.mockImplementation(() => {
+      order.push('storage');
+      return Promise.resolve();
+    });
+    candidates.delete.mockImplementation(() => {
+      order.push('doc');
+      return Promise.resolve();
+    });
+    authService.deleteAccount.mockImplementation(() => {
+      order.push('account');
+      return Promise.resolve();
+    });
+
+    await service.deleteAll('cand-1');
+
+    expect(applications.deleteMany).toHaveBeenCalledWith([
+      'j1_cand-1',
+      'j2_cand-1',
+    ]);
+    expect(storage.removePrefix).toHaveBeenCalledWith('candidates/cand-1/');
+    expect(candidates.delete).toHaveBeenCalledWith('cand-1');
+    expect(authService.deleteAccount).toHaveBeenCalledWith('cand-1');
+    expect(order).toEqual(['applications', 'storage', 'doc', 'account']);
+  });
+
+  it('pelo titular, termina mesmo sem o doc (pedido repetido apaga o que sobrou)', async () => {
+    const { service, candidates, authService } = setup();
+    candidates.findById.mockResolvedValue(null);
+
+    await expect(service.deleteAll('cand-1')).resolves.toBeUndefined();
+    expect(authService.deleteAccount).toHaveBeenCalledWith('cand-1');
+  });
+
+  it('pela gerente, candidato inexistente é 404 e nada é apagado', async () => {
+    const { service, candidates, authService } = setup();
+    candidates.findById.mockResolvedValue(null);
+
+    await expect(service.deleteByManager('x')).rejects.toBeInstanceOf(
+      NotFoundException,
+    );
+    expect(authService.deleteAccount).not.toHaveBeenCalled();
+  });
+
+  it('pela gerente, apaga tudo do candidato', async () => {
+    const { service, authService } = setup();
+
+    await service.deleteByManager('cand-1');
+
+    expect(authService.deleteAccount).toHaveBeenCalledWith('cand-1');
+  });
+});
