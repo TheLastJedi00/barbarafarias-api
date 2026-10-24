@@ -60,6 +60,17 @@ describe('LegalService — leitura pública (spec 029)', () => {
     expect(current.version).toBe('1.1');
   });
 
+  it('a leitura pública não expõe quem publicou (uid da gerente)', async () => {
+    const { service, repository } = legalSetup();
+    repository.listVersions.mockResolvedValue([version()]);
+
+    const current = await service.getCurrent('terms-of-use');
+    const listed = await service.listVersions('terms-of-use');
+
+    expect(current).not.toHaveProperty('publishedBy');
+    expect(JSON.stringify(listed)).not.toContain('manager-1');
+  });
+
   it('tipo inválido é 404 sem tocar no banco', async () => {
     const { service, repository } = legalSetup();
 
