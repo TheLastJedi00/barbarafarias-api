@@ -1,9 +1,11 @@
+import { currentTerms } from './terms/recruitment-terms';
+
 /**
- * Versão vigente do Termo de Tratamento de Dados do recrutamento (spec 028 §4).
- * Mudou o texto de forma relevante → sobe aqui, e quem aceitou uma versão
- * anterior precisa aceitar de novo antes de se candidatar.
+ * Versão vigente do Termo de Tratamento de Dados do recrutamento (spec 028 §4):
+ * a última de `terms/recruitment-terms.ts`. Quem aceitou uma anterior precisa
+ * aceitar de novo antes de se candidatar.
  */
-export const RECRUITMENT_TERMS_VERSION = '1.0';
+export const RECRUITMENT_TERMS_VERSION = currentTerms().version;
 
 /** Currículo: só PDF, até 5 MB (spec 028 §10). */
 export const RESUME_MIME_TYPE = 'application/pdf';

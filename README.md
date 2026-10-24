@@ -1151,6 +1151,8 @@ candidaturas com etapas visíveis ao candidato e exclusão dos dados pelo titula
 | `POST` | `/recruitment/jobs` | manager | `title`, `description`, `requirements?`, `modality?`, `workload?`, `status?` (padrão `open`) |
 | `PATCH` | `/recruitment/jobs/:id` | manager | Parcial; texto vazio apaga o opcional |
 | `DELETE` | `/recruitment/jobs/:id` | manager | Apaga a vaga **e as candidaturas dela** |
+| `GET` | `/recruitment/terms` | público | Termo de tratamento de dados **vigente**: `{ version, title, effectiveDate, markdown }` |
+| `GET` | `/recruitment/terms/:version` | público | Uma versão anterior (o que cada aceite aceitou); 404 se não existe |
 | `POST` | `/recruitment/candidates/signup` | público, 5/min por IP | Conta `candidate` + doc + e-mail de verificação; `acceptTerms` e `isAdult` precisam ser `true` |
 | `GET` / `PATCH` | `/recruitment/candidates/me` | candidate | Dados (nome, telefone, LinkedIn); a leitura traz `termsVersion` e `needsConsent` |
 | `POST` | `/recruitment/candidates/me/consent` | candidate | `{ acceptTerms: true }` — aceita a versão vigente do termo |
@@ -1189,9 +1191,14 @@ candidaturas com etapas visíveis ao candidato e exclusão dos dados pelo titula
   createdAt, updatedAt }
 ```
 
-**Regras da candidatura:** vaga `open`, currículo enviado e o termo **vigente** aceito
-(`RECRUITMENT_TERMS_VERSION` em `candidate.model.ts`; subir a versão faz todo candidato
-aceitar de novo antes de se candidatar). Depois de `approved`/`rejected` a candidatura não é
+**Termo de tratamento de dados:** o texto mora **só na API**, em `src/recruitment/terms/` — um
+arquivo por versão em `versions/`, registrado em `recruitment-terms.ts` (a última da lista é a
+vigente). O front busca por `GET /recruitment/terms`. Antes do go-live, edite o `v1-0.ts` direto;
+depois, mudança de conteúdo é **versão nova** (arquivo novo + entrada na lista), porque o aceite
+de cada candidato aponta para a versão que leu.
+
+**Regras da candidatura:** vaga `open`, currículo enviado e o termo **vigente** aceito (subir a
+versão faz todo candidato aceitar de novo antes de se candidatar). Depois de `approved`/`rejected` a candidatura não é
 retirada.
 
 **Currículo:** mesmo upload direto das vídeo aulas, em `candidates/{uid}/resume-{uuid}.pdf`. O

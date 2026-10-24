@@ -13,6 +13,7 @@ import { JobController } from './job.controller';
 import { JobRepository } from './job.repository';
 import { JobService } from './job.service';
 import { TalentPoolController } from './talent-pool.controller';
+import { RecruitmentTermsController } from './terms/recruitment-terms.controller';
 
 /**
  * Trabalhe Conosco (spec 028): vagas, candidatos e candidaturas. O candidato
@@ -32,6 +33,7 @@ import { TalentPoolController } from './talent-pool.controller';
     CandidateController,
     ApplicationController,
     TalentPoolController,
+    RecruitmentTermsController,
   ],
   providers: [
     JobService,
