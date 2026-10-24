@@ -3,6 +3,8 @@ export const ROLES = {
   MANAGER: 'manager',
   TEACHER: 'teacher',
   STUDENT: 'student',
+  /** Conta do Trabalhe Conosco (spec 028): mora em `candidates`, não em `users`. */
+  CANDIDATE: 'candidate',
 } as const;
 
 export type Role = (typeof ROLES)[keyof typeof ROLES];
