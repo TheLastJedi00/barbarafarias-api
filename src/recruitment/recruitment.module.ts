@@ -1,6 +1,11 @@
 import { Module } from '@nestjs/common';
+import { ThrottlerModule } from '@nestjs/throttler';
+import { AuthModule } from '../auth/auth.module';
+import { UploadModule } from '../uploads/upload.module';
 import { ApplicationRepository } from './application.repository';
+import { CandidateController } from './candidate.controller';
 import { CandidateRepository } from './candidate.repository';
+import { CandidateService } from './candidate.service';
 import { JobController } from './job.controller';
 import { JobRepository } from './job.repository';
 import { JobService } from './job.service';
@@ -10,12 +15,20 @@ import { JobService } from './job.service';
  * mora em `candidates`, fora de `users`.
  */
 @Module({
-  controllers: [JobController],
+  imports: [
+    AuthModule,
+    UploadModule,
+    // O cadastro é público: freio por IP, como no AuthModule (o
+    // ThrottlerGuard não é global de propósito).
+    ThrottlerModule.forRoot([{ ttl: 60_000, limit: 10 }]),
+  ],
+  controllers: [JobController, CandidateController],
   providers: [
     JobService,
     JobRepository,
-    ApplicationRepository,
+    CandidateService,
     CandidateRepository,
+    ApplicationRepository,
   ],
 })
 export class RecruitmentModule {}
