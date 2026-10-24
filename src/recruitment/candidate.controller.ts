@@ -2,6 +2,9 @@ import {
   Body,
   Controller,
   Get,
+  Headers,
+  HttpCode,
+  HttpStatus,
   Patch,
   Post,
   UseGuards,
@@ -18,6 +21,7 @@ import { CandidateService } from './candidate.service';
 import {
   CandidateSignupDto,
   ConsentDto,
+  ResumeUploadDto,
   UpdateCandidateDto,
 } from './dto/candidate.dto';
 
@@ -56,13 +60,33 @@ export class CandidateController {
     return this.service.updateMe(user.sub, dto);
   }
 
-  /** O `ConsentDto` só existe para exigir o `acceptTerms: true` explícito. */
   @Post('me/consent')
   @Roles(ROLES.CANDIDATE)
-  acceptTerms(
+  acceptTerms(@CurrentUser() user: AuthenticatedUser, @Body() dto: ConsentDto) {
+    return this.service.acceptTerms(user.sub, dto);
+  }
+
+  /** A `origin` vai para a sessão do GCS devolver o CORS certo (spec 027). */
+  @Post('me/resume')
+  @Roles(ROLES.CANDIDATE)
+  requestResumeUpload(
     @CurrentUser() user: AuthenticatedUser,
-    @Body() _dto: ConsentDto,
+    @Body() dto: ResumeUploadDto,
+    @Headers('origin') origin?: string,
   ) {
-    return this.service.acceptTerms(user.sub);
+    return this.service.requestResumeUpload(user.sub, dto, origin);
+  }
+
+  @Post('me/resume/complete')
+  @Roles(ROLES.CANDIDATE)
+  @HttpCode(HttpStatus.OK)
+  completeResumeUpload(@CurrentUser() user: AuthenticatedUser) {
+    return this.service.completeResumeUpload(user.sub);
+  }
+
+  @Get('me/resume/download')
+  @Roles(ROLES.CANDIDATE)
+  resumeDownload(@CurrentUser() user: AuthenticatedUser) {
+    return this.service.resumeDownloadUrl(user.sub);
   }
 }

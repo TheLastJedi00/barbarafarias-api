@@ -191,7 +191,7 @@ describe('CandidateService — meus dados (spec 028)', () => {
     const { service, candidates } = setup();
     candidates.findById.mockResolvedValue(candidate({ consentVersion: '0.9' }));
 
-    const view = await service.acceptTerms('cand-1');
+    const view = await service.acceptTerms('cand-1', { acceptTerms: true });
 
     const saved: Candidate = candidates.save.mock.calls[0][0];
     expect(saved.consentVersion).toBe(RECRUITMENT_TERMS_VERSION);
@@ -206,9 +206,14 @@ describe('CandidateService — currículo (spec 028)', () => {
   it('emite sessão de upload só para PDF, num caminho decidido aqui, e guarda o pendente', async () => {
     const { service, candidates, storage } = setup();
 
-    const result = await service.requestResumeUpload('cand-1', pdf, 'https://front');
+    const result = await service.requestResumeUpload(
+      'cand-1',
+      pdf,
+      'https://front',
+    );
 
-    const [path, contentType, origin] = storage.createUploadSession.mock.calls[0];
+    const [path, contentType, origin] =
+      storage.createUploadSession.mock.calls[0];
     expect(path).toMatch(/^candidates\/cand-1\/resume-[\w-]+\.pdf$/);
     expect(contentType).toBe('application/pdf');
     expect(origin).toBe('https://front');
@@ -221,10 +226,16 @@ describe('CandidateService — currículo (spec 028)', () => {
     const { service, storage } = setup();
 
     await expect(
-      service.requestResumeUpload('cand-1', { ...pdf, mimeType: 'application/msword' }),
+      service.requestResumeUpload('cand-1', {
+        ...pdf,
+        mimeType: 'application/msword',
+      }),
     ).rejects.toBeInstanceOf(BadRequestException);
     await expect(
-      service.requestResumeUpload('cand-1', { ...pdf, size: 5 * 1024 * 1024 + 1 }),
+      service.requestResumeUpload('cand-1', {
+        ...pdf,
+        size: 5 * 1024 * 1024 + 1,
+      }),
     ).rejects.toBeInstanceOf(BadRequestException);
     expect(storage.createUploadSession).not.toHaveBeenCalled();
   });
@@ -248,7 +259,10 @@ describe('CandidateService — currículo (spec 028)', () => {
     candidates.findById.mockResolvedValue(
       candidate({ resume: current, pendingResume: pending }),
     );
-    storage.getObjectInfo.mockResolvedValue({ size: 1200, contentType: 'application/pdf' });
+    storage.getObjectInfo.mockResolvedValue({
+      size: 1200,
+      contentType: 'application/pdf',
+    });
 
     const view = await service.completeResumeUpload('cand-1');
 
@@ -273,7 +287,9 @@ describe('CandidateService — currículo (spec 028)', () => {
 
   it('objeto que não chegou ao bucket é 409 e mantém o pendente para nova tentativa', async () => {
     const { service, candidates, storage } = setup();
-    candidates.findById.mockResolvedValue(candidate({ pendingResume: pending }));
+    candidates.findById.mockResolvedValue(
+      candidate({ pendingResume: pending }),
+    );
     storage.getObjectInfo.mockResolvedValue(null);
 
     await expect(service.completeResumeUpload('cand-1')).rejects.toBeInstanceOf(
