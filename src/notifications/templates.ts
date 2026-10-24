@@ -1,6 +1,7 @@
 import { Lesson } from '../lessons/lesson.entity';
 import { RescheduleRequest } from '../reschedules/reschedule.entity';
 import { formatSlotHour } from '../common/slot-time';
+import type { ApplicationStatus } from '../recruitment/application.model';
 
 export interface EmailContent {
   subject: string;
@@ -50,6 +51,27 @@ function layout(title: string, body: string): string {
 function paragraph(text: string): string {
   return `<p style="margin:0 0 12px;line-height:1.5">${text}</p>`;
 }
+
+/**
+ * Texto digitado por quem não é da escola (spec 028): o nome do candidato
+ * chega de um cadastro público e não pode virar HTML no e-mail da gerente.
+ */
+function escapeHtml(text: string): string {
+  return text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+const APPLICATION_STATUS_LABELS: Record<ApplicationStatus, string> = {
+  received: 'Recebida',
+  reviewing: 'Em análise',
+  interview: 'Entrevista',
+  approved: 'Aprovada',
+  rejected: 'Não selecionada',
+};
 
 export const templates = {
   rescheduleRequested(request: RescheduleRequest): EmailContent {
@@ -172,8 +194,43 @@ export const templates = {
         'Alunos aguardando realocação',
         paragraph(
           `A professora <strong>${teacherName}</strong> foi desativada e os alunos abaixo ficaram sem responsável:`,
-        ) + `<ul style="margin:0 0 12px;padding-left:20px">${lista}</ul>` +
+        ) +
+          `<ul style="margin:0 0 12px;padding-left:20px">${lista}</ul>` +
           paragraph('Realoque-os no painel da gerente.'),
+      ),
+    };
+  },
+
+  applicationReceived(jobTitle: string, candidateName: string): EmailContent {
+    const vaga = escapeHtml(jobTitle);
+    return {
+      subject: `Nova candidatura — ${jobTitle}`,
+      html: layout(
+        'Nova candidatura recebida',
+        paragraph(
+          `<strong>${escapeHtml(candidateName)}</strong> se candidatou à vaga <strong>${vaga}</strong>.`,
+        ) + paragraph('Veja o perfil e o currículo no painel de Recrutamento.'),
+      ),
+    };
+  },
+
+  applicationStatusChanged(
+    candidateName: string,
+    jobTitle: string,
+    status: ApplicationStatus,
+  ): EmailContent {
+    const etapa = APPLICATION_STATUS_LABELS[status];
+    return {
+      subject: `Sua candidatura: ${etapa} — ${jobTitle}`,
+      html: layout(
+        'Sua candidatura foi atualizada',
+        paragraph(`Olá, ${escapeHtml(candidateName)}.`) +
+          paragraph(
+            `Sua candidatura à vaga <strong>${escapeHtml(jobTitle)}</strong> está agora na etapa <strong>${etapa}</strong>.`,
+          ) +
+          paragraph(
+            'Acompanhe pelo seu painel no Trabalhe Conosco. Você pode excluir seus dados a qualquer momento por lá.',
+          ),
       ),
     };
   },

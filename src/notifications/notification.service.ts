@@ -5,6 +5,7 @@ import { UserRepository } from '../users/user.repository';
 import { Lesson } from '../lessons/lesson.entity';
 import { RescheduleRequest } from '../reschedules/reschedule.entity';
 import { ROLES } from '../types/role';
+import type { ApplicationStatus } from '../recruitment/application.model';
 
 /**
  * Traduz eventos de negócio em e-mails. Nunca lança: qualquer falha aqui é
@@ -75,6 +76,35 @@ export class NotificationService {
       to: await this.managerEmails(),
       ...templates.studentsPendingTeacher(teacherName, studentNames),
     }));
+  }
+
+  /** Nova candidatura no Trabalhe Conosco (spec 028): avisa as gerentes. */
+  async applicationReceived(
+    jobTitle: string,
+    candidateName: string,
+  ): Promise<void> {
+    await this.safeSend(async () => ({
+      to: await this.managerEmails(),
+      ...templates.applicationReceived(jobTitle, candidateName),
+    }));
+  }
+
+  /**
+   * Mudança de etapa: vai direto ao e-mail do candidato, que não está em
+   * `users` (spec 028).
+   */
+  async applicationStatusChanged(
+    email: string,
+    candidateName: string,
+    jobTitle: string,
+    status: ApplicationStatus,
+  ): Promise<void> {
+    await this.safeSend(() =>
+      Promise.resolve({
+        to: [email],
+        ...templates.applicationStatusChanged(candidateName, jobTitle, status),
+      }),
+    );
   }
 
   private async safeSend(

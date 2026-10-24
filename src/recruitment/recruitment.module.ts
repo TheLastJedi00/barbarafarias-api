@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { ThrottlerModule } from '@nestjs/throttler';
 import { AuthModule } from '../auth/auth.module';
+import { NotificationModule } from '../notifications/notification.module';
 import { UploadModule } from '../uploads/upload.module';
 import { ApplicationController } from './application.controller';
 import { ApplicationRepository } from './application.repository';
@@ -20,6 +21,7 @@ import { TalentPoolController } from './talent-pool.controller';
 @Module({
   imports: [
     AuthModule,
+    NotificationModule,
     UploadModule,
     // O cadastro é público: freio por IP, como no AuthModule (o
     // ThrottlerGuard não é global de propósito).

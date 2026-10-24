@@ -300,6 +300,7 @@ describe('ApplicationService — gerente (spec 028)', () => {
       NotFoundException,
     );
   });
+});
 
 describe('ApplicationService — avisos por e-mail (spec 028)', () => {
   it('nova candidatura avisa as gerentes com a vaga e o nome', async () => {

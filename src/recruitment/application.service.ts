@@ -3,6 +3,7 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
+import { NotificationService } from '../notifications/notification.service';
 import { ApplicationRepository } from './application.repository';
 import { CandidateRepository } from './candidate.repository';
 import { JobRepository } from './job.repository';
@@ -70,6 +71,7 @@ export class ApplicationService {
     private readonly applications: ApplicationRepository,
     private readonly jobs: JobRepository,
     private readonly candidates: CandidateRepository,
+    private readonly notifications: NotificationService,
   ) {}
 
   /**
@@ -112,6 +114,8 @@ export class ApplicationService {
       updatedAt: now,
     };
     await this.applications.save(application);
+    // Nunca lança: e-mail fora do ar não desfaz a candidatura.
+    await this.notifications.applicationReceived(job.title, candidate.name);
     return withJob(application, job);
   }
 
@@ -201,7 +205,23 @@ export class ApplicationService {
       updatedAt: new Date().toISOString(),
     };
     await this.applications.save(application);
+    await this.notifyStatus(application);
     return { application, previousStatus: current.status };
+  }
+
+  /** Best-effort: candidato ou vaga sumidos só deixam de receber o aviso. */
+  private async notifyStatus(application: Application): Promise<void> {
+    const [candidate, job] = await Promise.all([
+      this.candidates.findById(application.candidateId),
+      this.jobs.findById(application.jobId),
+    ]);
+    if (!candidate || !job) return;
+    await this.notifications.applicationStatusChanged(
+      candidate.email,
+      candidate.name,
+      job.title,
+      application.status,
+    );
   }
 
   private async getCandidate(id: string): Promise<Candidate> {
