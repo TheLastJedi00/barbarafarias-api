@@ -7,6 +7,7 @@ import { IdentityToolkitClient } from './identity-toolkit.client';
 import { SessionCookie } from './session-cookie';
 import { EmailCooldownService } from './email-cooldown.service';
 import { UserRepository } from '../users/user.repository';
+import { CandidateRepository } from '../recruitment/candidate.repository';
 
 @Module({
   imports: [
@@ -31,6 +32,8 @@ import { UserRepository } from '../users/user.repository';
     // sobre o token global do Firestore, então a segunda instância é
     // inofensiva (mesmo padrão do BillingModule).
     UserRepository,
+    // Mesmo raciocínio: o recrutamento importa o AuthModule para criar contas.
+    CandidateRepository,
   ],
   exports: [AuthService],
 })

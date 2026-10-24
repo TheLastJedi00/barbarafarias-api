@@ -17,7 +17,8 @@ import {
 } from './identity-toolkit.client';
 import { EmailCooldownService } from './email-cooldown.service';
 import { FIREBASE_AUTH } from '../firestore/firebase-auth.module';
-import { Role, resolveRole } from '../types/role';
+import { ROLES, Role, resolveRole } from '../types/role';
+import { CandidateRepository } from '../recruitment/candidate.repository';
 import type { AuthenticatedUser } from '../decorators/current-user.decorator';
 import { UserRepository } from '../users/user.repository';
 import { User } from '../users/user.entity';
@@ -39,6 +40,7 @@ export class AuthService {
     private readonly identity: IdentityToolkitClient,
     private readonly userRepository: UserRepository,
     private readonly cooldown: EmailCooldownService,
+    private readonly candidateRepository: CandidateRepository,
   ) {}
 
   /**
@@ -335,10 +337,18 @@ export class AuthService {
    * Aqui ele só é consultado quando o token **não** traz a claim; o caminho
    * normal lê o papel do próprio token, sem tocar no banco.
    *
-   * Ordem: `users.role` → `isTeacher` (legado) → `student` (menor privilégio).
+   * Ordem: `users.role` → `isTeacher` (legado) → `candidates/{uid}` →
+   * `student` (menor privilégio).
+   *
+   * O candidato (spec 028) não tem doc em `users`; sem a consulta a
+   * `candidates`, uma conta dele sem claim cairia no fallback e ganharia as
+   * rotas de aluno.
    */
   private async resolveUserRole(uid: string): Promise<Role> {
     const user = await this.userRepository.findById(uid);
+    if (!user && (await this.candidateRepository.exists(uid))) {
+      return ROLES.CANDIDATE;
+    }
     return resolveRole({ role: user?.role, isTeacher: user?.isTeacher });
   }
 

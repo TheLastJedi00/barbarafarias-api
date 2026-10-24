@@ -124,6 +124,14 @@ src/
 │   ├── video-lesson.repository.ts  # Coleção `videoLessons`
 │   ├── mux.gateway.ts              # Ingestão, consulta, JWT de playback, webhook
 │   └── video-lesson.model.ts       # Status, tetos de upload, tipos aceitos
+├── recruitment/           # Trabalhe Conosco: vagas, candidatos, candidaturas (Spec 028)
+│   ├── job.controller.ts            # /recruitment/jobs (vitrine pública + CRUD da gerente)
+│   ├── candidate.controller.ts      # /recruitment/candidates (cadastro público + rotas `me`)
+│   ├── application.controller.ts    # candidatar/retirar, candidatos da vaga, etapa
+│   ├── talent-pool.controller.ts    # /recruitment/talent-pool (banco de talentos da gerente)
+│   ├── candidate.service.ts         # Cadastro, currículo, exclusão LGPD
+│   ├── application.service.ts       # Regras da candidatura + avisos por e-mail
+│   └── candidate.model.ts           # Versão do termo, regra do currículo
 ├── curriculum/            # Painel de prompts + estrutura curricular (Spec 008)
 │   ├── curriculum.controller.ts # /curriculum (principal, nível, blueprint, tópico só de vídeo)
 │   ├── curriculum.service.ts    # Normalização de ordem + projeção de blueprint
@@ -291,10 +299,11 @@ Templates: idioma pt-BR, remetente e URL de retorno apontando para o login.
 | `@Roles(ROLES.MANAGER)` | Restringe à gerente |
 | `@Roles(ROLES.MANAGER, ROLES.TEACHER)` | Operação de aula (a professora fica restrita às próprias) |
 | `@CurrentUser()` | Injeta o payload do ID Token (`{ sub, email, role, emailVerified }`) no handler |
+| `@AllowCandidate()` | Libera o candidato numa rota **sem** `@Roles` (só logout e reenvio de verificação) |
 
 ### Papéis
 
-`manager` · `teacher` · `student` (`src/types/role.ts`).
+`manager` · `teacher` · `student` · `candidate` (`src/types/role.ts`).
 
 - **A gerente herda as permissões da professora** no `RolesGuard`: rotas anotadas com
   `@Roles(TEACHER)` também liberam `manager`. Sem isso, migrar a gerente para `manager`
@@ -309,11 +318,22 @@ Templates: idioma pt-BR, remetente e URL de retorno apontando para o login.
   fluxo, migração interrompida), o login resolve o papel por `users`, grava a claim e
   **reemite** o token pelo refresh. Sem reemitir, a pessoa entraria com um token sem papel e
   o `RolesGuard` a barraria em tudo, em silêncio.
-- Precedência quando é preciso resolver: `users.role` → `isTeacher` (legado) → `student`
-  (menor privilégio). O `migrate-roles` ainda considera `credentials.role` enquanto a coleção
+- Precedência quando é preciso resolver: `users.role` → `isTeacher` (legado) →
+  `candidates/{uid}` → `student` (menor privilégio). O `migrate-roles` ainda considera `credentials.role` enquanto a coleção
   legada existir.
 - **Promover alguém à mão:** edite `users/{id}.role` e rode "Corrigir papéis dos usuários" no
   painel — é ele que grava a claim. Depois, a pessoa precisa sair e entrar.
+
+#### Candidato (spec 028)
+
+O `candidate` é a conta do **Trabalhe Conosco** e **não faz parte da escola**:
+
+- Mora em `candidates/{uid}`, **fora de `users`** — a listagem da professora devolve todo
+  não-aluno de `users`, e ele apareceria ali.
+- **Barrado em toda rota sem `@Roles`.** Várias delas tratam "não aluno" como equipe
+  (`GET /agenda/student/:id`, `GET /lessons/student/:id`, `GET /supplies/:studentId`). O
+  `RolesGuard` só deixa o candidato passar com `@Roles(CANDIDATE)` ou `@AllowCandidate()`.
+- Não herda nada, e nenhum outro papel entra nas rotas dele.
 
 #### Onde a herança gerente→professora **não** vale (spec 011 RF2.1)
 
@@ -1116,6 +1136,81 @@ máximo **10 por vídeo** (pdf, docx, pptx, xlsx, mp3, m4a, jpg, png, zip).
 **Sem chaves do Mux** o módulo sobe; criar vídeo responde **503** antes de qualquer gravação
 (a professora não sobe 1 GB para ver o erro no fim). Sem signing key, a lista sai sem
 miniaturas e o playback responde 503.
+
+---
+
+### 💼 Recrutamento — `/recruitment` (Spec 028)
+
+Página pública **Trabalhe Conosco**: vagas abertas, cadastro de candidato, currículo,
+candidaturas com etapas visíveis ao candidato e exclusão dos dados pelo titular (LGPD).
+
+| Método | Rota | Quem | Descrição |
+|---|---|---|---|
+| `GET` | `/recruitment/jobs` | público | Vagas `open`, só campos de exibição, mais novas primeiro |
+| `GET` | `/recruitment/jobs/all` | manager | Todas, abertas primeiro, com `applicationsCount` |
+| `POST` | `/recruitment/jobs` | manager | `title`, `description`, `requirements?`, `modality?`, `workload?`, `status?` (padrão `open`) |
+| `PATCH` | `/recruitment/jobs/:id` | manager | Parcial; texto vazio apaga o opcional |
+| `DELETE` | `/recruitment/jobs/:id` | manager | Apaga a vaga **e as candidaturas dela** |
+| `GET` | `/recruitment/terms` | público | Termo de tratamento de dados **vigente**: `{ version, title, effectiveDate, markdown }` |
+| `GET` | `/recruitment/terms/:version` | público | Uma versão anterior (o que cada aceite aceitou); 404 se não existe |
+| `POST` | `/recruitment/candidates/signup` | público, 5/min por IP | Conta `candidate` + doc + e-mail de verificação; `acceptTerms` e `isAdult` precisam ser `true` |
+| `GET` / `PATCH` | `/recruitment/candidates/me` | candidate | Dados (nome, telefone, LinkedIn); a leitura traz `termsVersion` e `needsConsent` |
+| `POST` | `/recruitment/candidates/me/consent` | candidate | `{ acceptTerms: true }` — aceita a versão vigente do termo |
+| `DELETE` | `/recruitment/candidates/me` | candidate | **Exclusão LGPD** definitiva |
+| `POST` | `/recruitment/candidates/me/resume` | candidate | `{ fileName, mimeType, size }` → `{ uploadUrl }` (sessão resumable, só PDF ≤ 5 MB) |
+| `POST` | `/recruitment/candidates/me/resume/complete` | candidate | Confere o objeto e troca o currículo |
+| `GET` | `/recruitment/candidates/me/resume/download` | candidate | `{ url }` — URL v4 de 15 min |
+| `GET` | `/recruitment/candidates/me/applications` | candidate | Candidaturas com `jobTitle`, `jobStatus` e etapa |
+| `POST` / `DELETE` | `/recruitment/jobs/:id/apply` | candidate | Candidatar / retirar |
+| `GET` | `/recruitment/jobs/:id/applications` | manager | Candidatos da vaga, com o resumo de cada um |
+| `PATCH` | `/recruitment/applications/:id` | manager | `{ status }` — muda a etapa e avisa o candidato |
+| `GET` | `/recruitment/talent-pool` | manager | Banco de talentos: **todo** candidato, com `applicationsCount` |
+| `GET` | `/recruitment/talent-pool/:id` | manager | Detalhe com candidaturas e aceite do termo |
+| `GET` | `/recruitment/talent-pool/:id/resume/download` | manager | `{ url }` — URL v4 de 15 min |
+| `DELETE` | `/recruitment/talent-pool/:id` | manager | Exclusão LGPD a pedido feito fora da plataforma |
+
+> As rotas da gerente ficam em `talent-pool`, e não em `candidates/:id`, para não disputar
+> o caminho com `candidates/me`: a ordem de registro dos controllers decidiria quem atende.
+
+**Coleções:**
+
+```ts
+// candidates/{uid}  — fora de `users`
+{ email, name, phone /* só dígitos */, linkedinUrl?,
+  resume?: { storagePath, fileName, mimeType, size, uploadedAt },
+  pendingResume?: { storagePath, fileName, mimeType, size },   // sessão ainda não confirmada
+  consentAt, consentVersion, createdAt, updatedAt }
+
+// jobs/{id}
+{ title, description, requirements?, modality?, workload?,
+  status: 'open' | 'closed', createdBy, createdAt, updatedAt }
+
+// applications/{jobId}_{candidateId}  — id determinístico: sem candidatura duplicada
+{ jobId, candidateId,
+  status: 'received' | 'reviewing' | 'interview' | 'approved' | 'rejected',
+  createdAt, updatedAt }
+```
+
+**Termo de tratamento de dados:** o texto mora **só na API**, em `src/recruitment/terms/` — um
+arquivo por versão em `versions/`, registrado em `recruitment-terms.ts` (a última da lista é a
+vigente). O front busca por `GET /recruitment/terms`. Antes do go-live, edite o `v1-0.ts` direto;
+depois, mudança de conteúdo é **versão nova** (arquivo novo + entrada na lista), porque o aceite
+de cada candidato aponta para a versão que leu.
+
+**Regras da candidatura:** vaga `open`, currículo enviado e o termo **vigente** aceito (subir a
+versão faz todo candidato aceitar de novo antes de se candidatar). Depois de `approved`/`rejected` a candidatura não é
+retirada.
+
+**Currículo:** mesmo upload direto das vídeo aulas, em `candidates/{uid}/resume-{uuid}.pdf`. O
+caminho é único por envio e o vigente só é trocado no `complete`, depois de conferir o que
+chegou: fora da regra (tipo ou tamanho), o objeto é apagado e o anterior continua.
+
+**E-mails (Resend):** nova candidatura → gerentes; mudança de etapa → candidato. O nome do
+candidato é escapado (vem de cadastro público). Falha de e-mail não desfaz nada.
+
+**Exclusão LGPD:** candidaturas → `candidates/{uid}/` no Storage → doc → conta no Firebase, nessa
+ordem. Pelo titular, um pedido repetido termina o que sobrou. O ID Token continua válido até
+expirar, então o front chama `/auth/logout` em seguida para limpar o cookie.
 
 ---
 

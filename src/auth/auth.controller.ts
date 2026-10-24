@@ -18,6 +18,7 @@ import { SessionCookie } from './session-cookie';
 import { LoginDto } from './dto/login.dto';
 import { ForgotPasswordDto, RefreshDto } from './dto/session.dto';
 import { ChangeEmailDto } from './dto/change-email.dto';
+import { AllowCandidate } from '../decorators/allow-candidate.decorator';
 import { Public } from '../decorators/public.decorator';
 import { CurrentUser } from '../decorators/current-user.decorator';
 import type { AuthenticatedUser } from '../decorators/current-user.decorator';
@@ -100,6 +101,8 @@ export class AuthController {
    * mesmo assim tira a credencial do navegador. A ordem inversa deixaria a
    * pessoa na tela de login com a sessão intacta no aparelho.
    */
+  // Candidato (spec 028) também encerra a própria sessão.
+  @AllowCandidate()
   @Post('logout')
   @HttpCode(HttpStatus.NO_CONTENT)
   async logout(
@@ -138,6 +141,7 @@ export class AuthController {
    * requisição é a credencial que o Firebase exige — por isso ele é lido do
    * header aqui em vez de reconstruído.
    */
+  @AllowCandidate()
   @Post('reenviar-verificacao')
   @Throttle({ default: { limit: 3, ttl: 60_000 } })
   @HttpCode(HttpStatus.NO_CONTENT)
