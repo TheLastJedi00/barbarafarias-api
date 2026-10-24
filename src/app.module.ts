@@ -4,7 +4,6 @@ import { UserModule } from './users/user.module';
 import { SupplyModule } from './supply/supply.module';
 import { ConfigModule } from '@nestjs/config';
 import { AuthModule } from './auth/auth.module';
-import { VideoModule } from './video/video.module';
 import { TurmaModule } from './turmas/turma.module';
 import { AgendaModule } from './agenda/agenda.module';
 import { CurriculumModule } from './curriculum/curriculum.module';
@@ -33,7 +32,6 @@ import { FirebaseAuthModule } from './firestore/firebase-auth.module';
     UserModule,
     SupplyModule,
     AuthModule,
-    VideoModule,
     TurmaModule,
     AgendaModule,
     CurriculumModule,
