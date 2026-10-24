@@ -4,6 +4,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { NotificationService } from '../notifications/notification.service';
+import { LegalService } from '../legal/legal.service';
 import { ApplicationRepository } from './application.repository';
 import { CandidateRepository } from './candidate.repository';
 import { JobRepository } from './job.repository';
@@ -72,6 +73,7 @@ export class ApplicationService {
     private readonly jobs: JobRepository,
     private readonly candidates: CandidateRepository,
     private readonly notifications: NotificationService,
+    private readonly legal: LegalService,
   ) {}
 
   /**
@@ -88,7 +90,7 @@ export class ApplicationService {
     }
 
     const candidate = await this.getCandidate(candidateId);
-    if (needsConsent(candidate)) {
+    if (needsConsent(candidate, await this.legal.requirement('recruitment'))) {
       throw new ConflictException(
         'O Termo de Tratamento de Dados mudou. Aceite a nova versão para se candidatar.',
       );

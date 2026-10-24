@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { ThrottlerModule } from '@nestjs/throttler';
 import { AuthModule } from '../auth/auth.module';
+import { LegalModule } from '../legal/legal.module';
 import { NotificationModule } from '../notifications/notification.module';
 import { UploadModule } from '../uploads/upload.module';
 import { ApplicationController } from './application.controller';
@@ -22,6 +23,7 @@ import { RecruitmentTermsController } from './terms/recruitment-terms.controller
 @Module({
   imports: [
     AuthModule,
+    LegalModule,
     NotificationModule,
     UploadModule,
     // O cadastro é público: freio por IP, como no AuthModule (o

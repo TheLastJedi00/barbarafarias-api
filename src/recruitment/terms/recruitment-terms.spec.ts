@@ -1,5 +1,4 @@
 import { NotFoundException } from '@nestjs/common';
-import { RECRUITMENT_TERMS_VERSION } from '../candidate.model';
 import { RecruitmentTermsController } from './recruitment-terms.controller';
 import {
   RECRUITMENT_TERMS,
@@ -8,10 +7,6 @@ import {
 } from './recruitment-terms';
 
 describe('Termo de tratamento de dados do recrutamento (spec 028)', () => {
-  it('a versão vigente é a que o aceite grava', () => {
-    expect(currentTerms().version).toBe(RECRUITMENT_TERMS_VERSION);
-  });
-
   it('toda versão publicada tem título, vigência e texto', () => {
     for (const terms of RECRUITMENT_TERMS) {
       expect(terms.title).toBeTruthy();
@@ -40,7 +35,7 @@ describe('Termo de tratamento de dados do recrutamento (spec 028)', () => {
     const controller = new RecruitmentTermsController();
 
     it('GET /recruitment/terms devolve a vigente', () => {
-      expect(controller.current().version).toBe(RECRUITMENT_TERMS_VERSION);
+      expect(controller.current().version).toBe('1.0');
     });
 
     it('GET /recruitment/terms/:version devolve a pedida ou 404', () => {

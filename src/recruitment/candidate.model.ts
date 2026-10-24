@@ -1,11 +1,13 @@
-import { currentTerms } from './terms/recruitment-terms';
+import { compareVersions } from '../legal/legal-version';
 
 /**
- * Versão vigente do Termo de Tratamento de Dados do recrutamento (spec 028 §4):
- * a última de `terms/recruitment-terms.ts`. Quem aceitou uma anterior precisa
- * aceitar de novo antes de se candidatar.
+ * Versões do termo do recrutamento, lidas do módulo `legal` (spec 029): a
+ * vigente (a que o aceite grava) e a exigida (a última que pediu novo aceite).
  */
-export const RECRUITMENT_TERMS_VERSION = currentTerms().version;
+export interface TermsRequirement {
+  publishedVersion: string | null;
+  requiredVersion: string | null;
+}
 
 /** Currículo: só PDF, até 5 MB (spec 028 §10). */
 export const RESUME_MIME_TYPE = 'application/pdf';
@@ -56,11 +58,26 @@ export interface CandidateView {
   updatedAt: string;
 }
 
-export function needsConsent(candidate: Candidate): boolean {
-  return candidate.consentVersion !== RECRUITMENT_TERMS_VERSION;
+/**
+ * Precisa aceitar de novo quem aceitou uma versão anterior à exigida. Correção
+ * sem novo aceite (`1.1`) não incomoda quem aceitou a `1.0`; sem versão
+ * exigida (termo não publicado), ninguém fica pendente.
+ */
+export function needsConsent(
+  candidate: Candidate,
+  terms: TermsRequirement,
+): boolean {
+  if (!terms.requiredVersion) return false;
+  return (
+    !candidate.consentVersion ||
+    compareVersions(candidate.consentVersion, terms.requiredVersion) < 0
+  );
 }
 
-export function toCandidateView(candidate: Candidate): CandidateView {
+export function toCandidateView(
+  candidate: Candidate,
+  terms: TermsRequirement,
+): CandidateView {
   return {
     id: candidate.id,
     email: candidate.email,
@@ -78,8 +95,8 @@ export function toCandidateView(candidate: Candidate): CandidateView {
       : {}),
     consentAt: candidate.consentAt,
     consentVersion: candidate.consentVersion,
-    termsVersion: RECRUITMENT_TERMS_VERSION,
-    needsConsent: needsConsent(candidate),
+    termsVersion: terms.publishedVersion ?? '',
+    needsConsent: needsConsent(candidate, terms),
     createdAt: candidate.createdAt,
     updatedAt: candidate.updatedAt,
   };

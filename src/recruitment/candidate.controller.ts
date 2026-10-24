@@ -6,6 +6,7 @@ import {
   Headers,
   HttpCode,
   HttpStatus,
+  Ip,
   Patch,
   Post,
   UseGuards,
@@ -63,8 +64,16 @@ export class CandidateController {
 
   @Post('me/consent')
   @Roles(ROLES.CANDIDATE)
-  acceptTerms(@CurrentUser() user: AuthenticatedUser, @Body() dto: ConsentDto) {
-    return this.service.acceptTerms(user.sub, dto);
+  acceptTerms(
+    @CurrentUser() user: AuthenticatedUser,
+    @Body() dto: ConsentDto,
+    @Ip() ip: string,
+    @Headers('user-agent') userAgent?: string,
+  ) {
+    return this.service.acceptTerms(user.sub, dto, {
+      ip,
+      userAgent: (userAgent ?? '').slice(0, 300),
+    });
   }
 
   /** A `origin` vai para a sessão do GCS devolver o CORS certo (spec 027). */
