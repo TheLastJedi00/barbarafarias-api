@@ -1764,7 +1764,8 @@ que alimenta a geração de material: prompt principal (global), prompt por nív
 - **Blueprint (`GET /levels/:level/blueprint`)** retorna `{ level, modules: [{ id, title, context, topics: [{ id, title }] }] }`, já ordenado.
   Tópicos `videoOnly` ficam **de fora**: existem para as vídeo aulas, não para a geração.
 - **Tópico só de vídeo (Spec 027):** `topics[].videoOnly: true`. Aparece na árvore de vídeo
-  aulas e no Prompt Manager; a geração por IA não o enxerga. O `PUT` aceita o campo.
+  aulas e no Prompt Manager; a geração por IA não o enxerga. No `PUT`, campo **ausente
+  preserva** o valor gravado (um painel que não o reenvie não apaga a flag); `false` desliga.
 - **Trava de vídeo aulas (Spec 027):** o `PUT /levels/:level` responde **409** se a nova
   árvore deixa de fora um tópico (ou módulo) que tem vídeo aula. Renomear e reordenar seguem
   livres — o vídeo aponta para o **id** do tópico.

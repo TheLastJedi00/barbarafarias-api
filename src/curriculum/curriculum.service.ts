@@ -54,6 +54,17 @@ export class CurriculumService {
     level: Level,
     dto: UpsertLevelDto,
   ): Promise<LevelCurriculum> {
+    // `videoOnly` ausente no corpo = mantém o que estava gravado. A flag nasce
+    // no painel de vídeo aulas; um Prompt Manager que não a reenvie (inclusive
+    // o anterior à spec 027, ainda em cache no navegador) não pode apagá-la e
+    // jogar o tópico na geração por IA. Desligar é mandar `false`.
+    const stored = await this.repository.getLevel(level);
+    const storedVideoOnly = new Set(
+      (stored?.modules ?? []).flatMap((m) =>
+        m.topics.filter((t) => t.videoOnly).map((t) => t.id),
+      ),
+    );
+
     const modules: CurriculumModule[] = dto.modules.map((m, mi) => ({
       id: m.id ?? randomUUID(),
       title: m.title,
@@ -65,7 +76,9 @@ export class CurriculumService {
         order: ti,
         // Só grava a flag quando ligada: o Firestore recusa `undefined` e o
         // tópico comum continua com a forma de antes da spec 027.
-        ...(t.videoOnly ? { videoOnly: true } : {}),
+        ...((t.videoOnly ?? (t.id ? storedVideoOnly.has(t.id) : false))
+          ? { videoOnly: true }
+          : {}),
       })),
     }));
 

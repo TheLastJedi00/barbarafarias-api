@@ -91,6 +91,43 @@ describe('CurriculumService', () => {
       expect(repository.upsertLevel).toHaveBeenCalledTimes(1);
     });
 
+    it('preserva videoOnly gravado quando o corpo não traz o campo', async () => {
+      repository.getLevel.mockResolvedValue({
+        level: 'A1',
+        prompt: '',
+        modules: [
+          {
+            id: 'm1',
+            title: 'Mod',
+            context: '',
+            order: 0,
+            topics: [
+              { id: 'v1', title: 'só vídeo', order: 0, videoOnly: true },
+              { id: 'v2', title: 'outro', order: 1, videoOnly: true },
+            ],
+          },
+        ],
+      });
+
+      const result = await service.upsertLevel('A1', {
+        prompt: '',
+        modules: [
+          {
+            id: 'm1',
+            title: 'Mod',
+            context: '',
+            topics: [
+              { id: 'v1', title: 'só vídeo' },
+              { id: 'v2', title: 'outro', videoOnly: false },
+            ],
+          },
+        ],
+      });
+
+      expect(result.modules[0].topics[0].videoOnly).toBe(true);
+      expect(result.modules[0].topics[1]).not.toHaveProperty('videoOnly');
+    });
+
     it('grava videoOnly só quando ligado', async () => {
       const result = await service.upsertLevel('A1', {
         prompt: '',
