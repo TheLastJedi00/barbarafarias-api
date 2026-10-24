@@ -341,8 +341,7 @@ describe('CandidateService — currículo (spec 028)', () => {
 
 describe('CandidateService — exclusão LGPD (spec 028)', () => {
   it('apaga candidaturas, arquivos, o doc e a conta, nessa ordem', async () => {
-    const { service, applications, storage, candidates, authService } =
-      setup();
+    const { service, applications, storage, candidates, authService } = setup();
     applications.findByCandidate.mockResolvedValue([
       { id: 'j1_cand-1' },
       { id: 'j2_cand-1' },

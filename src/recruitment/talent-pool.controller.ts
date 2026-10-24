@@ -1,4 +1,11 @@
-import { Controller, Get, Param } from '@nestjs/common';
+import {
+  Controller,
+  Delete,
+  Get,
+  HttpCode,
+  HttpStatus,
+  Param,
+} from '@nestjs/common';
 import { Roles } from '../decorators/roles.decorator';
 import { ROLES } from '../types/role';
 import { ApplicationService } from './application.service';
@@ -33,5 +40,12 @@ export class TalentPoolController {
   @Get(':id/resume/download')
   resumeDownload(@Param('id') id: string) {
     return this.candidates.resumeDownloadUrl(id);
+  }
+
+  /** Pedido de exclusão feito fora da plataforma (LGPD). */
+  @Delete(':id')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  remove(@Param('id') id: string) {
+    return this.candidates.deleteByManager(id);
   }
 }

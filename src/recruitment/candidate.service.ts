@@ -210,6 +210,26 @@ export class CandidateService {
     return { url };
   }
 
+  /**
+   * Exclusão definitiva pelo titular (LGPD, termo §8). A ordem vai do que
+   * aponta para a pessoa até a pessoa: candidaturas, arquivos, doc e, por
+   * último, a conta. Se algo falhar no meio, a conta continua existindo e o
+   * titular pode repetir o pedido — que termina o serviço mesmo sem o doc.
+   */
+  async deleteAll(id: string): Promise<void> {
+    const applications = await this.applications.findByCandidate(id);
+    await this.applications.deleteMany(applications.map((a) => a.id));
+    await this.storage.removePrefix(`candidates/${id}/`);
+    await this.candidates.delete(id);
+    await this.authService.deleteAccount(id);
+  }
+
+  /** A gerente atende um pedido feito fora da plataforma. */
+  async deleteByManager(id: string): Promise<void> {
+    await this.getOrThrow(id);
+    await this.deleteAll(id);
+  }
+
   async getOrThrow(id: string): Promise<Candidate> {
     const candidate = await this.candidates.findById(id);
     if (!candidate) throw new NotFoundException('Candidato não encontrado');

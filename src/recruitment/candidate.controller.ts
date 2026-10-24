@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   Headers,
   HttpCode,
@@ -88,5 +89,16 @@ export class CandidateController {
   @Roles(ROLES.CANDIDATE)
   resumeDownload(@CurrentUser() user: AuthenticatedUser) {
     return this.service.resumeDownloadUrl(user.sub);
+  }
+
+  /**
+   * "Excluir meus dados" (LGPD): definitivo. O ID Token continua válido até
+   * expirar, então o front ainda chama `/auth/logout` para limpar o cookie.
+   */
+  @Delete('me')
+  @Roles(ROLES.CANDIDATE)
+  @HttpCode(HttpStatus.NO_CONTENT)
+  deleteMe(@CurrentUser() user: AuthenticatedUser) {
+    return this.service.deleteAll(user.sub);
   }
 }
