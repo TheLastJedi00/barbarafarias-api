@@ -7,6 +7,8 @@ import { LegalRepository } from './legal.repository';
 import { assertType } from './legal.service';
 import { compareVersions, nextVersion } from './legal-version';
 import { PublishDto, SaveDraftDto } from './dto/legal.dto';
+import { LEGAL_SEEDS } from './seed/legal-seed';
+import { todayInAppTimezone } from '../common/time';
 import {
   LEGAL_DOCUMENT_TITLES,
   LEGAL_DOCUMENT_TYPES,
@@ -57,6 +59,13 @@ export interface AcceptancesView {
   requiredVersion: string | null;
   accepted: AcceptanceRow[];
   pending: PendingRow[];
+}
+
+/** Resultado da semeadura, por documento. */
+export interface SeedResult {
+  type: LegalDocumentType;
+  status: 'published' | 'skipped';
+  version: string;
 }
 
 interface Person {
@@ -210,6 +219,49 @@ export class LegalAdminService {
       };
     });
     return write.version;
+  }
+
+  /**
+   * Publica a `1.0` de cada documento que ainda não tem versão (context §5).
+   * Idempotente: documento já publicado é pulado, nunca sobrescrito — rodar
+   * de novo em produção não muda nada.
+   */
+  async seed(user: AuthenticatedUser): Promise<SeedResult[]> {
+    const results: SeedResult[] = [];
+    for (const seed of LEGAL_SEEDS) {
+      const current = await this.repository.getDocument(seed.type);
+      if (current?.publishedVersion) {
+        results.push({
+          type: seed.type,
+          status: 'skipped',
+          version: current.publishedVersion,
+        });
+        continue;
+      }
+      const now = new Date().toISOString();
+      await this.repository.publish(seed.type, () => ({
+        version: {
+          type: seed.type,
+          version: '1.0',
+          title: seed.title,
+          markdown: seed.markdown,
+          effectiveDate: seed.effectiveDate ?? todayInAppTimezone(),
+          requiresReacceptance: true,
+          changeNote: 'Versão inicial',
+          publishedAt: now,
+          publishedBy: user.sub,
+        },
+        header: {
+          type: seed.type,
+          title: seed.title,
+          publishedVersion: '1.0',
+          requiredVersion: '1.0',
+          updatedAt: now,
+        },
+      }));
+      results.push({ type: seed.type, status: 'published', version: '1.0' });
+    }
+    return results;
   }
 
   /**

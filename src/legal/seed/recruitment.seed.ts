@@ -10,6 +10,8 @@ import type { LegalSeed } from './legal-seed';
  */
 export const RECRUITMENT_SEED: LegalSeed = {
   type: 'recruitment',
+  // Mantém a vigência da v1.0 publicada pela spec 028.
+  effectiveDate: '2026-10-24',
   title:
     'Termo de Privacidade e Tratamento de Dados Pessoais — Processo Seletivo',
   markdown: `Este Termo explica como os dados pessoais de quem se cadastra na área **Trabalhe Conosco** do site

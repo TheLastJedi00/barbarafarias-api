@@ -8,6 +8,8 @@ export interface LegalSeed {
   type: LegalDocumentType;
   title: string;
   markdown: string;
+  /** Vigência fixa (`YYYY-MM-DD`); ausente = o dia da semeadura. */
+  effectiveDate?: string;
 }
 
 /**

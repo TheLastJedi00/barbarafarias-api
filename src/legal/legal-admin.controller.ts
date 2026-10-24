@@ -32,6 +32,13 @@ export class LegalAdminController {
     return this.service.overview();
   }
 
+  /** Idempotente: publica a 1.0 só de documento sem versão (context §5). */
+  @Post('seed')
+  @HttpCode(HttpStatus.OK)
+  seed(@CurrentUser() user: AuthenticatedUser) {
+    return this.service.seed(user);
+  }
+
   @Get(':type/draft')
   getDraft(@Param('type') type: string) {
     return this.service.getDraft(type);
