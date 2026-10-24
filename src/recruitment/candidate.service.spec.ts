@@ -1,4 +1,8 @@
-import { ConflictException, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  NotFoundException,
+} from '@nestjs/common';
 import { CandidateService } from './candidate.service';
 import { Candidate, RECRUITMENT_TERMS_VERSION } from './candidate.model';
 
@@ -193,5 +197,128 @@ describe('CandidateService — meus dados (spec 028)', () => {
     expect(saved.consentVersion).toBe(RECRUITMENT_TERMS_VERSION);
     expect(saved.consentAt).not.toBe('2026-10-24T00:00:00.000Z');
     expect(view.needsConsent).toBe(false);
+  });
+});
+
+describe('CandidateService — currículo (spec 028)', () => {
+  const pdf = { fileName: 'cv.pdf', mimeType: 'application/pdf', size: 1000 };
+
+  it('emite sessão de upload só para PDF, num caminho decidido aqui, e guarda o pendente', async () => {
+    const { service, candidates, storage } = setup();
+
+    const result = await service.requestResumeUpload('cand-1', pdf, 'https://front');
+
+    const [path, contentType, origin] = storage.createUploadSession.mock.calls[0];
+    expect(path).toMatch(/^candidates\/cand-1\/resume-[\w-]+\.pdf$/);
+    expect(contentType).toBe('application/pdf');
+    expect(origin).toBe('https://front');
+    expect(result).toEqual({ uploadUrl: 'https://upload' });
+    const saved: Candidate = candidates.save.mock.calls[0][0];
+    expect(saved.pendingResume).toEqual({ ...pdf, storagePath: path });
+  });
+
+  it('recusa tipo diferente de PDF e arquivo acima de 5 MB', async () => {
+    const { service, storage } = setup();
+
+    await expect(
+      service.requestResumeUpload('cand-1', { ...pdf, mimeType: 'application/msword' }),
+    ).rejects.toBeInstanceOf(BadRequestException);
+    await expect(
+      service.requestResumeUpload('cand-1', { ...pdf, size: 5 * 1024 * 1024 + 1 }),
+    ).rejects.toBeInstanceOf(BadRequestException);
+    expect(storage.createUploadSession).not.toHaveBeenCalled();
+  });
+
+  const pending = {
+    storagePath: 'candidates/cand-1/resume-novo.pdf',
+    fileName: 'novo.pdf',
+    mimeType: 'application/pdf',
+    size: 1000,
+  };
+  const current = {
+    storagePath: 'candidates/cand-1/resume-velho.pdf',
+    fileName: 'velho.pdf',
+    mimeType: 'application/pdf',
+    size: 900,
+    uploadedAt: '2026-10-01T00:00:00.000Z',
+  };
+
+  it('confirma: o pendente vira o currículo, com o tamanho que chegou, e o antigo sai do Storage', async () => {
+    const { service, candidates, storage } = setup();
+    candidates.findById.mockResolvedValue(
+      candidate({ resume: current, pendingResume: pending }),
+    );
+    storage.getObjectInfo.mockResolvedValue({ size: 1200, contentType: 'application/pdf' });
+
+    const view = await service.completeResumeUpload('cand-1');
+
+    const saved: Candidate = candidates.save.mock.calls[0][0];
+    expect(saved.resume).toMatchObject({
+      storagePath: pending.storagePath,
+      fileName: 'novo.pdf',
+      size: 1200,
+    });
+    expect(saved.resume!.uploadedAt).toBeTruthy();
+    expect(saved).not.toHaveProperty('pendingResume');
+    expect(storage.remove).toHaveBeenCalledWith(current.storagePath);
+    expect(view.resume!.fileName).toBe('novo.pdf');
+  });
+
+  it('confirmar sem sessão pendente é 409', async () => {
+    const { service } = setup();
+    await expect(service.completeResumeUpload('cand-1')).rejects.toBeInstanceOf(
+      ConflictException,
+    );
+  });
+
+  it('objeto que não chegou ao bucket é 409 e mantém o pendente para nova tentativa', async () => {
+    const { service, candidates, storage } = setup();
+    candidates.findById.mockResolvedValue(candidate({ pendingResume: pending }));
+    storage.getObjectInfo.mockResolvedValue(null);
+
+    await expect(service.completeResumeUpload('cand-1')).rejects.toBeInstanceOf(
+      ConflictException,
+    );
+    expect(candidates.save).not.toHaveBeenCalled();
+  });
+
+  it('o que chegou fora da regra (tipo ou tamanho) é apagado, e o currículo antigo fica', async () => {
+    const { service, candidates, storage } = setup();
+    candidates.findById.mockResolvedValue(
+      candidate({ resume: current, pendingResume: pending }),
+    );
+    storage.getObjectInfo.mockResolvedValue({
+      size: 6 * 1024 * 1024,
+      contentType: 'application/pdf',
+    });
+
+    await expect(service.completeResumeUpload('cand-1')).rejects.toBeInstanceOf(
+      BadRequestException,
+    );
+    expect(storage.remove).toHaveBeenCalledWith(pending.storagePath);
+    const saved: Candidate = candidates.save.mock.calls[0][0];
+    expect(saved.resume).toEqual(current);
+    expect(saved).not.toHaveProperty('pendingResume');
+  });
+
+  it('download: URL assinada de 15 min com o nome original', async () => {
+    const { service, candidates, storage } = setup();
+    candidates.findById.mockResolvedValue(candidate({ resume: current }));
+
+    await expect(service.resumeDownloadUrl('cand-1')).resolves.toEqual({
+      url: 'https://signed-read',
+    });
+    expect(storage.signedReadUrl).toHaveBeenCalledWith(
+      current.storagePath,
+      15 * 60 * 1000,
+      'velho.pdf',
+    );
+  });
+
+  it('download sem currículo é 404', async () => {
+    const { service } = setup();
+    await expect(service.resumeDownloadUrl('cand-1')).rejects.toBeInstanceOf(
+      NotFoundException,
+    );
   });
 });
