@@ -1,7 +1,9 @@
 import {
   Body,
   Controller,
+  BadRequestException,
   Delete,
+  Get,
   Headers,
   HttpCode,
   Param,
@@ -15,6 +17,8 @@ import {
   type AuthenticatedUser,
 } from '../decorators/current-user.decorator';
 import { ROLES } from '../types/role';
+import { LEVELS, type Level } from '../types/student.level';
+import { RequiresActivePlan } from '../guards/active-plan.guard';
 import { VideoLessonService } from './video-lesson.service';
 import {
   CreateMaterialDto,
@@ -30,6 +34,49 @@ import {
 @Controller('video-lessons')
 export class VideoLessonController {
   constructor(private readonly service: VideoLessonService) {}
+
+  /** Árvore do aluno: o próprio nível, só aulas prontas. */
+  @Get('me')
+  @Roles(ROLES.STUDENT)
+  @RequiresActivePlan()
+  getMine(@CurrentUser() user: AuthenticatedUser) {
+    return this.service.getStudentTree(user);
+  }
+
+  @Get('levels/:level')
+  @Roles(ROLES.TEACHER)
+  getLevel(@Param('level') level: string) {
+    return this.service.getTeacherTree(parseLevel(level));
+  }
+
+  /**
+   * Leitura de uma aula. Aberta a aluno e professora; o service aplica a regra
+   * do nível, e o guard de plano só pesa para o aluno.
+   */
+  @Get(':id')
+  @Roles(ROLES.STUDENT, ROLES.TEACHER)
+  @RequiresActivePlan()
+  getDetail(@Param('id') id: string, @CurrentUser() user: AuthenticatedUser) {
+    return this.service.getDetail(id, user);
+  }
+
+  @Get(':id/playback')
+  @Roles(ROLES.STUDENT, ROLES.TEACHER)
+  @RequiresActivePlan()
+  getPlayback(@Param('id') id: string, @CurrentUser() user: AuthenticatedUser) {
+    return this.service.getPlayback(id, user);
+  }
+
+  @Get(':id/materials/:materialId/download')
+  @Roles(ROLES.STUDENT, ROLES.TEACHER)
+  @RequiresActivePlan()
+  getMaterialDownload(
+    @Param('id') id: string,
+    @Param('materialId') materialId: string,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.service.getMaterialDownload(id, materialId, user);
+  }
 
   /**
    * Cria a aula e devolve a URL de upload direto ao Storage. A `origin` vai
@@ -111,4 +158,13 @@ export class VideoLessonController {
   ) {
     return this.service.removeMaterial(id, materialId);
   }
+}
+
+function parseLevel(level: string): Level {
+  if (!(LEVELS as readonly string[]).includes(level)) {
+    throw new BadRequestException(
+      `Nível inválido: "${level}". Use um de ${LEVELS.join(', ')}.`,
+    );
+  }
+  return level as Level;
 }

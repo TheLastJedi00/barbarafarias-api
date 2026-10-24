@@ -11,10 +11,12 @@ import { CurriculumService } from '../curriculum/curriculum.service';
 import { StorageService } from '../uploads/storage.service';
 import { UserRepository } from '../users/user.repository';
 import type { AuthenticatedUser } from '../decorators/current-user.decorator';
-import { Level } from '../types/student.level';
+import { LEVELS, Level } from '../types/student.level';
+import { ROLES } from '../types/role';
 import {
   MuxAssetState,
   MuxGateway,
+  PlaybackTokens,
   STREAMING_UNAVAILABLE_MESSAGE,
 } from './mux.gateway';
 import { VideoLessonRepository } from './video-lesson.repository';
@@ -51,6 +53,45 @@ export interface MaterialView {
   mimeType: string;
   size: number;
   status: string;
+}
+
+/** Validade do link de download de material. */
+const DOWNLOAD_URL_TTL_MS = 15 * 60 * 1000;
+
+/**
+ * O que o aluno recebe de uma aula: só o que está pronto, sem nome do arquivo
+ * original, status ou motivo de erro.
+ */
+export interface StudentLessonView {
+  id: string;
+  level: Level;
+  topicId: string;
+  title: string;
+  description: string;
+  order: number;
+  durationSec?: number;
+  aspectRatio?: string;
+  thumbnailUrl?: string;
+  materials: MaterialView[];
+}
+
+/** Árvore módulo › tópico › aulas, na ordem do currículo do nível. */
+export interface VideoLessonTree<L> {
+  level: Level | null;
+  modules: {
+    id: string;
+    title: string;
+    topics: { id: string; title: string; videoOnly: boolean; lessons: L[] }[];
+  }[];
+}
+
+/** Detalhe de uma aula, com a vizinhança dentro do tópico. */
+export interface VideoLessonDetail<L> {
+  lesson: L;
+  module: { id: string; title: string };
+  topic: { id: string; title: string };
+  previousId: string | null;
+  nextId: string | null;
 }
 
 /** O que o painel da professora recebe de uma aula. */
@@ -258,6 +299,196 @@ export class VideoLessonService {
   }
 
   /**
+   * Árvore do aluno: o nível **dele**, só aulas prontas, e só os módulos e
+   * tópicos que têm aula — um tópico vazio na tela do aluno é ruído.
+   */
+  async getStudentTree(
+    user: AuthenticatedUser,
+  ): Promise<VideoLessonTree<StudentLessonView>> {
+    const level = await this.studentLevel(user);
+    if (!level) return { level: null, modules: [] };
+
+    const lessons = (await this.repository.findByLevel(level)).filter(isReady);
+    const tree = await this.buildTree(level, lessons, (l) =>
+      this.toStudentView(l),
+    );
+    return {
+      level,
+      modules: tree.modules
+        .map((m) => ({
+          ...m,
+          topics: m.topics.filter((t) => t.lessons.length),
+        }))
+        .filter((m) => m.topics.length),
+    };
+  }
+
+  /**
+   * Árvore do painel: todos os módulos e tópicos do nível (é onde a professora
+   * escolhe o destino do vídeo) e aulas em qualquer status.
+   */
+  async getTeacherTree(
+    level: Level,
+  ): Promise<VideoLessonTree<VideoLessonView & { thumbnailUrl?: string }>> {
+    const lessons = await this.repository.findByLevel(level);
+    return this.buildTree(level, lessons, async (l) => ({
+      ...toView(l),
+      ...(await this.thumbnail(l)),
+    }));
+  }
+
+  async getDetail(
+    id: string,
+    user: AuthenticatedUser,
+  ): Promise<VideoLessonDetail<StudentLessonView | VideoLessonView>> {
+    const lesson = await this.getVisible(id, user);
+    const student = user.role === ROLES.STUDENT;
+
+    const curriculum = await this.curriculum.getLevel(lesson.level);
+    const module = curriculum.modules.find((m) =>
+      m.topics.some((t) => t.id === lesson.topicId),
+    );
+    const topic = module?.topics.find((t) => t.id === lesson.topicId);
+
+    const siblings = (await this.repository.findByTopic(lesson.topicId))
+      .filter((l) => !student || isReady(l))
+      .sort(byOrder);
+    const index = siblings.findIndex((l) => l.id === lesson.id);
+
+    return {
+      lesson: student ? await this.toStudentView(lesson) : toView(lesson),
+      module: { id: module?.id ?? '', title: module?.title ?? '' },
+      topic: { id: topic?.id ?? lesson.topicId, title: topic?.title ?? '' },
+      previousId: index > 0 ? siblings[index - 1].id : null,
+      nextId:
+        index >= 0 && index < siblings.length - 1
+          ? siblings[index + 1].id
+          : null,
+    };
+  }
+
+  /** Tokens do `<mux-player>`. Só para aula pronta que a pessoa pode ver. */
+  async getPlayback(
+    id: string,
+    user: AuthenticatedUser,
+  ): Promise<{ playbackId: string; tokens: PlaybackTokens }> {
+    const lesson = await this.getVisible(id, user);
+    const playbackId = lesson.mux?.playbackId;
+    if (!isReady(lesson) || !playbackId) {
+      throw new ConflictException('O vídeo ainda está em processamento.');
+    }
+    return { playbackId, tokens: await this.mux.signPlayback(playbackId) };
+  }
+
+  /** Link de download que expira em 15 min, com o nome original. */
+  async getMaterialDownload(
+    id: string,
+    materialId: string,
+    user: AuthenticatedUser,
+  ): Promise<{ url: string }> {
+    const lesson = await this.getVisible(id, user);
+    const material = this.findMaterial(lesson, materialId);
+    if (material.status !== MATERIAL_STATUS.READY) {
+      throw new NotFoundException('Material não encontrado.');
+    }
+    return {
+      url: await this.storage.signedReadUrl(
+        material.storagePath,
+        DOWNLOAD_URL_TTL_MS,
+        material.fileName,
+      ),
+    };
+  }
+
+  /**
+   * A regra de quem vê: professora e gerente veem tudo; o aluno vê aula
+   * **pronta do próprio nível**. Fora disso, 404 — e não 403, para não
+   * confirmar que a aula existe.
+   */
+  private async getVisible(
+    id: string,
+    user: AuthenticatedUser,
+  ): Promise<VideoLesson> {
+    const lesson = await this.getOrThrow(id);
+    if (user.role !== ROLES.STUDENT) return lesson;
+
+    const level = await this.studentLevel(user);
+    if (!isReady(lesson) || lesson.level !== level) {
+      throw new NotFoundException('Vídeo aula não encontrada.');
+    }
+    return lesson;
+  }
+
+  private async studentLevel(user: AuthenticatedUser): Promise<Level | null> {
+    const student = await this.users.findById(user.sub);
+    const level = student?.level;
+    return level && (LEVELS as readonly string[]).includes(level)
+      ? (level as Level)
+      : null;
+  }
+
+  private async buildTree<L>(
+    level: Level,
+    lessons: VideoLesson[],
+    project: (lesson: VideoLesson) => Promise<L>,
+  ): Promise<VideoLessonTree<L>> {
+    const curriculum = await this.curriculum.getLevel(level);
+    const byTopic = new Map<string, VideoLesson[]>();
+    for (const lesson of [...lessons].sort(byOrder)) {
+      byTopic.set(lesson.topicId, [
+        ...(byTopic.get(lesson.topicId) ?? []),
+        lesson,
+      ]);
+    }
+
+    const modules = await Promise.all(
+      curriculum.modules.map(async (m) => ({
+        id: m.id,
+        title: m.title,
+        topics: await Promise.all(
+          m.topics.map(async (t) => ({
+            id: t.id,
+            title: t.title,
+            videoOnly: t.videoOnly === true,
+            lessons: await Promise.all((byTopic.get(t.id) ?? []).map(project)),
+          })),
+        ),
+      })),
+    );
+    return { level, modules };
+  }
+
+  private async toStudentView(lesson: VideoLesson): Promise<StudentLessonView> {
+    return {
+      id: lesson.id,
+      level: lesson.level,
+      topicId: lesson.topicId,
+      title: lesson.title,
+      description: lesson.description,
+      order: lesson.order,
+      ...(lesson.mux?.durationSec !== undefined
+        ? { durationSec: lesson.mux.durationSec }
+        : {}),
+      ...(lesson.mux?.aspectRatio
+        ? { aspectRatio: lesson.mux.aspectRatio }
+        : {}),
+      ...(await this.thumbnail(lesson)),
+      materials: lesson.materials
+        .filter((m) => m.status === MATERIAL_STATUS.READY)
+        .map(toMaterialView),
+    };
+  }
+
+  private async thumbnail(
+    lesson: VideoLesson,
+  ): Promise<{ thumbnailUrl?: string }> {
+    const playbackId = lesson.mux?.playbackId;
+    if (!isReady(lesson) || !playbackId) return {};
+    const url = await this.mux.thumbnailUrl(playbackId);
+    return url ? { thumbnailUrl: url } : {};
+  }
+
+  /**
    * Reserva o material e devolve a URL de upload direto — o mesmo caminho do
    * vídeo, em duas etapas. Até a confirmação ele fica `uploading` e o aluno
    * não o vê.
@@ -430,6 +661,14 @@ function toMaterialView(material: VideoLessonMaterial): MaterialView {
     size: material.size,
     status: material.status,
   };
+}
+
+function isReady(lesson: VideoLesson): boolean {
+  return lesson.status === VIDEO_LESSON_STATUS.READY;
+}
+
+function byOrder(a: VideoLesson, b: VideoLesson): number {
+  return a.order - b.order || a.createdAt.localeCompare(b.createdAt);
 }
 
 function nextOrder(siblings: VideoLesson[]): number {

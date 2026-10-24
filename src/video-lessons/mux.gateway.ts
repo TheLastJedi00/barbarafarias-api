@@ -126,6 +126,28 @@ export class MuxGateway {
   }
 
   /**
+   * URL de miniatura assinada para os cards. Com playback assinado, parâmetros
+   * de imagem (largura) precisam ir **dentro** do token, não na query.
+   *
+   * `null` em vez de erro quando não dá para assinar: a lista de aulas
+   * continua útil sem as miniaturas.
+   */
+  async thumbnailUrl(playbackId: string): Promise<string | null> {
+    if (!this.mux?.jwtSigningKey || !this.mux.jwtPrivateKey) return null;
+    try {
+      const token = await this.mux.jwt.signPlaybackId(playbackId, {
+        type: 'thumbnail',
+        expiration: PLAYBACK_TOKEN_TTL,
+        params: { width: '640' },
+      });
+      return `https://image.mux.com/${playbackId}/thumbnail.webp?token=${token}`;
+    } catch (error) {
+      this.logger.warn(`Falha ao assinar miniatura: ${String(error)}`);
+      return null;
+    }
+  }
+
+  /**
    * Confere a assinatura (`mux-signature`, sobre o corpo cru) e devolve o
    * estado do asset — ou `null` para os eventos que não nos interessam.
    *

@@ -74,9 +74,18 @@ function setup() {
     createAsset: jest.fn().mockResolvedValue('asset-1'),
     getAsset: jest.fn(),
     deleteAsset: jest.fn().mockResolvedValue(undefined),
-    signPlayback: jest.fn(),
+    signPlayback: jest.fn().mockResolvedValue({
+      playback: 'pt',
+      thumbnail: 'tt',
+      storyboard: 'st',
+    }),
+    thumbnailUrl: jest
+      .fn()
+      .mockImplementation((id: string) =>
+        Promise.resolve(`https://image.mux.com/${id}/thumbnail.webp?token=x`),
+      ),
   };
-  const users = { findById: jest.fn() };
+  const users = { findById: jest.fn().mockResolvedValue({ level: 'A1' }) };
   const service = new VideoLessonService(
     repository as any,
     curriculumService as any,
@@ -95,6 +104,205 @@ const createDto = {
   mimeType: 'video/mp4',
   size: 1000,
 };
+
+const student = { sub: 'student-1', email: 's@x', role: 'student' as const };
+
+describe('VideoLessonService — leitura (spec 027)', () => {
+  const ready = (overrides: Partial<VideoLesson> = {}) =>
+    lesson({
+      status: 'ready',
+      mux: { assetId: 'a', playbackId: 'pb', durationSec: 60 },
+      ...overrides,
+    });
+
+  describe('árvore do aluno', () => {
+    it('mostra só aulas prontas e poda tópicos vazios', async () => {
+      const { service, repository } = setup();
+      repository.findByLevel.mockResolvedValue([
+        ready({ id: 'b', order: 1 }),
+        ready({ id: 'a', order: 0 }),
+        lesson({ id: 'up', status: 'processing' }),
+      ]);
+
+      const tree = await service.getStudentTree(student);
+
+      expect(repository.findByLevel).toHaveBeenCalledWith('A1');
+      expect(tree.modules).toHaveLength(1);
+      // t2 (só vídeo, sem aula) some; t1 mantém a ordem do tópico
+      expect(tree.modules[0].topics.map((t) => t.id)).toEqual(['t1']);
+      const lessons = tree.modules[0].topics[0].lessons;
+      expect(lessons.map((l) => l.id)).toEqual(['a', 'b']);
+      expect(lessons[0]).toMatchObject({
+        durationSec: 60,
+        thumbnailUrl: 'https://image.mux.com/pb/thumbnail.webp?token=x',
+      });
+      expect(lessons[0]).not.toHaveProperty('status');
+      expect(lessons[0]).not.toHaveProperty('source');
+    });
+
+    it('aluno sem nível recebe árvore vazia', async () => {
+      const { service, users, repository } = setup();
+      users.findById.mockResolvedValue({ level: '' });
+
+      expect(await service.getStudentTree(student)).toEqual({
+        level: null,
+        modules: [],
+      });
+      expect(repository.findByLevel).not.toHaveBeenCalled();
+    });
+
+    it('esconde material que ainda está subindo', async () => {
+      const { service, repository } = setup();
+      repository.findByLevel.mockResolvedValue([
+        ready({
+          materials: [
+            {
+              id: 'm1',
+              fileName: 'a.pdf',
+              storagePath: 'p1',
+              mimeType: 'application/pdf',
+              size: 1,
+              status: 'ready',
+              uploadedAt: '',
+            },
+            {
+              id: 'm2',
+              fileName: 'b.pdf',
+              storagePath: 'p2',
+              mimeType: 'application/pdf',
+              size: 1,
+              status: 'uploading',
+              uploadedAt: '',
+            },
+          ],
+        }),
+      ]);
+
+      const tree = await service.getStudentTree(student);
+      const materials = tree.modules[0].topics[0].lessons[0].materials;
+      expect(materials.map((m) => m.id)).toEqual(['m1']);
+      expect(materials[0]).not.toHaveProperty('storagePath');
+    });
+  });
+
+  it('árvore da professora traz tópicos vazios, flag só vídeo e todos os status', async () => {
+    const { service, repository } = setup();
+    repository.findByLevel.mockResolvedValue([
+      lesson({ id: 'up', status: 'processing' }),
+    ]);
+
+    const tree = await service.getTeacherTree('A1');
+    const topics = tree.modules[0].topics;
+    expect(topics.map((t) => [t.id, t.videoOnly, t.lessons.length])).toEqual([
+      ['t1', false, 1],
+      ['t2', true, 0],
+    ]);
+    expect(topics[0].lessons[0].status).toBe('processing');
+  });
+
+  describe('quem vê o quê', () => {
+    it('aluno de outro nível recebe 404', async () => {
+      const { service, repository, users } = setup();
+      repository.findById.mockResolvedValue(ready());
+      users.findById.mockResolvedValue({ level: 'B1' });
+
+      await expect(service.getPlayback('v1', student)).rejects.toThrow(
+        'Vídeo aula não encontrada',
+      );
+    });
+
+    it('aluno não vê aula que não está pronta', async () => {
+      const { service, repository } = setup();
+      repository.findById.mockResolvedValue(lesson({ status: 'processing' }));
+
+      await expect(service.getDetail('v1', student)).rejects.toThrow(
+        'Vídeo aula não encontrada',
+      );
+    });
+
+    it('professora vê qualquer nível; playback exige aula pronta', async () => {
+      const { service, repository, users } = setup();
+      repository.findById.mockResolvedValue(
+        lesson({ level: 'B2', status: 'processing' }),
+      );
+
+      await expect(service.getPlayback('v1', teacher)).rejects.toBeInstanceOf(
+        ConflictException,
+      );
+      expect(users.findById).not.toHaveBeenCalled();
+    });
+
+    it('aluno do nível recebe os tokens assinados', async () => {
+      const { service, repository, mux } = setup();
+      repository.findById.mockResolvedValue(ready());
+
+      expect(await service.getPlayback('v1', student)).toEqual({
+        playbackId: 'pb',
+        tokens: { playback: 'pt', thumbnail: 'tt', storyboard: 'st' },
+      });
+      expect(mux.signPlayback).toHaveBeenCalledWith('pb');
+    });
+  });
+
+  describe('download de material', () => {
+    const withMaterial = (status: 'ready' | 'uploading') =>
+      ready({
+        materials: [
+          {
+            id: 'm1',
+            fileName: 'Lição 1.pdf',
+            storagePath: 'video-lessons/v1/materials/m1.pdf',
+            mimeType: 'application/pdf',
+            size: 1,
+            status,
+            uploadedAt: '',
+          },
+        ],
+      });
+
+    it('assina por 15 min com o nome original', async () => {
+      const { service, repository, storage } = setup();
+      repository.findById.mockResolvedValue(withMaterial('ready'));
+
+      expect(await service.getMaterialDownload('v1', 'm1', student)).toEqual({
+        url: 'https://signed-read',
+      });
+      expect(storage.signedReadUrl).toHaveBeenCalledWith(
+        'video-lessons/v1/materials/m1.pdf',
+        15 * 60 * 1000,
+        'Lição 1.pdf',
+      );
+    });
+
+    it('material ainda subindo é 404', async () => {
+      const { service, repository } = setup();
+      repository.findById.mockResolvedValue(withMaterial('uploading'));
+
+      await expect(
+        service.getMaterialDownload('v1', 'm1', student),
+      ).rejects.toThrow('Material não encontrado');
+    });
+  });
+
+  it('detalhe traz módulo, tópico e vizinhos prontos', async () => {
+    const { service, repository } = setup();
+    repository.findById.mockResolvedValue(ready({ id: 'b', order: 1 }));
+    repository.findByTopic.mockResolvedValue([
+      ready({ id: 'a', order: 0 }),
+      ready({ id: 'b', order: 1 }),
+      lesson({ id: 'x', order: 2, status: 'processing' }),
+      ready({ id: 'c', order: 3 }),
+    ]);
+
+    const detail = await service.getDetail('b', student);
+    expect(detail).toMatchObject({
+      module: { id: 'm1', title: 'Módulo 1' },
+      topic: { id: 't1', title: 'Alphabet' },
+      previousId: 'a',
+      nextId: 'c',
+    });
+  });
+});
 
 describe('VideoLessonService — escrita (spec 027)', () => {
   describe('create', () => {

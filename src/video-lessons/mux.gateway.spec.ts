@@ -100,6 +100,25 @@ describe('MuxGateway (spec 027)', () => {
     ).rejects.toBeInstanceOf(ServiceUnavailableException);
   });
 
+  it('miniatura assinada com a largura dentro do token', async () => {
+    const mux = makeMux();
+    mux.jwt.signPlaybackId.mockResolvedValue('thumb-jwt');
+
+    expect(await new MuxGateway(mux as any).thumbnailUrl('sig')).toBe(
+      'https://image.mux.com/sig/thumbnail.webp?token=thumb-jwt',
+    );
+    expect(mux.jwt.signPlaybackId).toHaveBeenCalledWith('sig', {
+      type: 'thumbnail',
+      expiration: '6h',
+      params: { width: '640' },
+    });
+  });
+
+  it('sem signing key a miniatura é omitida, não erro', async () => {
+    const mux = makeMux({ jwtSigningKey: null });
+    expect(await new MuxGateway(mux as any).thumbnailUrl('sig')).toBeNull();
+  });
+
   describe('webhook', () => {
     it('recusa quando o segredo não está configurado', async () => {
       const mux = makeMux({ webhookSecret: null });
