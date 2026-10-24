@@ -25,6 +25,7 @@ describe('AuthService', () => {
     sendVerificationEmail: jest.Mock;
   };
   let userRepository: { findById: jest.Mock; update: jest.Mock };
+  let candidateRepository: { exists: jest.Mock };
   let cooldown: { enforce: jest.Mock };
 
   const sessao = {
@@ -58,12 +59,14 @@ describe('AuthService', () => {
       findById: jest.fn().mockResolvedValue(null),
       update: jest.fn().mockResolvedValue(undefined),
     };
+    candidateRepository = { exists: jest.fn().mockResolvedValue(false) };
     cooldown = { enforce: jest.fn().mockResolvedValue(undefined) };
     service = new AuthService(
       auth as any,
       identity as any,
       userRepository as any,
       cooldown as any,
+      candidateRepository as any,
     );
   });
 
@@ -149,6 +152,28 @@ describe('AuthService', () => {
       expect(auth.setCustomUserClaims).toHaveBeenCalledWith('uid-1', {
         role: 'student',
       });
+    });
+
+    it('conta de candidato sem claim vira candidato, nunca aluno (spec 028)', async () => {
+      auth.verifyIdToken.mockResolvedValueOnce({ uid: 'uid-1', email: 'a@b.com' });
+      userRepository.findById.mockResolvedValue(null);
+      candidateRepository.exists.mockResolvedValue(true);
+
+      await service.login('a@b.com', 'senha');
+
+      expect(candidateRepository.exists).toHaveBeenCalledWith('uid-1');
+      expect(auth.setCustomUserClaims).toHaveBeenCalledWith('uid-1', {
+        role: 'candidate',
+      });
+    });
+
+    it('não consulta candidatos quando users já responde', async () => {
+      auth.verifyIdToken.mockResolvedValueOnce({ uid: 'uid-1', email: 'a@b.com' });
+      userRepository.findById.mockResolvedValue({ id: 'uid-1', role: 'teacher' });
+
+      await service.login('a@b.com', 'senha');
+
+      expect(candidateRepository.exists).not.toHaveBeenCalled();
     });
 
     it('não toca no banco quando o token já traz o papel', async () => {
