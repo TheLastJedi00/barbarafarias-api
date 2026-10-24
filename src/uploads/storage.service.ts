@@ -13,6 +13,19 @@ const EXTENSION_BY_MIME: Record<string, string> = {
 };
 
 /**
+ * `Content-Disposition` de download com o nome original. O `filename` ASCII
+ * é o fallback; o `filename*` (RFC 5987) leva acentos e espaços intactos.
+ */
+export function attachmentDisposition(fileName: string): string {
+  const ascii = fileName
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^\x20-\x7e]/g, '_')
+    .replace(/["\\]/g, '_');
+  return `attachment; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(fileName)}`;
+}
+
+/**
  * Upload de mídia para o **Firebase Storage** (spec 011 §3).
  *
  * O binário passa pela API em vez de ir direto do navegador porque este
@@ -48,6 +61,86 @@ export class StorageService {
     });
 
     return { url: this.publicUrl(bucket.name, path, downloadToken), path };
+  }
+
+  /**
+   * Sessão de upload **resumable** do GCS (spec 027): o navegador envia o
+   * arquivo direto para a URL devolvida, sem passar pela API.
+   *
+   * Vídeo e material de apoio não cabem no desenho do `upload()` acima — a
+   * Vercel corta o corpo em ~4,5 MB e o `main.ts` em 1 MB. A API continua
+   * sendo quem autoriza: a URL vale para **um objeto**, com caminho e
+   * content-type decididos aqui, e é assinada pela service account. O bucket
+   * segue fechado e não há regras do Firebase a publicar.
+   *
+   * `origin` é a origem do front que vai fazer os PUTs: o GCS devolve os
+   * headers de CORS da sessão para ela.
+   */
+  async createUploadSession(
+    path: string,
+    contentType: string,
+    origin?: string,
+  ): Promise<string> {
+    const [url] = await this.bucket()
+      .file(path)
+      .createResumableUpload({
+        metadata: { contentType },
+        ...(origin ? { origin } : {}),
+      });
+    return url;
+  }
+
+  /**
+   * Tamanho e tipo do objeto já gravado, ou `null` se ele não existe. É a
+   * conferência depois do upload direto: o que vale é o que chegou ao bucket,
+   * não o que o navegador disse que ia mandar.
+   */
+  async getObjectInfo(
+    path: string,
+  ): Promise<{ size: number; contentType?: string } | null> {
+    try {
+      const [metadata] = await this.bucket().file(path).getMetadata();
+      return {
+        size: Number(metadata.size ?? 0),
+        contentType: metadata.contentType,
+      };
+    } catch (error) {
+      if ((error as { code?: number }).code === 404) return null;
+      throw error;
+    }
+  }
+
+  /**
+   * URL v4 assinada de leitura, que expira (spec 027). Com `fileName`, o
+   * navegador baixa o arquivo com o nome original em vez de abri-lo.
+   */
+  async signedReadUrl(
+    path: string,
+    ttlMs: number,
+    fileName?: string,
+  ): Promise<string> {
+    const [url] = await this.bucket()
+      .file(path)
+      .getSignedUrl({
+        version: 'v4',
+        action: 'read',
+        expires: Date.now() + ttlMs,
+        ...(fileName
+          ? { responseDisposition: attachmentDisposition(fileName) }
+          : {}),
+      });
+    return url;
+  }
+
+  /** Best-effort, como o `remove`: apaga tudo sob um prefixo. */
+  async removePrefix(prefix: string): Promise<void> {
+    try {
+      await this.bucket().deleteFiles({ prefix });
+    } catch (error) {
+      this.logger.warn(
+        `Falha ao remover ${prefix}* do Storage: ${String(error)}`,
+      );
+    }
   }
 
   /** Best-effort: trocar de avatar não pode falhar porque o antigo sumiu. */
