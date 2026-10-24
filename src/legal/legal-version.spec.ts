@@ -1,8 +1,4 @@
-import {
-  compareVersions,
-  isUpToDate,
-  nextVersion,
-} from './legal-version';
+import { compareVersions, isUpToDate, nextVersion } from './legal-version';
 
 describe('versões dos documentos jurídicos (spec 029)', () => {
   describe('nextVersion', () => {

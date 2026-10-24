@@ -2,7 +2,7 @@ import { NotFoundException } from '@nestjs/common';
 import { LegalService } from './legal.service';
 import { LegalDocument, LegalVersion } from './legal.model';
 
-export function header(overrides: Partial<LegalDocument> = {}): LegalDocument {
+function header(overrides: Partial<LegalDocument> = {}): LegalDocument {
   return {
     type: 'terms-of-use',
     title: 'Termos de Uso',
@@ -13,7 +13,7 @@ export function header(overrides: Partial<LegalDocument> = {}): LegalDocument {
   };
 }
 
-export function version(overrides: Partial<LegalVersion> = {}): LegalVersion {
+function version(overrides: Partial<LegalVersion> = {}): LegalVersion {
   return {
     type: 'terms-of-use',
     version: '1.0',
@@ -27,7 +27,7 @@ export function version(overrides: Partial<LegalVersion> = {}): LegalVersion {
   };
 }
 
-export function legalSetup() {
+function legalSetup() {
   const repository = {
     getDocument: jest.fn().mockResolvedValue(header()),
     getVersion: jest.fn().mockResolvedValue(version({ version: '1.1' })),
