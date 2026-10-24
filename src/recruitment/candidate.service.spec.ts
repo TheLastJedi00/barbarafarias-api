@@ -69,18 +69,22 @@ const signup = {
   password: 'senha-forte',
   name: 'Ana Souza',
   phone: '62999998888',
+  acceptTermsOfUse: true as const,
+  acceptPrivacyPolicy: true as const,
   acceptTerms: true as const,
   isAdult: true as const,
 };
+
+const signupMeta = { ip: '200.1.2.3', userAgent: 'Chrome' };
 
 describe('CandidateService — cadastro (spec 028)', () => {
   it('cria a conta com papel candidate e o doc com o mesmo uid e o aceite do termo', async () => {
     const { service, candidates, authService } = setup();
 
-    const view = await service.signup({
-      ...signup,
-      linkedinUrl: 'https://www.linkedin.com/in/ana',
-    });
+    const view = await service.signup(
+      { ...signup, linkedinUrl: 'https://www.linkedin.com/in/ana' },
+      signupMeta,
+    );
 
     const account = authService.createAccount.mock.calls[0][0];
     expect(account).toMatchObject({
@@ -104,13 +108,44 @@ describe('CandidateService — cadastro (spec 028)', () => {
     expect(view.needsConsent).toBe(false);
   });
 
+  it('grava os aceites dos três documentos publicados, com IP e navegador (spec 029)', async () => {
+    const { service, authService, legal } = setup();
+
+    await service.signup(signup, signupMeta);
+
+    const uid = authService.createAccount.mock.calls[0][0].uid;
+    expect(legal.accept).toHaveBeenCalledWith(
+      expect.objectContaining({ sub: uid, role: 'candidate' }),
+      ['terms-of-use', 'privacy-policy', 'recruitment'],
+      signupMeta,
+    );
+  });
+
+  it('documento ainda não publicado fica de fora do aceite (o modal pede depois)', async () => {
+    const { service, legal } = setup();
+    legal.requirement.mockImplementation((type: string) =>
+      Promise.resolve(
+        type === 'privacy-policy'
+          ? { publishedVersion: null, requiredVersion: null }
+          : { publishedVersion: '1.0', requiredVersion: '1.0' },
+      ),
+    );
+
+    await service.signup(signup, signupMeta);
+
+    expect(legal.accept.mock.calls[0][1]).toEqual([
+      'terms-of-use',
+      'recruitment',
+    ]);
+  });
+
   it('e-mail já usado: o 409 do createAccount sobe e nada é gravado', async () => {
     const { service, candidates, authService } = setup();
     authService.createAccount.mockRejectedValue(
       new ConflictException('E-mail já cadastrado'),
     );
 
-    await expect(service.signup(signup)).rejects.toBeInstanceOf(
+    await expect(service.signup(signup, signupMeta)).rejects.toBeInstanceOf(
       ConflictException,
     );
     expect(candidates.save).not.toHaveBeenCalled();
@@ -120,7 +155,9 @@ describe('CandidateService — cadastro (spec 028)', () => {
     const { service, candidates, authService } = setup();
     candidates.save.mockRejectedValue(new Error('firestore fora'));
 
-    await expect(service.signup(signup)).rejects.toThrow('firestore fora');
+    await expect(service.signup(signup, signupMeta)).rejects.toThrow(
+      'firestore fora',
+    );
     expect(authService.deleteAccount).toHaveBeenCalledWith(
       authService.createAccount.mock.calls[0][0].uid,
     );
