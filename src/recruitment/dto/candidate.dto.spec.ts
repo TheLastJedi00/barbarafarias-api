@@ -46,7 +46,10 @@ describe('CandidateSignupDto (spec 028)', () => {
       }),
     ).resolves.toEqual(['linkedinUrl']);
     await expect(
-      errorsOf(CandidateSignupDto, { ...valid, linkedinUrl: 'linkedin.com/in/x' }),
+      errorsOf(CandidateSignupDto, {
+        ...valid,
+        linkedinUrl: 'linkedin.com/in/x',
+      }),
     ).resolves.toEqual(['linkedinUrl']);
   });
 
@@ -70,8 +73,8 @@ describe('UpdateCandidateDto (spec 028)', () => {
   });
 
   it('nome em branco é recusado', async () => {
-    await expect(errorsOf(UpdateCandidateDto, { name: '   ' })).resolves.toEqual([
-      'name',
-    ]);
+    await expect(
+      errorsOf(UpdateCandidateDto, { name: '   ' }),
+    ).resolves.toEqual(['name']);
   });
 });

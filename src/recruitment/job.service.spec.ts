@@ -41,7 +41,11 @@ describe('JobService (spec 028)', () => {
       const { service, jobs } = setup();
       jobs.findByStatus.mockResolvedValue([
         job({ id: 'antiga', createdAt: '2026-01-01T00:00:00.000Z' }),
-        job({ id: 'nova', createdAt: '2026-10-01T00:00:00.000Z', modality: 'Remoto' }),
+        job({
+          id: 'nova',
+          createdAt: '2026-10-01T00:00:00.000Z',
+          modality: 'Remoto',
+        }),
       ]);
 
       const result = await service.listOpen();
@@ -108,9 +112,14 @@ describe('JobService (spec 028)', () => {
   describe('update', () => {
     it('muda só o que veio e string vazia apaga o opcional', async () => {
       const { service, jobs } = setup();
-      jobs.findById.mockResolvedValue(job({ modality: 'Remoto', workload: '20 h' }));
+      jobs.findById.mockResolvedValue(
+        job({ modality: 'Remoto', workload: '20 h' }),
+      );
 
-      const updated = await service.update('j1', { status: 'closed', modality: '' });
+      const updated = await service.update('j1', {
+        status: 'closed',
+        modality: '',
+      });
 
       expect(updated.status).toBe('closed');
       expect(updated.title).toBe('Professora de inglês');
@@ -134,11 +143,13 @@ describe('JobService (spec 028)', () => {
       const { service, jobs, applications } = setup();
       applications.findByJob.mockResolvedValue([{ id: 'a1' }, { id: 'a2' }]);
       const order: string[] = [];
-      applications.deleteMany.mockImplementation(async () => {
+      applications.deleteMany.mockImplementation(() => {
         order.push('applications');
+        return Promise.resolve();
       });
-      jobs.delete.mockImplementation(async () => {
+      jobs.delete.mockImplementation(() => {
         order.push('job');
+        return Promise.resolve();
       });
 
       await service.remove('j1');
