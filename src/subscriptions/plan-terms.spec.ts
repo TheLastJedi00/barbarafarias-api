@@ -76,13 +76,22 @@ describe('buildTerms — o texto sai do catálogo', () => {
     expect(texto).toMatch(/juros do parcelamento/i);
   });
 
-  it('todo plano diz que não há reembolso', () => {
+  it('reembolso é negociado com a gestão pelo e-mail, ressalvado o arrependimento (spec 029)', () => {
     for (const plan of ['MONTHLY', 'SEMIANNUAL', 'ANNUAL'] as const) {
       const texto = buildTerms(plan)
         .clauses.map((c) => `${c.title} ${c.body}`)
         .join(' ');
-      expect(texto).toMatch(/não são reembolsados/i);
+      expect(texto).toMatch(/barbsenglishteacher@gmail\.com/);
+      expect(texto).toMatch(/negociad/i);
+      expect(texto).toMatch(/7 \(sete\) dias/);
+      expect(texto).toMatch(/art\. 49/);
+      // A cláusula antiga contrariava o CDC (arrependimento é irrenunciável).
+      expect(texto).not.toMatch(/inclusive em caso de desistência/i);
     }
+  });
+
+  it('a versão do contrato subiu com a cláusula nova (spec 029)', () => {
+    expect(TERMS_VERSION).not.toBe('2026-08-2');
   });
 
   it('o mensal avisa da cobrança de validação que aparece e some', () => {
