@@ -18,6 +18,7 @@ import { SubscriptionModule } from './subscriptions/subscription.module';
 import { ManagerFinanceModule } from './finance/manager-finance.module';
 import { FeedbackModule } from './feedbacks/feedback.module';
 import { VideoLessonModule } from './video-lessons/video-lesson.module';
+import { RecruitmentModule } from './recruitment/recruitment.module';
 import { AuthGuard } from './guards/auth.guard';
 import { RolesGuard } from './guards/roles.guard';
 import { ActivePlanGuard } from './guards/active-plan.guard';
@@ -46,6 +47,7 @@ import { FirebaseAuthModule } from './firestore/firebase-auth.module';
     ManagerFinanceModule,
     FeedbackModule,
     VideoLessonModule,
+    RecruitmentModule,
   ],
   providers: [
     {
