@@ -6,6 +6,7 @@ import {
   Headers,
   HttpCode,
   HttpStatus,
+  Ip,
   Patch,
   Post,
   UseGuards,
@@ -42,8 +43,15 @@ export class CandidateController {
   @UseGuards(ThrottlerGuard)
   @Throttle({ default: { limit: 5, ttl: 60_000 } })
   @Post('signup')
-  signup(@Body() dto: CandidateSignupDto) {
-    return this.service.signup(dto);
+  signup(
+    @Body() dto: CandidateSignupDto,
+    @Ip() ip: string,
+    @Headers('user-agent') userAgent?: string,
+  ) {
+    return this.service.signup(dto, {
+      ip,
+      userAgent: (userAgent ?? '').slice(0, 300),
+    });
   }
 
   @Get('me')
@@ -63,8 +71,16 @@ export class CandidateController {
 
   @Post('me/consent')
   @Roles(ROLES.CANDIDATE)
-  acceptTerms(@CurrentUser() user: AuthenticatedUser, @Body() dto: ConsentDto) {
-    return this.service.acceptTerms(user.sub, dto);
+  acceptTerms(
+    @CurrentUser() user: AuthenticatedUser,
+    @Body() dto: ConsentDto,
+    @Ip() ip: string,
+    @Headers('user-agent') userAgent?: string,
+  ) {
+    return this.service.acceptTerms(user.sub, dto, {
+      ip,
+      userAgent: (userAgent ?? '').slice(0, 300),
+    });
   }
 
   /** A `origin` vai para a sessão do GCS devolver o CORS certo (spec 027). */

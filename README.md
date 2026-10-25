@@ -124,6 +124,12 @@ src/
 │   ├── video-lesson.repository.ts  # Coleção `videoLessons`
 │   ├── mux.gateway.ts              # Ingestão, consulta, JWT de playback, webhook
 │   └── video-lesson.model.ts       # Status, tetos de upload, tipos aceitos
+├── legal/                 # Painel Jurídico: termos e políticas versionados + aceites (Spec 029)
+│   ├── legal.controller.ts          # /legal/documents (leitura pública)
+│   ├── legal-me.controller.ts       # /legal/me (pendências e aceite de todo papel)
+│   ├── legal-admin.controller.ts    # /legal/admin (rascunho, publicação, aceites, seed)
+│   ├── legal-version.ts             # Numeração maior.menor e quem está em dia
+│   └── seed/                        # Textos v1.0 — só semente
 ├── recruitment/           # Trabalhe Conosco: vagas, candidatos, candidaturas (Spec 028)
 │   ├── job.controller.ts            # /recruitment/jobs (vitrine pública + CRUD da gerente)
 │   ├── candidate.controller.ts      # /recruitment/candidates (cadastro público + rotas `me`)
@@ -1151,9 +1157,9 @@ candidaturas com etapas visíveis ao candidato e exclusão dos dados pelo titula
 | `POST` | `/recruitment/jobs` | manager | `title`, `description`, `requirements?`, `modality?`, `workload?`, `status?` (padrão `open`) |
 | `PATCH` | `/recruitment/jobs/:id` | manager | Parcial; texto vazio apaga o opcional |
 | `DELETE` | `/recruitment/jobs/:id` | manager | Apaga a vaga **e as candidaturas dela** |
-| `GET` | `/recruitment/terms` | público | Termo de tratamento de dados **vigente**: `{ version, title, effectiveDate, markdown }` |
+| `GET` | `/recruitment/terms` | público | Termo vigente — o documento `recruitment` do Painel Jurídico (spec 029) |
 | `GET` | `/recruitment/terms/:version` | público | Uma versão anterior (o que cada aceite aceitou); 404 se não existe |
-| `POST` | `/recruitment/candidates/signup` | público, 5/min por IP | Conta `candidate` + doc + e-mail de verificação; `acceptTerms` e `isAdult` precisam ser `true` |
+| `POST` | `/recruitment/candidates/signup` | público, 5/min por IP | Conta `candidate` + doc + e-mail de verificação; `acceptTermsOfUse`, `acceptPrivacyPolicy`, `acceptTerms` e `isAdult` precisam ser `true` (os três aceites vão para `legalAcceptances`) |
 | `GET` / `PATCH` | `/recruitment/candidates/me` | candidate | Dados (nome, telefone, LinkedIn); a leitura traz `termsVersion` e `needsConsent` |
 | `POST` | `/recruitment/candidates/me/consent` | candidate | `{ acceptTerms: true }` — aceita a versão vigente do termo |
 | `DELETE` | `/recruitment/candidates/me` | candidate | **Exclusão LGPD** definitiva |
@@ -1191,11 +1197,8 @@ candidaturas com etapas visíveis ao candidato e exclusão dos dados pelo titula
   createdAt, updatedAt }
 ```
 
-**Termo de tratamento de dados:** o texto mora **só na API**, em `src/recruitment/terms/` — um
-arquivo por versão em `versions/`, registrado em `recruitment-terms.ts` (a última da lista é a
-vigente). O front busca por `GET /recruitment/terms`. Antes do go-live, edite o `v1-0.ts` direto;
-depois, mudança de conteúdo é **versão nova** (arquivo novo + entrada na lista), porque o aceite
-de cada candidato aponta para a versão que leu.
+**Termo de tratamento de dados:** desde a spec 029 é o documento `recruitment` do **Painel
+Jurídico** (seção ⚖️ Jurídico). `/recruitment/terms` continua com o mesmo contrato, lendo de lá.
 
 **Regras da candidatura:** vaga `open`, currículo enviado e o termo **vigente** aceito (subir a
 versão faz todo candidato aceitar de novo antes de se candidatar). Depois de `approved`/`rejected` a candidatura não é
@@ -1211,6 +1214,65 @@ candidato é escapado (vem de cadastro público). Falha de e-mail não desfaz na
 **Exclusão LGPD:** candidaturas → `candidates/{uid}/` no Storage → doc → conta no Firebase, nessa
 ordem. Pelo titular, um pedido repetido termina o que sobrou. O ID Token continua válido até
 expirar, então o front chama `/auth/logout` em seguida para limpar o cookie.
+
+---
+
+### ⚖️ Jurídico — `/legal` (Spec 029)
+
+Painel Jurídico da gerente: **Termos de Uso**, **Política de Privacidade** e o **Termo do Trabalhe
+Conosco**, versionados no banco, com o aceite de cada usuário registrado como prova.
+
+| Método | Rota | Quem | Descrição |
+|---|---|---|---|
+| `GET` | `/legal/documents/:type` | público | Versão vigente: `{ type, version, title, markdown, effectiveDate, requiresReacceptance, changeNote?, publishedAt }` |
+| `GET` | `/legal/documents/:type/versions` | público | Histórico (mais nova primeiro), sem o texto |
+| `GET` | `/legal/documents/:type/versions/:version` | público | Texto exato de uma versão; 404 se não existe |
+| `GET` | `/legal/me/pending` | logado (todo papel) | Documentos que a pessoa ainda precisa aceitar |
+| `POST` | `/legal/me/accept` | logado (todo papel), 10/min por IP | `{ types }` — grava o aceite da versão **vigente** e devolve o que ainda falta |
+| `GET` | `/legal/admin` | manager | Os três documentos: versão, vigência, rascunho e pendentes |
+| `GET` / `PUT` / `DELETE` | `/legal/admin/:type/draft` | manager | Rascunho (sem rascunho, o `GET` abre a vigente para editar, sem gravar) |
+| `POST` | `/legal/admin/:type/publish` | manager | `{ effectiveDate, requiresReacceptance, changeNote? }` — cria a versão seguinte |
+| `GET` | `/legal/admin/:type/acceptances` | manager | Quem aceitou a versão exigida e quem falta |
+| `POST` | `/legal/admin/seed` | manager | **Idempotente:** publica a `1.0` de cada documento que ainda não tem versão |
+
+`:type` ∈ `terms-of-use` · `privacy-policy` · `recruitment` (outro valor é 404). As rotas públicas
+ficam em `documents/:type` para não disputar o caminho com `admin` e `me`.
+
+**Coleções:**
+
+```ts
+// legalDocuments/{type}
+{ type, title, publishedVersion, requiredVersion, updatedAt }
+// legalDocuments/{type}/versions/{version}  — publicada: imutável
+{ type, version, title, markdown, effectiveDate, requiresReacceptance, changeNote?, publishedAt, publishedBy }
+// legalDocuments/{type}/drafts/current
+{ type, title, markdown, basedOnVersion, updatedAt, updatedBy }
+// legalAcceptances/{userId}_{type}_{version}  — prova do aceite
+{ userId, role, type, version, acceptedAt, ip, userAgent }
+```
+
+**Versões:** `maior.menor`. Publicar **com** novo aceite sobe a maior (`1.3` → `2.0`) e passa a ser
+a `requiredVersion`; **sem** novo aceite (correção de texto) sobe a menor (`1.0` → `1.1`) e não
+incomoda ninguém. A primeira é `1.0` e sempre exige aceite. Versão publicada **não se edita nem se
+exclui** — não há rota para isso, e o repositório só sabe criar (`create` numa transação que grava a
+versão, atualiza o cabeçalho e apaga o rascunho juntos). O `publishedBy` não sai na leitura pública.
+
+**Quem aceita o quê:** aluno, professora e gerente → Termos de Uso + Política de Privacidade;
+candidato → os três. Em dia quem aceitou uma versão ≥ a exigida; documento sem publicação não
+pendura ninguém. O cliente manda só o tipo — a versão gravada é a vigente, decidida no servidor, com
+IP (`trust proxy`) e user-agent. O aceite do `recruitment` é espelhado em
+`candidates.consentVersion`, que a regra de candidatura (spec 028) lê.
+
+**O bloqueio é do front** (modal de aceite após o login). O backend registra e expõe as
+pendências, mas não barra as rotas da escola por falta de aceite: um guard global derrubaria
+pagamento, webhook e sessão a cada versão nova. O candidato continua barrado para se candidatar
+sem o termo do recrutamento (409).
+
+**Semeadura e implantação:** os textos v1.0 moram em `src/legal/seed/` **só como semente**.
+Depois do deploy, rode `POST /legal/admin/seed` como gerente em cada ambiente; daí em diante o banco
+é a fonte e toda mudança passa pelo painel. Ordem: deploy da API → seed → conferir
+`GET /legal/documents/terms-of-use` (200, `"version": "1.0"`) → deploy do front. Sem versão
+publicada não há pendência, então o front publicado antes do seed não mostraria o modal a ninguém.
 
 ---
 

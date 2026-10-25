@@ -1,7 +1,9 @@
 import { ConflictException, NotFoundException } from '@nestjs/common';
 import { ApplicationService } from './application.service';
 import { Application } from './application.model';
-import { Candidate, RECRUITMENT_TERMS_VERSION } from './candidate.model';
+import { Candidate } from './candidate.model';
+
+const RECRUITMENT_TERMS_VERSION = '1.0';
 import { Job } from './job.model';
 
 const resume = {
@@ -73,13 +75,20 @@ function setup() {
     applicationReceived: jest.fn().mockResolvedValue(undefined),
     applicationStatusChanged: jest.fn().mockResolvedValue(undefined),
   };
+  const legal = {
+    requirement: jest.fn().mockResolvedValue({
+      publishedVersion: RECRUITMENT_TERMS_VERSION,
+      requiredVersion: RECRUITMENT_TERMS_VERSION,
+    }),
+  };
   const service = new ApplicationService(
     applications as any,
     jobs as any,
     candidates as any,
     notifications as any,
+    legal as any,
   );
-  return { service, applications, jobs, candidates, notifications };
+  return { service, applications, jobs, candidates, notifications, legal };
 }
 
 describe('ApplicationService — candidato (spec 028)', () => {

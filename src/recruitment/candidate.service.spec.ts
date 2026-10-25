@@ -4,7 +4,10 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { CandidateService } from './candidate.service';
-import { Candidate, RECRUITMENT_TERMS_VERSION } from './candidate.model';
+import { Candidate } from './candidate.model';
+
+/** Versão do termo do recrutamento publicada no módulo legal (spec 029). */
+const RECRUITMENT_TERMS_VERSION = '1.0';
 
 function candidate(overrides: Partial<Candidate> = {}): Candidate {
   return {
@@ -44,13 +47,21 @@ function setup() {
     findByCandidate: jest.fn().mockResolvedValue([]),
     deleteMany: jest.fn().mockResolvedValue(undefined),
   };
+  const legal = {
+    requirement: jest.fn().mockResolvedValue({
+      publishedVersion: RECRUITMENT_TERMS_VERSION,
+      requiredVersion: RECRUITMENT_TERMS_VERSION,
+    }),
+    accept: jest.fn().mockResolvedValue([]),
+  };
   const service = new CandidateService(
     candidates as any,
     authService as any,
     storage as any,
     applications as any,
+    legal as any,
   );
-  return { service, candidates, authService, storage, applications };
+  return { service, candidates, authService, storage, applications, legal };
 }
 
 const signup = {
@@ -58,18 +69,22 @@ const signup = {
   password: 'senha-forte',
   name: 'Ana Souza',
   phone: '62999998888',
+  acceptTermsOfUse: true as const,
+  acceptPrivacyPolicy: true as const,
   acceptTerms: true as const,
   isAdult: true as const,
 };
+
+const signupMeta = { ip: '200.1.2.3', userAgent: 'Chrome' };
 
 describe('CandidateService — cadastro (spec 028)', () => {
   it('cria a conta com papel candidate e o doc com o mesmo uid e o aceite do termo', async () => {
     const { service, candidates, authService } = setup();
 
-    const view = await service.signup({
-      ...signup,
-      linkedinUrl: 'https://www.linkedin.com/in/ana',
-    });
+    const view = await service.signup(
+      { ...signup, linkedinUrl: 'https://www.linkedin.com/in/ana' },
+      signupMeta,
+    );
 
     const account = authService.createAccount.mock.calls[0][0];
     expect(account).toMatchObject({
@@ -93,13 +108,44 @@ describe('CandidateService — cadastro (spec 028)', () => {
     expect(view.needsConsent).toBe(false);
   });
 
+  it('grava os aceites dos três documentos publicados, com IP e navegador (spec 029)', async () => {
+    const { service, authService, legal } = setup();
+
+    await service.signup(signup, signupMeta);
+
+    const uid = authService.createAccount.mock.calls[0][0].uid;
+    expect(legal.accept).toHaveBeenCalledWith(
+      expect.objectContaining({ sub: uid, role: 'candidate' }),
+      ['terms-of-use', 'privacy-policy', 'recruitment'],
+      signupMeta,
+    );
+  });
+
+  it('documento ainda não publicado fica de fora do aceite (o modal pede depois)', async () => {
+    const { service, legal } = setup();
+    legal.requirement.mockImplementation((type: string) =>
+      Promise.resolve(
+        type === 'privacy-policy'
+          ? { publishedVersion: null, requiredVersion: null }
+          : { publishedVersion: '1.0', requiredVersion: '1.0' },
+      ),
+    );
+
+    await service.signup(signup, signupMeta);
+
+    expect(legal.accept.mock.calls[0][1]).toEqual([
+      'terms-of-use',
+      'recruitment',
+    ]);
+  });
+
   it('e-mail já usado: o 409 do createAccount sobe e nada é gravado', async () => {
     const { service, candidates, authService } = setup();
     authService.createAccount.mockRejectedValue(
       new ConflictException('E-mail já cadastrado'),
     );
 
-    await expect(service.signup(signup)).rejects.toBeInstanceOf(
+    await expect(service.signup(signup, signupMeta)).rejects.toBeInstanceOf(
       ConflictException,
     );
     expect(candidates.save).not.toHaveBeenCalled();
@@ -109,7 +155,9 @@ describe('CandidateService — cadastro (spec 028)', () => {
     const { service, candidates, authService } = setup();
     candidates.save.mockRejectedValue(new Error('firestore fora'));
 
-    await expect(service.signup(signup)).rejects.toThrow('firestore fora');
+    await expect(service.signup(signup, signupMeta)).rejects.toThrow(
+      'firestore fora',
+    );
     expect(authService.deleteAccount).toHaveBeenCalledWith(
       authService.createAccount.mock.calls[0][0].uid,
     );
@@ -187,16 +235,42 @@ describe('CandidateService — meus dados (spec 028)', () => {
     expect(view.name).toBe('Ana S.');
   });
 
-  it('novo aceite grava a versão vigente e a data', async () => {
-    const { service, candidates } = setup();
-    candidates.findById.mockResolvedValue(candidate({ consentVersion: '0.9' }));
+  it('novo aceite passa pelo módulo legal (prova + espelho no candidato)', async () => {
+    const { service, legal } = setup();
+    const meta = { ip: '1.1.1.1', userAgent: 'ua' };
 
-    const view = await service.acceptTerms('cand-1', { acceptTerms: true });
+    await service.acceptTerms('cand-1', { acceptTerms: true }, meta);
 
-    const saved: Candidate = candidates.save.mock.calls[0][0];
-    expect(saved.consentVersion).toBe(RECRUITMENT_TERMS_VERSION);
-    expect(saved.consentAt).not.toBe('2026-10-24T00:00:00.000Z');
-    expect(view.needsConsent).toBe(false);
+    expect(legal.accept).toHaveBeenCalledWith(
+      expect.objectContaining({ sub: 'cand-1', role: 'candidate' }),
+      ['recruitment'],
+      meta,
+    );
+  });
+
+  it('versão exigida mais nova que a aceita pede novo aceite (spec 029)', async () => {
+    const { service, legal } = setup();
+    legal.requirement.mockResolvedValue({
+      publishedVersion: '2.1',
+      requiredVersion: '2.0',
+    });
+
+    await expect(service.getMe('cand-1')).resolves.toMatchObject({
+      termsVersion: '2.1',
+      needsConsent: true,
+    });
+  });
+
+  it('correção sem novo aceite (1.1) não incomoda quem aceitou a 1.0', async () => {
+    const { service, legal } = setup();
+    legal.requirement.mockResolvedValue({
+      publishedVersion: '1.1',
+      requiredVersion: '1.0',
+    });
+
+    await expect(service.getMe('cand-1')).resolves.toMatchObject({
+      needsConsent: false,
+    });
   });
 });
 

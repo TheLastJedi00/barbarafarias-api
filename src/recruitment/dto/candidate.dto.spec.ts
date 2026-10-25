@@ -12,6 +12,8 @@ const valid = {
   password: 'senha-forte',
   name: 'Ana Souza',
   phone: '(62) 99999-8888',
+  acceptTermsOfUse: true,
+  acceptPrivacyPolicy: true,
   acceptTerms: true,
   isAdult: true,
 };
@@ -30,6 +32,16 @@ describe('CandidateSignupDto (spec 028)', () => {
     await expect(
       errorsOf(CandidateSignupDto, { ...valid, isAdult: undefined }),
     ).resolves.toEqual(['isAdult']);
+  });
+
+  it('Termos de Uso e Política de Privacidade também são obrigatórios (spec 029)', async () => {
+    await expect(
+      errorsOf(CandidateSignupDto, {
+        ...valid,
+        acceptTermsOfUse: false,
+        acceptPrivacyPolicy: undefined,
+      }),
+    ).resolves.toEqual(['acceptPrivacyPolicy', 'acceptTermsOfUse']);
   });
 
   it('LinkedIn só com link completo do linkedin.com', async () => {

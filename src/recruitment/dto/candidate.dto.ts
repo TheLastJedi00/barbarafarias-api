@@ -62,6 +62,13 @@ export class CandidateSignupDto {
   @MaxLength(300)
   linkedinUrl?: string;
 
+  /** Spec 029: os documentos gerais do Painel Jurídico entram no cadastro. */
+  @Equals(true, { message: 'É preciso aceitar os Termos de Uso' })
+  acceptTermsOfUse!: boolean;
+
+  @Equals(true, { message: 'É preciso aceitar a Política de Privacidade' })
+  acceptPrivacyPolicy!: boolean;
+
   @Equals(true, { message: 'É preciso aceitar o Termo de Tratamento de Dados' })
   acceptTerms!: boolean;
 

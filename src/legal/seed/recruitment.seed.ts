@@ -1,22 +1,19 @@
-import type { RecruitmentTerms } from '../recruitment-terms';
+import type { LegalSeed } from './legal-seed';
 
 /**
- * Versão 1.0 do Termo de Privacidade e Tratamento de Dados do processo
- * seletivo (spec 028 §4).
+ * Texto da versão 1.0 — Termo de Privacidade e Tratamento de Dados Pessoais — Processo Seletivo (spec 029). **Só semente:** o
+ * `POST /legal/admin/seed` publica isto uma vez, e daí em diante o banco é a
+ * fonte e toda mudança passa pelo Painel Jurídico. Editar aqui depois da
+ * semeadura não muda nada no ar.
  *
- * **Antes do go-live** (ninguém aceitou ainda) este texto pode ser editado aqui
- * mesmo — dados da empresa, ajustes do advogado.
- *
- * **Depois do go-live, não se edita.** O aceite de cada candidato aponta para
- * esta versão; mudar o texto faria um aceite antigo valer por uma redação que a
- * pessoa nunca leu. Mudança de conteúdo = arquivo novo com a versão seguinte
- * (veja `recruitment-terms.ts`).
+ * Origem: `.claude/specs/028 - Trabalhe Conosco/termo-de-tratamento-de-dados.md`.
  */
-export const TERMS_V1_0: RecruitmentTerms = {
-  version: '1.0',
+export const RECRUITMENT_SEED: LegalSeed = {
+  type: 'recruitment',
+  // Mantém a vigência da v1.0 publicada pela spec 028.
+  effectiveDate: '2026-10-24',
   title:
     'Termo de Privacidade e Tratamento de Dados Pessoais — Processo Seletivo',
-  effectiveDate: '2026-10-24',
   markdown: `Este Termo explica como os dados pessoais de quem se cadastra na área **Trabalhe Conosco** do site
 barbarafarias.com.br são coletados, usados, armazenados, compartilhados e eliminados, nos termos da
 Lei nº 13.709/2018 (Lei Geral de Proteção de Dados Pessoais — **LGPD**).

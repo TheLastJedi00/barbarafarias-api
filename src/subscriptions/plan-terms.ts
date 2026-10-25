@@ -9,7 +9,7 @@ import type { SubscriptionPlan } from './subscription.entity';
  * aluno nunca leu. Cada alteração de conteúdo sobe a versão; a página de
  * contratos monta o texto **pela versão gravada**, não pela atual.
  */
-export const TERMS_VERSION = '2026-08-2';
+export const TERMS_VERSION = '2026-10-1';
 
 /**
  * O parcelamento **é com juros**, e isso deixou de ser provisório.
@@ -129,10 +129,16 @@ function recurringClauses(config: PlanConfig): TermsClause[] {
 /** O que vale para qualquer plano. */
 const FIXED_CLAUSES: TermsClause[] = [
   {
-    title: 'Sem reembolso',
+    // Spec 029: era "Sem reembolso… inclusive em caso de desistência", que
+    // contrariava o arrependimento do CDC (art. 49), direito irrenunciável.
+    title: 'Reembolso',
     body:
-      'Os valores pagos não são reembolsados, integral ou parcialmente, ' +
-      'inclusive em caso de desistência ou de não utilização do conteúdo.',
+      'Pedidos de reembolso são analisados e negociados diretamente com a ' +
+      'gestão da escola, pelo e-mail barbsenglishteacher@gmail.com, ' +
+      'informando o nome do aluno, o plano e o motivo. Fica ressalvado o ' +
+      'direito de desistir da compra feita pela internet em até 7 (sete) ' +
+      'dias, com devolução dos valores pagos (art. 49 do Código de Defesa do ' +
+      'Consumidor).',
   },
   {
     title: 'Uso pessoal e intransferível',

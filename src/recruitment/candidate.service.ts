@@ -8,6 +8,7 @@ import { randomUUID } from 'node:crypto';
 import { AuthService } from '../auth/auth.service';
 import { StorageService } from '../uploads/storage.service';
 import { ROLES } from '../types/role';
+import { LegalService, type AcceptanceMeta } from '../legal/legal.service';
 import { ApplicationRepository } from './application.repository';
 import { CandidateRepository } from './candidate.repository';
 import {
@@ -19,7 +20,6 @@ import {
 import {
   Candidate,
   CandidateView,
-  RECRUITMENT_TERMS_VERSION,
   RESUME_MAX_BYTES,
   RESUME_MIME_TYPE,
   toCandidateView,
@@ -41,6 +41,7 @@ export class CandidateService {
     private readonly authService: AuthService,
     private readonly storage: StorageService,
     private readonly applications: ApplicationRepository,
+    private readonly legal: LegalService,
   ) {}
 
   /**
@@ -51,7 +52,10 @@ export class CandidateService {
    * E-mail já usado (aluno, professora ou outro candidato) volta 409 do
    * `createAccount`: uma pessoa, um papel.
    */
-  async signup(dto: CandidateSignupDto): Promise<CandidateView> {
+  async signup(
+    dto: CandidateSignupDto,
+    meta: AcceptanceMeta,
+  ): Promise<CandidateView> {
     const uid = randomUUID();
     await this.authService.createAccount({
       uid,
@@ -60,6 +64,7 @@ export class CandidateService {
       role: ROLES.CANDIDATE,
     });
 
+    const terms = await this.legal.requirement('recruitment');
     const now = new Date().toISOString();
     const candidate: Candidate = {
       id: uid,
@@ -68,7 +73,7 @@ export class CandidateService {
       phone: dto.phone,
       ...(dto.linkedinUrl ? { linkedinUrl: dto.linkedinUrl } : {}),
       consentAt: now,
-      consentVersion: RECRUITMENT_TERMS_VERSION,
+      consentVersion: terms.publishedVersion ?? '',
       createdAt: now,
       updatedAt: now,
     };
@@ -79,11 +84,34 @@ export class CandidateService {
       await this.authService.deleteAccount(uid);
       throw error;
     }
-    return toCandidateView(candidate);
+    await this.acceptAtSignup(uid, meta);
+    return toCandidateView(candidate, terms);
+  }
+
+  /**
+   * Prova dos três aceites do cadastro (spec 029): Termos de Uso, Política de
+   * Privacidade e termo do recrutamento — só os já publicados; um que ainda
+   * não exista é pedido depois, pelo modal de aceite.
+   */
+  private async acceptAtSignup(uid: string, meta: AcceptanceMeta) {
+    const types = ['terms-of-use', 'privacy-policy', 'recruitment'] as const;
+    const published = await Promise.all(
+      types.map(async (type) => {
+        const { publishedVersion } = await this.legal.requirement(type);
+        return publishedVersion ? type : null;
+      }),
+    );
+    const toAccept = published.filter((t): t is (typeof types)[number] => !!t);
+    if (toAccept.length === 0) return;
+    await this.legal.accept(
+      { sub: uid, email: '', role: ROLES.CANDIDATE },
+      toAccept,
+      meta,
+    );
   }
 
   async getMe(id: string): Promise<CandidateView> {
-    return toCandidateView(await this.getOrThrow(id));
+    return this.view(await this.getOrThrow(id));
   }
 
   /** E-mail fica de fora: trocar o login é outro fluxo, que não existe aqui. */
@@ -100,26 +128,37 @@ export class CandidateService {
       else delete candidate.linkedinUrl;
     }
     await this.candidates.save(candidate);
-    return toCandidateView(candidate);
+    return this.view(candidate);
   }
 
-  /** Aceite da versão vigente do termo, quando ela muda (termo §11). */
-  async acceptTerms(id: string, dto: ConsentDto): Promise<CandidateView> {
-    // O DTO já exige `true`; conferir de novo deixa a regra no lugar dela.
+  /**
+   * Novo aceite do termo do recrutamento: passa pelo módulo legal, que grava a
+   * prova (versão vigente, IP, navegador) e espelha aqui no candidato.
+   */
+  async acceptTerms(
+    id: string,
+    dto: ConsentDto,
+    meta: AcceptanceMeta,
+  ): Promise<CandidateView> {
     if (!dto.acceptTerms) {
       throw new BadRequestException(
         'É preciso aceitar o Termo de Tratamento de Dados',
       );
     }
-    const now = new Date().toISOString();
-    const candidate: Candidate = {
-      ...(await this.getOrThrow(id)),
-      consentAt: now,
-      consentVersion: RECRUITMENT_TERMS_VERSION,
-      updatedAt: now,
-    };
-    await this.candidates.save(candidate);
-    return toCandidateView(candidate);
+    await this.legal.accept(
+      { sub: id, email: '', role: ROLES.CANDIDATE },
+      ['recruitment'],
+      meta,
+    );
+    return this.getMe(id);
+  }
+
+  /** A visão do candidato com as versões do termo vindas do legal. */
+  async view(candidate: Candidate): Promise<CandidateView> {
+    return toCandidateView(
+      candidate,
+      await this.legal.requirement('recruitment'),
+    );
   }
 
   /**
@@ -195,7 +234,7 @@ export class CandidateService {
     if (current.resume && current.resume.storagePath !== pending.storagePath) {
       await this.storage.remove(current.resume.storagePath);
     }
-    return toCandidateView(candidate);
+    return this.view(candidate);
   }
 
   /** Link que expira em 15 min, com o nome original do arquivo. */
