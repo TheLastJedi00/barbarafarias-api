@@ -43,7 +43,7 @@ function technicalContract(format: ArtFormat, photoCount: number): string {
       : 'Margem de segurança de 64px em todos os lados: nenhum texto ou logo encostado na borda.';
   return `# CONTRATO TÉCNICO
 O HTML será renderizado como imagem PNG. Regras obrigatórias:
-1. Um único <div> raiz com width: ${width}px; height: ${height}px; overflow: hidden; position: relative. Tudo dentro dele — este é o canvas de ${width}px × ${height}px.
+1. Um único <div> raiz com width: ${width}px; height: ${height}px; overflow: hidden; position: relative; box-sizing: border-box (o padding fica DENTRO dos ${width}px). Tudo dentro dele — este é o canvas de ${width}px × ${height}px.
 2. CSS inline (atributo style) ou num único <style> dentro do div raiz. Use px; layout com flexbox, grid ou position absolute.
 3. Proibido: <script>, atributos on* (onclick etc.), <iframe>, <form>, <link>, <object>, @import, url() e qualquer recurso externo. Fundos e formas só com cores, gradientes CSS e SVG inline.
 4. Fontes: só font-family "Outfit" (títulos) e "Inter" (texto). Já estão carregadas.
