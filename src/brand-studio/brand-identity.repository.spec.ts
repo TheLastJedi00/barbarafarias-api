@@ -49,8 +49,11 @@ describe('BrandIdentityRepository.ensureDefault', () => {
   it('devolve a existente quando outra requisição gravou primeiro', async () => {
     // Duas primeiras leituras ao mesmo tempo: o `create` de uma delas perde,
     // e o id fixo garante que nunca existam duas padrões.
-    const { id: _id, ...stored } = { ...seed, content: 'editada' };
-    const db = makeDb({ [DEFAULT_IDENTITY_ID]: stored });
+    const stored: Partial<BrandIdentity> = { ...seed, content: 'editada' };
+    delete stored.id;
+    const db = makeDb({
+      [DEFAULT_IDENTITY_ID]: stored as Omit<BrandIdentity, 'id'>,
+    });
     const repository = new BrandIdentityRepository(db as any);
 
     const result = await repository.ensureDefault(seed);

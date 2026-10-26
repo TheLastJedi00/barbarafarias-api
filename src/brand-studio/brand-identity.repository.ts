@@ -63,6 +63,8 @@ function toIdentity(id: string, data: unknown): BrandIdentity {
   return { ...(data as Omit<BrandIdentity, 'id'>), id };
 }
 
-function withoutId({ id: _id, ...data }: BrandIdentity) {
-  return data;
+function withoutId(identity: BrandIdentity): Omit<BrandIdentity, 'id'> {
+  const data: Partial<BrandIdentity> = { ...identity };
+  delete data.id;
+  return data as Omit<BrandIdentity, 'id'>;
 }
