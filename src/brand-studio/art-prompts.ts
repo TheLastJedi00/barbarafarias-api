@@ -60,7 +60,7 @@ Responda só com JSON válido, sem comentários:
   "title": "nome curto da peça",
   "variant": "profundo" ou "claro" (a variação de fundo da identidade; use outra palavra só se a identidade definir outras),
   "slides": [
-    { "headline": "título do slide", "body": "texto de apoio curto (pode ser vazio)", "visual": "descrição da composição: elementos, posição, destaque" }
+    { "headline": "título do slide", "body": "texto de apoio curto (pode ser vazio)", "visual": "composição em até 3 frases: elementos, posição, destaque" }
   ]
 }`;
 

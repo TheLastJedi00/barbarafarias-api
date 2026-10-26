@@ -34,16 +34,20 @@ export const ART_FORMATS = {
 export type ArtFormat = keyof typeof ART_FORMATS;
 export const ART_FORMAT_KEYS = Object.keys(ART_FORMATS) as ArtFormat[];
 
-/** Roteiro da peça: o que a IA devolve na primeira etapa. */
+/**
+ * Roteiro da peça: o que a IA devolve na primeira etapa. Limites folgados: o
+ * roteiro é instrução interna para a etapa do slide, e recusar a peça inteira
+ * por uma descrição longa custaria uma nova chamada (aconteceu no teste).
+ */
 export const artPlanSchema = z.object({
-  title: z.string().min(1).max(200),
-  variant: z.string().min(1).max(40),
+  title: z.string().min(1).max(300),
+  variant: z.string().min(1).max(80),
   slides: z
     .array(
       z.object({
-        headline: z.string().min(1).max(300),
-        body: z.string().max(1000).default(''),
-        visual: z.string().max(500).default(''),
+        headline: z.string().min(1).max(500),
+        body: z.string().max(2000).default(''),
+        visual: z.string().max(3000).default(''),
       }),
     )
     .min(1)
