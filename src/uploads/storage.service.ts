@@ -3,7 +3,8 @@ import * as admin from 'firebase-admin';
 import { randomUUID } from 'node:crypto';
 import { initializeFirebase } from '../firestore/firebase-init';
 
-export type UploadFolder = 'avatars' | 'articles';
+/** `artworks`: fotos e prévias da Campanha (spec 031), só da gerente. */
+export type UploadFolder = 'avatars' | 'articles' | 'artworks';
 
 /** Extensões aceitas, mapeadas a partir do mime type já validado no controller. */
 const EXTENSION_BY_MIME: Record<string, string> = {
