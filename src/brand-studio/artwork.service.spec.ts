@@ -51,8 +51,13 @@ function makeService(
       return created;
     }),
     get: jest.fn(async (id: string) => docs.get(id) ?? null),
-    save: jest.fn(async (artwork: Artwork) => {
-      docs.set(artwork.id, artwork);
+    // Como a transação real: aplica sobre a versão gravada no momento.
+    update: jest.fn(async (id: string, mutate: (a: Artwork) => Artwork) => {
+      const current = docs.get(id);
+      if (!current) return null;
+      const next = mutate(structuredClone(current));
+      docs.set(id, next);
+      return next;
     }),
     delete: jest.fn(async (id: string) => {
       docs.delete(id);
@@ -231,6 +236,29 @@ describe('ArtworkService — slides', () => {
     expect(prompt).toContain('<div style="width:1080px">ok</div>');
     expect(redone.slides[0].preview).toBeNull();
     expect(ctx.storage.remove).toHaveBeenCalledWith('artworks/prev.jpg');
+  });
+
+  it('a prévia que chega durante a geração do slide seguinte não se perde', async () => {
+    const ctx = makeService();
+    const art = await createdArtwork(ctx);
+    await ctx.service.generateSlide(art.id, 0, {});
+
+    // O slide 1 espera o Gemini; nesse meio-tempo chega a prévia do slide 0.
+    let release!: () => void;
+    ctx.gemini.generateJson.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          release = () => resolve({ html: '<div>dois</div>' });
+        }),
+    );
+    const slide1 = ctx.service.generateSlide(art.id, 1, {});
+    await new Promise((r) => setImmediate(r));
+    await ctx.service.setPreview(art.id, 0, photo('p0'));
+    release();
+    const final = await slide1;
+
+    expect(final.slides[0].preview?.path).toBe('artworks/p0.jpg');
+    expect(final.slides[1].html).toContain('dois');
   });
 
   it('índice fora da peça é 400; arte que não existe é 404', async () => {

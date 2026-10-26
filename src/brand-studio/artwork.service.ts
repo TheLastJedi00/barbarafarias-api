@@ -144,13 +144,26 @@ export class ArtworkService {
       );
     }
 
-    // A prévia era do HTML antigo: deixa de valer.
-    if (current.preview) await this.storage.remove(current.preview.path);
-    artwork.slides[index] = { html: clean, preview: null };
-    artwork.status = artwork.slides.every((s) => s.html) ? 'ready' : 'draft';
-    artwork.updatedAt = new Date().toISOString();
-    await this.repository.save(artwork);
-    return artwork;
+    // A geração leva segundos: grava sobre a versão atual, não sobre a lida
+    // antes do Gemini (a prévia de outro slide pode ter chegado nesse meio-tempo).
+    let stale: StoredFile | null = null;
+    const updated = await this.repository.update(id, (latest) => {
+      // A prévia era do HTML antigo: deixa de valer.
+      stale = latest.slides[index].preview;
+      const slides = latest.slides.map((s, i) =>
+        i === index ? { html: clean, preview: null } : s,
+      );
+      return {
+        ...latest,
+        slides,
+        status: slides.every((s) => s.html) ? 'ready' : 'draft',
+        updatedAt: new Date().toISOString(),
+      };
+    });
+    if (!updated) throw new NotFoundException('Arte não encontrada.');
+    const old = stale as StoredFile | null;
+    if (old) await this.storage.remove(old.path);
+    return updated;
   }
 
   /** Registra a miniatura que o front renderizou e subiu em `artworks/`. */
@@ -160,16 +173,22 @@ export class ArtworkService {
     file: StoredFile,
   ): Promise<Artwork> {
     const preview = assertArtworkFile(file);
-    const artwork = await this.getOrThrow(id);
-    assertIndex(artwork, index);
-    const previous = artwork.slides[index].preview;
-    if (previous && previous.path !== preview.path) {
-      await this.storage.remove(previous.path);
-    }
-    artwork.slides[index] = { ...artwork.slides[index], preview };
-    artwork.updatedAt = new Date().toISOString();
-    await this.repository.save(artwork);
-    return artwork;
+    assertIndex(await this.getOrThrow(id), index);
+    let previous: StoredFile | null = null;
+    const updated = await this.repository.update(id, (latest) => {
+      previous = latest.slides[index].preview;
+      return {
+        ...latest,
+        slides: latest.slides.map((s, i) =>
+          i === index ? { ...s, preview } : s,
+        ),
+        updatedAt: new Date().toISOString(),
+      };
+    });
+    if (!updated) throw new NotFoundException('Arte não encontrada.');
+    const old = previous as StoredFile | null;
+    if (old && old.path !== preview.path) await this.storage.remove(old.path);
+    return updated;
   }
 
   async list(limit?: number, before?: string): Promise<ArtworkSummary[]> {

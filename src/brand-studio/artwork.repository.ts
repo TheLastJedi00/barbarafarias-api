@@ -21,10 +21,26 @@ export class ArtworkRepository {
     return doc.exists ? toArtwork(doc.id, doc.data()) : null;
   }
 
-  async save(artwork: Artwork): Promise<void> {
-    const data: Partial<Artwork> = { ...artwork };
-    delete data.id;
-    await this.collection().doc(artwork.id).set(data);
+  /**
+   * Lê e grava a arte numa transação. Os slides moram num array, e o
+   * Firestore não atualiza um item de array por índice: sem a transação, a
+   * prévia de um slide gravada enquanto o seguinte é gerado sumia (as duas
+   * requisições regravavam o documento inteiro, e a última vencia).
+   */
+  async update(
+    id: string,
+    mutate: (artwork: Artwork) => Artwork,
+  ): Promise<Artwork | null> {
+    const ref = this.collection().doc(id);
+    return this.db.runTransaction(async (tx) => {
+      const doc = await tx.get(ref);
+      if (!doc.exists) return null;
+      const next = mutate(toArtwork(doc.id, doc.data()));
+      const data: Partial<Artwork> = { ...next };
+      delete data.id;
+      tx.set(ref, data);
+      return next;
+    });
   }
 
   async delete(id: string): Promise<void> {
