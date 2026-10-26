@@ -1,15 +1,19 @@
 import { RolesGuard } from '../guards/roles.guard';
 import { ROLES_KEY } from '../decorators/roles.decorator';
 import { ROLES } from '../types/role';
+import { ArtworkController } from './artwork.controller';
 import { BrandIdentityController } from './brand-identity.controller';
 
 /**
- * A identidade visual vai para toda arte que a escola publica: só a gerente
- * mexe. O teste lê o metadado que o guard lê e passa pelo próprio guard, para
- * a regra "a gerente faz tudo que a professora faz" não abrir esta porta.
+ * A identidade visual e as artes saem em nome da escola: só a gerente mexe.
+ * O teste lê o metadado que o guard lê e passa pelo próprio guard, para a
+ * regra "a gerente faz tudo que a professora faz" não abrir esta porta.
  */
-describe('BrandIdentityController — papéis', () => {
-  const required = Reflect.getMetadata(ROLES_KEY, BrandIdentityController);
+describe.each([
+  ['BrandIdentityController', BrandIdentityController],
+  ['ArtworkController', ArtworkController],
+])('%s — papéis', (_name, controller) => {
+  const required = Reflect.getMetadata(ROLES_KEY, controller) as string[];
 
   function canActivate(role: string) {
     const guard = new RolesGuard({
@@ -18,7 +22,7 @@ describe('BrandIdentityController — papéis', () => {
     } as any);
     return guard.canActivate({
       getHandler: () => ({}),
-      getClass: () => BrandIdentityController,
+      getClass: () => controller,
       switchToHttp: () => ({ getRequest: () => ({ user: { role } }) }),
     } as any);
   }
