@@ -105,7 +105,7 @@ describe('ArtworkService — roteiro', () => {
 
     const art = await createdArtwork(ctx);
 
-    const [prompt, , opts] = ctx.gemini.generateJson.mock.calls[0];
+    const [prompt, , opts] = ctx.gemini.generateJson.mock.calls[0] as unknown[];
     expect(prompt).toContain('IDENTIDADE PADRÃO roxo e dourado');
     expect(prompt).toContain('exatamente 3 slides');
     expect(opts).toMatchObject({ model: 'gemini-2.5-flash' });
