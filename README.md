@@ -54,6 +54,7 @@ npm run start:prod
 | `FIREBASE_WEB_API_KEY` | Chave de API **de servidor** para o Identity Toolkit. Criada em Google Cloud Console → Credenciais, sem restrição de aplicativo e restrita às APIs Identity Toolkit + Token Service — a chave web do console do Firebase é restrita por HTTP referrer e derruba o login (ver `.env.example`). Precisa ser do mesmo projeto do service account |
 | `GEMINI_API_KEY` | Chave de API do Google Gemini |
 | `GEMINI_MODEL` | Modelo do Gemini (padrão: `gemini-2.5-pro`) |
+| `GEMINI_ART_MODEL` | *(opcional)* Modelo das artes da Campanha (padrão: `gemini-2.5-flash`) |
 | `FIREBASE_SERVICE_ACCOUNT_BASE64` | Service Account do Firebase em Base64 (produção/Vercel) |
 | `FIREBASE_PROJECT_ID` | ID do projeto Firebase |
 | `FIREBASE_AUTH_EMULATOR_HOST` | Host do emulador de auth (desenvolvimento) |
@@ -1984,6 +1985,68 @@ do IPA como repositório de conteúdo.
 
 ---
 
+### 🎨 Campanha — `/brand-studio` (Spec 031)
+
+Artes para as redes sociais da escola, **só da gerente** (`@Roles(MANAGER)` nos dois
+controllers — a professora não entra, apesar de "a gerente faz tudo que a professora faz").
+A IA (Gemini) não desenha imagem: ela escreve **HTML** seguindo uma identidade visual guardada
+no banco, e o front renderiza esse HTML em PNG.
+
+#### Identidades — `/brand-studio/identities`
+
+| Método | Rota | Descrição |
+|---|---|---|
+| `GET` | `/brand-studio/identities` | Lista (padrão primeiro, demais por nome). Cria a padrão na primeira leitura |
+| `POST` | `/brand-studio/identities` | `{ name, content }` — nome único, sem diferenciar maiúscula nem acento (409) |
+| `PATCH` | `/brand-studio/identities/:id` | `{ name?, content? }` |
+| `DELETE` | `/brand-studio/identities/:id` | 409 na padrão |
+| `POST` | `/brand-studio/identities/default/reset` | Volta a padrão ao texto de `default-identity.ts` |
+
+**Seed preguiçoso, sem passo de deploy:** a padrão mora no documento de id fixo `default` e é
+gravada com `create` — nunca sobrescreve a versão que a gerente editou, e na corrida de duas
+primeiras leituras uma delas perde sem erro. O texto vem de `default-identity.ts`, derivado de
+`.claude/specs/styles/identidade-visual.md`; mudar o arquivo **não** muda a padrão já gravada
+(para isso existe o reset).
+
+#### Artes — `/brand-studio/artworks`
+
+| Método | Rota | Descrição |
+|---|---|---|
+| `POST` | `/brand-studio/artworks` | Roteiro. `{ prompt, format, slideCount?, identityId?, customIdentity?, photos? }` |
+| `POST` | `/brand-studio/artworks/:id/slides/:index` | HTML de um slide; `{ note? }` refaz com o ajuste |
+| `PATCH` | `/brand-studio/artworks/:id/slides/:index/preview` | `{ url, path }` da miniatura subida em `/uploads/artworks` |
+| `GET` | `/brand-studio/artworks?limit=&before=` | Galeria (resumos, sem HTML), mais recentes primeiro |
+| `GET` | `/brand-studio/artworks/:id` | Arte completa |
+| `DELETE` | `/brand-studio/artworks/:id` | Apaga a arte e, no Storage, as prévias e as fotos |
+
+| Formato | Proporção | Canvas | Slides |
+|---|---|---|---|
+| `carousel` | 1:1 | 1080×1080 | 2–10 |
+| `post` | 3:4 | 1080×1440 | 1 |
+| `story` | 9:16 | 1080×1920 | 1 |
+
+- **Duas etapas:** o roteiro (JSON curto: título, variação de fundo e texto/composição de cada
+  slide) e depois **um slide por requisição**, com o roteiro inteiro no prompt para manter a
+  coerência. Tudo numa chamada caberia nos 300 s da função, mas uma falha perderia a peça e a
+  tela ficaria sem progresso.
+- **Prompt em camadas** (`art-prompts.ts`): papel → identidade → **contrato técnico** → pedido →
+  saída. O contrato é fixo: canvas exato com `box-sizing: border-box`, sem `<script>`/`on*`/
+  recurso externo, fontes Outfit e Inter, marcadores `<bf-logo>` e `<img data-photo="N">`,
+  faixas seguras do story (220 px no topo e no rodapé), tamanhos mínimos de texto.
+- **`customIdentity` vence `identityId`.** O texto usado fica congelado em `identitySnapshot`:
+  editar a identidade depois não muda a arte (nem um "refazer" dela).
+- **Sanitização com allowlist** (`art-html.sanitizer.ts`, `sanitize-html`) antes de gravar: só
+  texto, SVG inline e os marcadores; saem `src`, `href`, `url()` e `@import` externos. O front
+  sanitiza de novo.
+- **Slide e prévia gravam em transação** (`ArtworkRepository.update`): os slides moram num array
+  e o Firestore não atualiza item por índice; sem a transação, a prévia de um slide gravada
+  enquanto o seguinte era gerado sumia.
+- **Arquivos presos a `artworks/`:** fotos e prévias só são aceitas se a URL for a do Storage
+  para um caminho nessa pasta — o "apagar arte" nunca alcança outro objeto.
+- **Freio:** 20 chamadas por minuto nas duas rotas que chamam o Gemini.
+- **Modelo:** `GEMINI_ART_MODEL` (padrão `gemini-2.5-flash`), temperatura 0.7. O material
+  pedagógico segue no `GEMINI_MODEL`.
+
 ## 📊 Estrutura de Dados e Coleções do Firestore
 
 Abaixo está a estrutura de dados armazenada em cada coleção do banco de dados:
@@ -2388,6 +2451,54 @@ Vídeo aulas (spec 027). **Um documento por vídeo**, preso a um tópico do `cur
 > **Sem índice composto:** consultas de um campo só (`level`, `topicId`, `mux.assetId`), com
 > ordenação e agrupamento em memória.
 
+### 16. `brandIdentities`
+Identidades visuais da Campanha (spec 031). A padrão tem **id fixo `default`**.
+- **Doc ID:** `default` ou id automático
+```json
+{
+  "name": "string — único (sem diferenciar maiúscula/acento)",
+  "isDefault": "boolean — true só no doc 'default'",
+  "content": "string (Markdown) — vai inteiro para o prompt da IA",
+  "createdBy": "string — uid, ou 'system' na padrão",
+  "createdAt": "string ISO",
+  "updatedAt": "string ISO",
+  "updatedBy": "string (opcional)"
+}
+```
+
+### 17. `artworks`
+Histórico de artes da Campanha (spec 031).
+- **Doc ID:** id automático
+```json
+{
+  "prompt": "string",
+  "format": "'carousel' | 'post' | 'story'",
+  "slideCount": "number",
+  "identityId": "string | null — null quando a identidade foi descrita na hora",
+  "identityName": "string",
+  "identitySnapshot": "string — o texto da identidade usado, congelado",
+  "photos": [{ "url": "string", "path": "string — artworks/..." }],
+  "plan": {
+    "title": "string",
+    "variant": "string — 'profundo' | 'claro' na identidade padrão",
+    "slides": [{ "headline": "string", "body": "string", "visual": "string" }]
+  },
+  "slides": [
+    {
+      "html": "string | null — sanitizado; null até ser gerado",
+      "preview": "{ url, path } | null — miniatura WebP da galeria"
+    }
+  ],
+  "status": "'draft' | 'ready' — ready quando todo slide tem HTML",
+  "createdBy": "string",
+  "createdAt": "string ISO — a galeria pagina por ele",
+  "updatedAt": "string ISO"
+}
+```
+
+> **Sem o PNG cheio:** um PNG de 1080×1920 pode passar do limite de corpo da Vercel no upload,
+> e o HTML salvo já gera o mesmo PNG de novo no navegador. A galeria só precisa da miniatura.
+
 ---
 
 ## 🖼️ Upload de imagens — `/uploads`
@@ -2400,6 +2511,7 @@ leitura que trouxesse o registro.
 |---|---|---|---|
 | `POST` | `/uploads/avatars` | autenticado | Foto de perfil (o aluno troca a própria) |
 | `POST` | `/uploads/articles` | autenticado | Capa de artigo |
+| `POST` | `/uploads/artworks` | **gerente** | Fotos e prévias da Campanha (spec 031); 403 para os outros papéis |
 
 `multipart/form-data`, campo **`file`**. Aceita `image/jpeg`, `image/png`, `image/webp`,
 até **5 MB**. Responde `{ url, path }`.
