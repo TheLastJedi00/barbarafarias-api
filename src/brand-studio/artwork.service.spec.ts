@@ -77,7 +77,14 @@ function makeService(
         : (options.plan ?? planOf(3)),
     ),
   };
-  const storage = { remove: jest.fn(async () => undefined) };
+  const storage = {
+    remove: jest.fn(async () => undefined),
+    download: jest.fn(async (path: string) =>
+      path.includes('sumiu')
+        ? null
+        : { data: Buffer.from(path), contentType: 'image/jpeg' },
+    ),
+  };
   const config = { get: jest.fn(() => undefined) };
   const service = new ArtworkService(
     repository as any,
@@ -335,5 +342,48 @@ describe('ArtworkService — prévia e galeria', () => {
       cover: photo('p1').url,
     });
     expect(item).not.toHaveProperty('slides');
+  });
+});
+
+describe('ArtworkService — fotos pela API', () => {
+  // O navegador não lê o bucket de produção com CORS (fix 031): a foto
+  // anexada chega ao front pela API, lida com o Admin SDK.
+  it('entrega a foto pelo índice gravado na arte', async () => {
+    const ctx = makeService();
+    const art = await createdArtwork(ctx, {
+      photos: [photo('um'), photo('dois')],
+    });
+
+    const file = await ctx.service.photo(art.id, 1);
+
+    expect(ctx.storage.download).toHaveBeenCalledWith('artworks/dois.jpg');
+    expect(file).toEqual({
+      data: Buffer.from('artworks/dois.jpg'),
+      contentType: 'image/jpeg',
+    });
+  });
+
+  it('índice fora da lista é 400; arte inexistente é 404', async () => {
+    const ctx = makeService();
+    const art = await createdArtwork(ctx, { photos: [photo('um')] });
+
+    await expect(ctx.service.photo(art.id, 1)).rejects.toBeInstanceOf(
+      BadRequestException,
+    );
+    await expect(ctx.service.photo(art.id, -1)).rejects.toBeInstanceOf(
+      BadRequestException,
+    );
+    await expect(ctx.service.photo('nada', 0)).rejects.toBeInstanceOf(
+      NotFoundException,
+    );
+  });
+
+  it('foto que sumiu do Storage é 404', async () => {
+    const ctx = makeService();
+    const art = await createdArtwork(ctx, { photos: [photo('sumiu')] });
+
+    await expect(ctx.service.photo(art.id, 0)).rejects.toBeInstanceOf(
+      NotFoundException,
+    );
   });
 });
