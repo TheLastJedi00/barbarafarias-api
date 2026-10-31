@@ -2017,6 +2017,7 @@ primeiras leituras uma delas perde sem erro. O texto vem de `default-identity.ts
 | `PATCH` | `/brand-studio/artworks/:id/slides/:index/preview` | `{ url, path }` da miniatura subida em `/uploads/artworks` |
 | `GET` | `/brand-studio/artworks?limit=&before=` | Galeria (resumos, sem HTML), mais recentes primeiro |
 | `GET` | `/brand-studio/artworks/:id` | Arte completa |
+| `GET` | `/brand-studio/artworks/:id/photos/:index` | Bytes da foto anexada `index` (começa em 0), com o `content-type` do objeto |
 | `DELETE` | `/brand-studio/artworks/:id` | Apaga a arte e, no Storage, as prévias e as fotos |
 
 | Formato | Proporção | Canvas | Slides |
@@ -2043,6 +2044,10 @@ primeiras leituras uma delas perde sem erro. O texto vem de `default-identity.ts
   enquanto o seguinte era gerado sumia.
 - **Arquivos presos a `artworks/`:** fotos e prévias só são aceitas se a URL for a do Storage
   para um caminho nessa pasta — o "apagar arte" nunca alcança outro objeto.
+- **Fotos saem pela API, não pelo Storage** (fix 031): o PNG precisa da foto embutida, e o
+  navegador não consegue ler o bucket de produção com `fetch` (falha de CORS; como `<img>`
+  carrega). A rota lê com o Admin SDK pelo caminho gravado na arte — nunca um caminho vindo do
+  cliente — e manda `Cache-Control: private, max-age=3600`.
 - **Freio:** 20 chamadas por minuto nas duas rotas que chamam o Gemini.
 - **Modelo:** `GEMINI_ART_MODEL` (padrão `gemini-2.5-flash`), temperatura 0.7. O material
   pedagógico segue no `GEMINI_MODEL`.

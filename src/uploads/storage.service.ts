@@ -112,6 +112,28 @@ export class StorageService {
   }
 
   /**
+   * Bytes e tipo de um objeto, ou `null` se ele não existe. Para quando o
+   * navegador não pode ler o bucket direto: o `fetch` com CORS falha no bucket
+   * de produção (fix 031), e a API entrega o arquivo no lugar dele.
+   */
+  async download(
+    path: string,
+  ): Promise<{ data: Buffer; contentType: string } | null> {
+    const object = this.bucket().file(path);
+    try {
+      const [metadata] = await object.getMetadata();
+      const [data] = await object.download();
+      return {
+        data,
+        contentType: metadata.contentType ?? 'application/octet-stream',
+      };
+    } catch (error) {
+      if ((error as { code?: number }).code === 404) return null;
+      throw error;
+    }
+  }
+
+  /**
    * URL v4 assinada de leitura, que expira (spec 027). Com `fileName`, o
    * navegador baixa o arquivo com o nome original em vez de abri-lo.
    */

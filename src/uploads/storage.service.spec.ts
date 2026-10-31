@@ -10,6 +10,7 @@ function makeBucket() {
       .fn()
       .mockResolvedValue([{ size: '1024', contentType: 'video/mp4' }]),
     getSignedUrl: jest.fn().mockResolvedValue(['https://signed']),
+    download: jest.fn().mockResolvedValue([Buffer.from('jpeg')]),
   };
   return {
     file: jest.fn().mockReturnValue(file),
@@ -61,6 +62,26 @@ describe('StorageService (upload direto — spec 027)', () => {
     const config = bucket.handle.getSignedUrl.mock.calls[0][0];
     expect(config).toMatchObject({ version: 'v4', action: 'read' });
     expect(config.responseDisposition).toContain('filename="Aula 1.pdf"');
+  });
+
+  it('baixa o objeto com o content-type gravado (spec 031)', async () => {
+    bucket.handle.getMetadata.mockResolvedValue([
+      { size: '4', contentType: 'image/jpeg' },
+    ]);
+
+    const file = await service.download('artworks/a.jpg');
+
+    expect(bucket.file).toHaveBeenCalledWith('artworks/a.jpg');
+    expect(file).toEqual({
+      data: Buffer.from('jpeg'),
+      contentType: 'image/jpeg',
+    });
+  });
+
+  it('download de objeto que não existe devolve null', async () => {
+    bucket.handle.getMetadata.mockRejectedValue({ code: 404 });
+    expect(await service.download('artworks/sumiu.jpg')).toBeNull();
+    expect(bucket.handle.download).not.toHaveBeenCalled();
   });
 
   it('remoção por prefixo não propaga falha', async () => {

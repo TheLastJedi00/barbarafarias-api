@@ -3,6 +3,7 @@ import {
   Controller,
   Delete,
   Get,
+  Header,
   HttpCode,
   HttpStatus,
   Param,
@@ -10,6 +11,7 @@ import {
   Patch,
   Post,
   Query,
+  StreamableFile,
   UseGuards,
 } from '@nestjs/common';
 import { Throttle, ThrottlerGuard } from '@nestjs/throttler';
@@ -69,6 +71,21 @@ export class ArtworkController {
     @Body() dto: GenerateSlideDto,
   ) {
     return this.service.generateSlide(id, index, dto);
+  }
+
+  /** Foto anexada, servida pela API: o front a embute no PNG (fix 031). */
+  @Get(':id/photos/:index')
+  // A foto não muda (troca de foto é um arquivo novo): o navegador guarda.
+  @Header('Cache-Control', 'private, max-age=3600')
+  async photo(
+    @Param('id') id: string,
+    @Param('index', ParseIntPipe) index: number,
+  ) {
+    const file = await this.service.photo(id, index);
+    return new StreamableFile(file.data, {
+      type: file.contentType,
+      length: file.data.length,
+    });
   }
 
   @Patch(':id/slides/:index/preview')
