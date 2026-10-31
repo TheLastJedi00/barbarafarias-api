@@ -191,6 +191,23 @@ export class ArtworkService {
     return updated;
   }
 
+  /**
+   * Bytes de uma foto anexada. O navegador não consegue ler o bucket de
+   * produção com `fetch` (CORS; fix 031), e o PNG precisa da foto embutida:
+   * a API lê com o Admin SDK. O caminho vem da arte gravada, nunca do cliente.
+   */
+  async photo(
+    id: string,
+    index: number,
+  ): Promise<{ data: Buffer; contentType: string }> {
+    const artwork = await this.getOrThrow(id);
+    const photo = Number.isInteger(index) ? artwork.photos[index] : undefined;
+    if (!photo) throw new BadRequestException('Foto inexistente nesta arte.');
+    const file = await this.storage.download(photo.path);
+    if (!file) throw new NotFoundException('A foto não está mais no Storage.');
+    return file;
+  }
+
   async list(limit?: number, before?: string): Promise<ArtworkSummary[]> {
     const artworks = await this.repository.list(limit, before);
     return artworks.map((a) => ({
