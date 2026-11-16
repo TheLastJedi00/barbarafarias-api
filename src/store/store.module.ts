@@ -1,4 +1,8 @@
 import { Module } from '@nestjs/common';
+import { CurriculumModule } from '../curriculum/curriculum.module';
+import { UploadModule } from '../uploads/upload.module';
+import { StoreAdminController } from './store-admin.controller';
+import { StoreAdminService } from './store-admin.service';
 import { StoreProductRepository } from './store-product.repository';
 import { StorePurchaseRepository } from './store-purchase.repository';
 
@@ -9,7 +13,13 @@ import { StorePurchaseRepository } from './store-purchase.repository';
  * decidir o acesso, e a dependência no sentido contrário seria circular.
  */
 @Module({
-  providers: [StoreProductRepository, StorePurchaseRepository],
+  imports: [CurriculumModule, UploadModule],
+  controllers: [StoreAdminController],
+  providers: [
+    StoreAdminService,
+    StoreProductRepository,
+    StorePurchaseRepository,
+  ],
   exports: [StoreProductRepository, StorePurchaseRepository],
 })
 export class StoreModule {}
