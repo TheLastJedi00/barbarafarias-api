@@ -8,6 +8,10 @@ export const LEGAL_DOCUMENT_TYPES = [
   'terms-of-use',
   'privacy-policy',
   'recruitment',
+  // Spec 032: termo de compra de conteúdo digital da loja. Aceito **no
+  // checkout**, compra a compra — fica fora do `requiredTypesFor`, ou todo
+  // aluno de plano seria cobrado de um aceite que não lhe diz respeito.
+  'store-purchase',
 ] as const;
 export type LegalDocumentType = (typeof LEGAL_DOCUMENT_TYPES)[number];
 
@@ -21,6 +25,7 @@ export const LEGAL_DOCUMENT_TITLES: Record<LegalDocumentType, string> = {
   'privacy-policy': 'Política de Privacidade',
   recruitment:
     'Termo de Privacidade e Tratamento de Dados Pessoais — Processo Seletivo',
+  'store-purchase': 'Termo de Compra de Conteúdo Digital',
 };
 
 /**
