@@ -9,6 +9,7 @@ import { MercadoPagoModule } from './mercadopago.module';
 import { MercadoPagoWebhookController } from './mercadopago-webhook.controller';
 import { PaymentAccessService } from './payment-access.service';
 import { UserModule } from '../users/user.module';
+import { StoreModule } from '../store/store.module';
 
 /**
  * Cada método de pagamento entra pela sua porta abstrata, como o
@@ -21,7 +22,10 @@ import { UserModule } from '../users/user.module';
  * passou a cobrar também.
  */
 @Module({
-  imports: [ConfigModule, MercadoPagoModule, UserModule],
+  // `StoreModule`: o webhook entrega à loja as orders que são dela (spec 032).
+  // A loja não importa este módulo — só o `MercadoPagoModule` —, e é isso que
+  // mantém a dependência numa direção só.
+  imports: [ConfigModule, MercadoPagoModule, StoreModule, UserModule],
   controllers: [SubscriptionController, MercadoPagoWebhookController],
   providers: [
     SubscriptionService,
