@@ -3,6 +3,9 @@ import { CurriculumModule } from '../curriculum/curriculum.module';
 import { UploadModule } from '../uploads/upload.module';
 import { StoreAdminController } from './store-admin.controller';
 import { StoreAdminService } from './store-admin.service';
+import { StoreCatalogController } from './store-catalog.controller';
+import { StoreCatalogService } from './store-catalog.service';
+import { StoreContentRepository } from './store-content.repository';
 import { StoreProductRepository } from './store-product.repository';
 import { StorePurchaseRepository } from './store-purchase.repository';
 
@@ -14,9 +17,11 @@ import { StorePurchaseRepository } from './store-purchase.repository';
  */
 @Module({
   imports: [CurriculumModule, UploadModule],
-  controllers: [StoreAdminController],
+  controllers: [StoreAdminController, StoreCatalogController],
   providers: [
     StoreAdminService,
+    StoreCatalogService,
+    StoreContentRepository,
     StoreProductRepository,
     StorePurchaseRepository,
   ],
