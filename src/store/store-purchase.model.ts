@@ -43,9 +43,25 @@ export interface StorePurchase {
   termsVersion: string;
   paidAt?: string; // ISO
   accessUntil?: string; // ISO
-  refund?: { by: 'buyer' | 'manager'; at: string; reason?: string };
+  /**
+   * `gateway`: o estorno chegou pelo webhook sem ter saído daqui (painel do
+   * Mercado Pago, por exemplo).
+   */
+  refund?: { by: 'buyer' | 'manager' | 'gateway'; at: string; reason?: string };
   createdAt: string; // ISO
   updatedAt: string; // ISO
+}
+
+/** Prazo de desistência do comprador (CDC art. 49), contado do pagamento. */
+export const STORE_WITHDRAWAL_DAYS = 7;
+
+/** Até quando o Mercado Pago aceita estorno de uma order aprovada. */
+export const STORE_REFUND_LIMIT_DAYS = 180;
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+export function addDays(iso: string, days: number): string {
+  return new Date(new Date(iso).getTime() + days * DAY_MS).toISOString();
 }
 
 /** A compra está dando acesso agora? */

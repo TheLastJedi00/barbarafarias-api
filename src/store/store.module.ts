@@ -1,7 +1,9 @@
 import { Module } from '@nestjs/common';
+import { ConfigModule } from '@nestjs/config';
 import { ThrottlerModule } from '@nestjs/throttler';
 import { AuthModule } from '../auth/auth.module';
 import { LegalModule } from '../legal/legal.module';
+import { MercadoPagoModule } from '../subscriptions/mercadopago.module';
 import { UserModule } from '../users/user.module';
 import { CurriculumModule } from '../curriculum/curriculum.module';
 import { UploadModule } from '../uploads/upload.module';
@@ -12,6 +14,11 @@ import { StoreCatalogService } from './store-catalog.service';
 import { StoreContentRepository } from './store-content.repository';
 import { StoreSignupController } from './store-signup.controller';
 import { StoreSignupService } from './store-signup.service';
+import {
+  StoreAdminPurchaseController,
+  StorePurchaseController,
+} from './store-purchase.controller';
+import { StorePurchaseService } from './store-purchase.service';
 import { StoreProductRepository } from './store-product.repository';
 import { StorePurchaseRepository } from './store-purchase.repository';
 
@@ -24,8 +31,10 @@ import { StorePurchaseRepository } from './store-purchase.repository';
 @Module({
   imports: [
     AuthModule,
+    ConfigModule,
     CurriculumModule,
     LegalModule,
+    MercadoPagoModule,
     UploadModule,
     UserModule,
     // O cadastro é público: freio por IP, como no recrutamento (o
@@ -36,15 +45,22 @@ import { StorePurchaseRepository } from './store-purchase.repository';
     StoreAdminController,
     StoreCatalogController,
     StoreSignupController,
+    StorePurchaseController,
+    StoreAdminPurchaseController,
   ],
   providers: [
     StoreAdminService,
     StoreCatalogService,
     StoreContentRepository,
     StoreSignupService,
+    StorePurchaseService,
     StoreProductRepository,
     StorePurchaseRepository,
   ],
-  exports: [StoreProductRepository, StorePurchaseRepository],
+  exports: [
+    StoreProductRepository,
+    StorePurchaseRepository,
+    StorePurchaseService,
+  ],
 })
 export class StoreModule {}
