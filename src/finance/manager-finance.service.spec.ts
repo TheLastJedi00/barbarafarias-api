@@ -51,6 +51,7 @@ function build(
     infraByMonth?: number;
     goal?: Partial<RevenueGoal>;
     manual?: ManualPayment[];
+    store?: unknown[];
   } = {},
 ) {
   const billingSummary = {
@@ -91,6 +92,7 @@ function build(
     infra as any,
     goals as any,
     manualPayments as any,
+    { findAll: jest.fn().mockResolvedValue(options.store ?? []) } as any,
   );
   return { service, billingSummary, subscriptionRepository, infra, goals };
 }
@@ -197,6 +199,61 @@ describe('ManagerFinanceService — visão mensal', () => {
     await expect(service.getMonthlyOverview('2026-08')).resolves.toMatchObject({
       goalTarget: undefined,
     });
+  });
+});
+
+describe('ManagerFinanceService — vendas da loja (spec 032)', () => {
+  const venda = (overrides: Record<string, unknown>) => ({
+    id: 'c',
+    userId: 'u',
+    productId: 'p',
+    kind: 'module',
+    titleSnapshot: 'Módulo',
+    priceSnapshot: 100,
+    installments: 1,
+    method: 'PIX',
+    status: 'PAID',
+    gateway: {},
+    termsVersion: '1.0',
+    createdAt: '2026-08-01T00:00:00.000Z',
+    updatedAt: '2026-08-01T00:00:00.000Z',
+    ...overrides,
+  });
+
+  it('soma no mês do pagamento, líquido da taxa, sem reembolsadas', async () => {
+    const { service } = build({
+      store: [
+        venda({ paidAt: '2026-08-10T15:00:00.000Z' }),
+        venda({ paidAt: '2026-08-20T15:00:00.000Z', priceSnapshot: 50 }),
+        venda({ paidAt: '2026-08-12T15:00:00.000Z', status: 'REFUNDED' }),
+        venda({ paidAt: '2026-08-12T15:00:00.000Z', status: 'CHARGED_BACK' }),
+        venda({ status: 'PENDING' }),
+        venda({ paidAt: '2026-09-02T15:00:00.000Z' }),
+      ],
+    });
+
+    const overview = await service.getMonthlyOverview('2026-08');
+
+    expect(overview.storeRevenue).toBe(netOfGatewayFee(150));
+    expect(overview.revenue).toBe(netOfGatewayFee(150));
+    expect(overview.activeStudents).toBe(0);
+  });
+
+  it('meia-noite de 1º de setembro em Brasília ainda é agosto', async () => {
+    const { service } = build({
+      // 02:30 UTC de 01/09 = 23:30 de 31/08 no fuso da operação.
+      store: [venda({ paidAt: '2026-09-01T02:30:00.000Z' })],
+    });
+    const agosto = await service.getMonthlyOverview('2026-08');
+    expect(agosto.storeRevenue).toBe(netOfGatewayFee(100));
+  });
+
+  it('entra também na visão anual', async () => {
+    const { service } = build({
+      store: [venda({ paidAt: '2026-03-10T15:00:00.000Z' })],
+    });
+    const annual = await service.getAnnualOverview(2026);
+    expect(annual.months[2].revenue).toBe(netOfGatewayFee(100));
   });
 });
 

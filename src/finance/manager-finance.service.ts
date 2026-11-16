@@ -17,7 +17,12 @@ import {
   MonthData,
   MonthlyOverview,
 } from './manager-finance.entity';
-import { todayInAppTimezone } from '../common/time';
+import { todayInAppTimezone, toZonedDateString } from '../common/time';
+import { StorePurchaseRepository } from '../store/store-purchase.repository';
+import {
+  STORE_PURCHASE_STATUS,
+  StorePurchase,
+} from '../store/store-purchase.model';
 import { ManualPaymentRepository } from '../manual-payments/manual-payment.repository';
 import {
   ManualPayment,
@@ -42,6 +47,7 @@ export class ManagerFinanceService {
     private readonly infraExpenses: InfraExpenseService,
     private readonly goals: RevenueGoalService,
     private readonly manualPayments: ManualPaymentRepository,
+    private readonly storePurchases: StorePurchaseRepository,
   ) {}
 
   async getMonthlyOverview(month: string): Promise<MonthlyOverview> {
@@ -56,6 +62,7 @@ export class ManagerFinanceService {
       month,
       revenue: revenue.total,
       manualRevenue: revenue.manual,
+      storeRevenue: revenue.store,
       teacherExpenses,
       infraExpenses,
       profit: round2(revenue.total - teacherExpenses - infraExpenses),
@@ -72,18 +79,21 @@ export class ManagerFinanceService {
    */
   async getAnnualOverview(year: number): Promise<AnnualOverview> {
     const months = monthsOfYear(year);
-    const [active, infraBreakdown, goals, teacherExpenses, manual] =
+    const [active, infraBreakdown, goals, teacherExpenses, manual, store] =
       await Promise.all([
         this.activeSubscriptions(),
         this.infraExpenses.getAnnualBreakdown(year),
         this.goals.getGoals(year),
         Promise.all(months.map((month) => this.teacherExpensesForMonth(month))),
         this.manualPayments.findByYear(year),
+        this.storePurchases.findAll(),
       ]);
 
     const data: MonthData[] = months.map((month, index) => {
       const revenue = round2(
-        sumScheduledCharges(active, month) + sumManualPayments(manual, month),
+        sumScheduledCharges(active, month) +
+          sumManualPayments(manual, month) +
+          sumStoreSales(store, month),
       );
       const infra = infraBreakdown[index].amount;
       const teachers = teacherExpenses[index];
@@ -174,17 +184,25 @@ export class ManagerFinanceService {
    * a soma do valor dos planos: um anual de R$ 2.280 pesa R$ 190 em cada mês,
    * não R$ 2.280 no mês da contratação.
    */
-  private async revenueForMonth(
-    month: string,
-  ): Promise<{ total: number; manual: number; activeStudents: number }> {
-    const [active, manual] = await Promise.all([
+  private async revenueForMonth(month: string): Promise<{
+    total: number;
+    manual: number;
+    store: number;
+    activeStudents: number;
+  }> {
+    const [active, manual, store] = await Promise.all([
       this.activeSubscriptions(),
       this.manualPayments.findByMonth(month),
+      this.storePurchases.findAll(),
     ]);
     const manualTotal = sumManualPayments(manual, month);
+    const storeTotal = sumStoreSales(store, month);
     return {
-      total: round2(sumScheduledCharges(active, month) + manualTotal),
+      total: round2(
+        sumScheduledCharges(active, month) + manualTotal + storeTotal,
+      ),
       manual: manualTotal,
+      store: storeTotal,
       activeStudents: countPayingStudents(active, manual, month),
     };
   }
@@ -279,6 +297,37 @@ export function countPayingStudents(
     }
   }
   return paying.size;
+}
+
+/**
+ * Vendas da loja num mês (spec 032). **Regime de caixa**: o preço inteiro é
+ * receita do mês do pagamento, no fuso da operação — compra avulsa não tem
+ * cronograma para diluir.
+ *
+ * Só `PAID` soma: a compra **reembolsada** ou **contestada** deixa de contar no
+ * mês em que foi paga, porque o dinheiro voltou. **Líquido da taxa do
+ * gateway**, como as assinaturas — passou pelo Mercado Pago. Os juros do
+ * parcelamento são do comprador e não aparecem aqui.
+ *
+ * O comprador de módulo não entra em "alunos ativos": ele não é aluno pagante
+ * do plano, e somá-lo misturaria duas réguas no mesmo número.
+ */
+export function sumStoreSales(
+  purchases: StorePurchase[],
+  month: string,
+): number {
+  return netOfGatewayFee(
+    sum(
+      purchases
+        .filter(
+          (purchase) =>
+            purchase.status === STORE_PURCHASE_STATUS.PAID &&
+            !!purchase.paidAt &&
+            toZonedDateString(new Date(purchase.paidAt)).startsWith(month),
+        )
+        .map((purchase) => purchase.priceSnapshot),
+    ),
+  );
 }
 
 export const MONTH_LABELS = [
