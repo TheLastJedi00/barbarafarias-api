@@ -21,6 +21,7 @@ import { VideoLessonModule } from './video-lessons/video-lesson.module';
 import { RecruitmentModule } from './recruitment/recruitment.module';
 import { LegalModule } from './legal/legal.module';
 import { BrandStudioModule } from './brand-studio/brand-studio.module';
+import { StoreModule } from './store/store.module';
 import { AuthGuard } from './guards/auth.guard';
 import { RolesGuard } from './guards/roles.guard';
 import { ActivePlanGuard } from './guards/active-plan.guard';
@@ -52,6 +53,7 @@ import { FirebaseAuthModule } from './firestore/firebase-auth.module';
     RecruitmentModule,
     LegalModule,
     BrandStudioModule,
+    StoreModule,
   ],
   providers: [
     {
