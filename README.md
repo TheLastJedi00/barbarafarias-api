@@ -1985,6 +1985,72 @@ do IPA como repositório de conteúdo.
 
 ---
 
+### 🛒 Loja de módulos — `/store` (Spec 032)
+
+Novo tier ao lado dos planos: o lead compra **módulos avulsos** do currículo (vídeo aulas + PDFs
+de apoio, **só leitura**) ou **material para baixar**. Toda compra vale **90 dias** a partir do
+pagamento. PIX ou cartão em **até 12x, com juros do comprador**. Desistência em **7 dias**
+(CDC art. 49).
+
+| Método | Rota | Auth | Descrição |
+|---|---|---|---|
+| `POST` | `/store/signup` | 🔓 pública (5/min por IP) | Cadastro: `student` com `tier: 'modules'`, `isPaying: false`, aceite de Termos e Privacidade |
+| `GET` | `/store/products`, `/store/products/:id` | 🔓 pública | Vitrine: só publicados, sem caminho de arquivo, prompt ou id de tópico |
+| `GET` | `/store/catalog` | `student` | Vitrine do aluno: sem os módulos do nível do plano (assinante em dia) e com `owned`/`pendingPurchaseId` |
+| `POST` | `/store/purchases` | `student` | `{ productId, method, termsVersion }` → QR do PIX ou `card: { amount, maxInstallments }` |
+| `POST` | `/store/purchases/:id/card` | `student` (dono) | Cobra o token do Brick; `installments` 1..teto do produto (o backend confere) |
+| `POST` | `/store/purchases/:id/card/confirm` | `student` (dono) | Fim do desafio 3DS: relê a order |
+| `GET` | `/store/purchases/me` | `student` | Compras (sem as canceladas), com `active`, `accessUntil`, `canWithdraw` |
+| `POST` | `/store/purchases/:id/withdraw` | `student` (dono) | Desistência em até 7 dias: estorno total e acesso cortado na hora |
+| `GET` | `/store/purchases/:id/files`, `…/files/:fileId/download` | `student` (dono) | Arquivos do produto `download`; link de 15 min, enquanto a compra vale |
+| `POST` | `/store/purchases/:id/mock-pay` | `student` | **Só com `DEV_MODE=true`** |
+| `GET/POST/PATCH/DELETE` | `/store/admin/products` (+ `PUT order`, `POST :id/files`, `POST :id/files/:fileId/complete`, `DELETE :id/files/:fileId`) | **gerente** | Catálogo. Um produto por módulo; nível e módulo não mudam depois de criado; download só publica com arquivo pronto; produto vendido não se apaga |
+| `GET` | `/store/admin/purchases` | **gerente** | Vendas com nome e e-mail do comprador |
+| `POST` | `/store/admin/purchases/:id/refund` | **gerente** | Reembolso até 180 dias do pagamento (prazo do Mercado Pago) |
+
+- **Acesso por módulo (`ModuleAccessService`)**, calculado a cada pedido, nunca gravado:
+  equipe e assinante em dia do mesmo nível → `full`; compra `PAID` com `accessUntil` no futuro →
+  `store` (vídeos e **só PDFs**, sem download); aluno do plano em atraso no próprio nível →
+  `payment-pending` (o mesmo 403 de sempre). Vencimento, reembolso e contestação cortam na hora,
+  sem job.
+- **Termo de compra:** tipo `store-purchase` do Painel Jurídico, lido em
+  `/legal/documents/store-purchase`. Fica **fora** do `requiredTypesFor`: é aceito no checkout,
+  compra a compra (`termsVersion` na compra), e nunca vira pendência para o aluno do plano. Sem
+  versão publicada, a loja responde 503 e não vende.
+- **Webhook:** a URL é uma só. Antes da assinatura, a loja procura a order entre as compras dela
+  (`gateway.orderId`) e trata: `processed`/`accredited` libera (inclusive compra que tinha sido
+  cancelada por troca de meio), `refunded` e `charged_back` cortam, `expired`/`canceled`/`failed`
+  cancelam a pendente, status desconhecido não faz nada. `external_reference = store:<id>`.
+- **Gateway:** o Mercado Pago saiu do `SubscriptionModule` para o `MercadoPagoModule`. A loja o
+  importa sem depender da assinatura; a assinatura importa a loja (webhook), nunca o contrário.
+  Reembolso total: `POST /v1/orders/{id}/refund` sem `transactions`, chave de idempotência
+  derivada da compra.
+- **E-mails (Resend):** compra confirmada (comprador) + venda (gerentes); reembolso (comprador) e,
+  na desistência, aviso às gerentes.
+- **Financeiro:** `storeRevenue` no overview. Vendas `PAID` no mês do pagamento (fuso da operação),
+  **líquidas da taxa do gateway**; reembolsada e contestada saem. O comprador não conta em "alunos
+  ativos".
+- **Onboarding:** para `tier: 'modules'`, só nome e celular. O CPF é pedido no checkout, e o
+  objetivo é do material do plano.
+- **Currículo:** `PUT /curriculum/levels/:level` recusa (409) remover módulo com produto na loja
+  (publicado ou rascunho) ou com compra valendo.
+
+#### Vídeo aulas para o comprador (Spec 032)
+
+| Método | Rota | Descrição |
+|---|---|---|
+| `GET` | `/video-lessons/modules/:level/:moduleId` | Árvore de um módulo só, para quem o tem (`access.mode` e `accessUntil`) |
+| `GET` | `/video-lessons/:id/materials/:materialId/read` | Nome e tamanho do PDF, para o leitor |
+| `GET` | `/video-lessons/:id/materials/:materialId/read/bytes?start&end` | Trecho do PDF (`end` inclusivo, até 1 MiB), `Cache-Control: private, no-store` |
+
+- `GET /video-lessons/:id`, `/playback` e `/materials/:id/download` **perderam o
+  `@RequiresActivePlan`**: o comprador não tem plano. O service decide pelo módulo. O detalhe
+  traz `access: 'full' | 'store'`. `…/download` dá 403 para quem tem só a compra.
+- **Por que o PDF vem pela API, em trechos, e não por URL assinada:** o bucket de produção não
+  atende `fetch` com CORS (fix 031), e a Vercel limita a resposta a ~4,5 MB. Em trechos de 1 MiB o
+  leitor pede só as páginas que mostra, e o link do arquivo nunca chega ao navegador. Só leitura é
+  atrito, não proteção: print de tela continua possível.
+
 ### 🎨 Campanha — `/brand-studio` (Spec 031)
 
 Artes para as redes sociais da escola, **só da gerente** (`@Roles(MANAGER)` nos dois
@@ -2504,6 +2570,56 @@ Histórico de artes da Campanha (spec 031).
 > **Sem o PNG cheio:** um PNG de 1080×1920 pode passar do limite de corpo da Vercel no upload,
 > e o HTML salvo já gera o mesmo PNG de novo no navegador. A galeria só precisa da miniatura.
 
+### 18. `storeProducts`
+Produtos da loja (spec 032).
+- **Doc ID:** id automático
+```json
+{
+  "kind": "'module' | 'download'",
+  "title": "string",
+  "description": "string",
+  "cover": "{ url, path } — opcional, em store/",
+  "price": "number — à vista, em reais",
+  "maxInstallments": "number — 1..12, juros do comprador",
+  "published": "boolean",
+  "order": "number — posição na vitrine",
+  "level": "'A1' | 'A2' | 'B1' | 'B2' — obrigatório no módulo; opcional no download (filtro)",
+  "moduleId": "string — só no módulo: id em curriculum/<level>",
+  "files": [{ "id": "string", "fileName": "string", "storagePath": "store-products/<id>/files/...", "mimeType": "string", "size": "number", "status": "'uploading' | 'ready'", "uploadedAt": "string ISO" }],
+  "createdAt": "string ISO",
+  "updatedAt": "string ISO"
+}
+```
+
+### 19. `storePurchases`
+Compras da loja (spec 032). Consultas por um campo só (`userId`, `productId`, `moduleId`,
+`level`, `gateway.orderId`).
+- **Doc ID:** id automático
+```json
+{
+  "userId": "string",
+  "productId": "string",
+  "kind": "'module' | 'download'",
+  "level": "string (módulo)",
+  "moduleId": "string (módulo)",
+  "titleSnapshot": "string — o produto pode mudar depois",
+  "priceSnapshot": "number",
+  "installments": "number",
+  "method": "'PIX' | 'CREDIT_CARD'",
+  "status": "'PENDING' | 'PAID' | 'REFUNDED' | 'CHARGED_BACK' | 'CANCELLED'",
+  "gateway": { "orderId": "string — order do Mercado Pago" },
+  "termsVersion": "string — versão do termo store-purchase aceita",
+  "paidAt": "string ISO",
+  "accessUntil": "string ISO — paidAt + 90 dias",
+  "refund": { "by": "'buyer' | 'manager' | 'gateway'", "at": "string ISO", "reason": "string (opcional)" },
+  "createdAt": "string ISO",
+  "updatedAt": "string ISO"
+}
+```
+
+> **Só `PAID` com `accessUntil` no futuro dá acesso**, e isso é calculado a cada leitura.
+> `users.tier: 'modules'` marca quem entrou pela loja; ausente é aluno do plano (sem migração).
+
 ---
 
 ## 🖼️ Upload de imagens — `/uploads`
@@ -2517,6 +2633,7 @@ leitura que trouxesse o registro.
 | `POST` | `/uploads/avatars` | autenticado | Foto de perfil (o aluno troca a própria) |
 | `POST` | `/uploads/articles` | autenticado | Capa de artigo |
 | `POST` | `/uploads/artworks` | **gerente** | Fotos e prévias da Campanha (spec 031); 403 para os outros papéis |
+| `POST` | `/uploads/store` | **gerente** | Capas dos produtos da loja (spec 032) |
 
 `multipart/form-data`, campo **`file`**. Aceita `image/jpeg`, `image/png`, `image/webp`,
 até **5 MB**. Responde `{ url, path }`.
