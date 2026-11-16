@@ -69,6 +69,8 @@ export interface StorePurchaseView {
   kind: StorePurchase['kind'];
   title: string;
   level?: string;
+  /** Módulo do currículo, para abrir a árvore de vídeos dele. */
+  moduleId?: string;
   price: number;
   installments: number;
   method: StorePurchase['method'];
@@ -756,6 +758,7 @@ export function toView(p: StorePurchase): StorePurchaseView {
     kind: p.kind,
     title: p.titleSnapshot,
     ...(p.level ? { level: p.level } : {}),
+    ...(p.moduleId ? { moduleId: p.moduleId } : {}),
     price: p.priceSnapshot,
     installments: p.installments,
     method: p.method,

@@ -352,6 +352,7 @@ describe('VideoLessonService — leitura (spec 027)', () => {
 
       const detail = await s.service.getDetail('v1', student);
       expect(detail.lesson.materials.map((m) => m.id)).toEqual(['pdf']);
+      expect(detail.access).toBe('store');
     });
 
     it('assinante continua vendo todos os materiais', async () => {
@@ -360,6 +361,7 @@ describe('VideoLessonService — leitura (spec 027)', () => {
 
       const detail = await s.service.getDetail('v1', student);
       expect(detail.lesson.materials).toHaveLength(3);
+      expect(detail.access).toBe('full');
     });
 
     it('não baixa: só lê', async () => {

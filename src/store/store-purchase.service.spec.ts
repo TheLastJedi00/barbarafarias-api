@@ -679,6 +679,7 @@ describe('StorePurchaseService (spec 032 §7)', () => {
       ]);
       const list = await service.listMine(requester);
       expect(list.map((p) => p.id)).toEqual(['c', 'a']);
+      expect(list[0]).toMatchObject({ level: 'A1', moduleId: 'm1' });
     });
 
     it('mock-pay só em DEV_MODE', async () => {

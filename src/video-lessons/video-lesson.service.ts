@@ -115,6 +115,11 @@ export interface VideoLessonTree<L> {
 /** Detalhe de uma aula, com a vizinhança dentro do tópico. */
 export interface VideoLessonDetail<L> {
   lesson: L;
+  /**
+   * `store`: quem vê entrou pela loja (spec 032) — só PDFs, só leitura. A tela
+   * troca o "baixar" pelo leitor.
+   */
+  access: 'full' | 'store';
   module: { id: string; title: string };
   topic: { id: string; title: string };
   previousId: string | null;
@@ -387,6 +392,7 @@ export class VideoLessonService {
       lesson: student
         ? await this.toStudentView(lesson, access)
         : toView(lesson),
+      access: access.mode === 'store' ? 'store' : 'full',
       module: { id: module?.id ?? '', title: module?.title ?? '' },
       topic: { id: topic?.id ?? lesson.topicId, title: topic?.title ?? '' },
       previousId: index > 0 ? siblings[index - 1].id : null,
