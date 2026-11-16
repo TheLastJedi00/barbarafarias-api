@@ -53,12 +53,16 @@ function setup() {
     ),
   };
   const curriculum = { getLevel: jest.fn().mockResolvedValue(curriculumA1) };
+  const users = { findById: jest.fn().mockResolvedValue({ isPaying: false }) };
+  const purchases = { findByUser: jest.fn().mockResolvedValue([]) };
   const service = new StoreCatalogService(
     products as any,
     content as any,
     curriculum as any,
+    users as any,
+    purchases as any,
   );
-  return { service, products, content, curriculum };
+  return { service, products, content, curriculum, users, purchases };
 }
 
 describe('StoreCatalogService (spec 032)', () => {
@@ -142,6 +146,56 @@ describe('StoreCatalogService (spec 032)', () => {
     expect(detail.files).toEqual([
       { fileName: 'a.pdf', mimeType: 'application/pdf', size: 10 },
     ]);
+  });
+
+  describe('vitrine do aluno logado', () => {
+    const student = { sub: 'u1', email: 'a@x', role: 'student' as const };
+    const future = new Date(Date.now() + 86_400_000).toISOString();
+
+    it('assinante não vê os módulos do próprio nível; download aparece', async () => {
+      const { service, products, users } = setup();
+      users.findById.mockResolvedValue({ level: 'A1', isPaying: true });
+      products.findPublished.mockResolvedValue([
+        product({ id: 'a1', level: 'A1' }),
+        product({ id: 'b1', level: 'B1', moduleId: 'mb' }),
+        product({
+          id: 'd',
+          kind: 'download',
+          level: 'A1',
+          moduleId: undefined,
+        }),
+      ]);
+      const list = await service.listForUser(student);
+      expect(list.map((p) => p.id)).toEqual(['b1', 'd']);
+    });
+
+    it('assinante em atraso vê tudo (o plano não está valendo)', async () => {
+      const { service, products, users } = setup();
+      users.findById.mockResolvedValue({ level: 'A1', isPaying: false });
+      products.findPublished.mockResolvedValue([product({ id: 'a1' })]);
+      expect(await service.listForUser(student)).toHaveLength(1);
+    });
+
+    it('marca o que já é dele e o que está pendente', async () => {
+      const { service, products, purchases } = setup();
+      products.findPublished.mockResolvedValue([
+        product({ id: 'p1' }),
+        product({ id: 'p2', moduleId: 'm2' }),
+      ]);
+      purchases.findByUser.mockResolvedValue([
+        {
+          id: 'c1',
+          productId: 'p1',
+          status: 'PAID',
+          accessUntil: future,
+        },
+        { id: 'c2', productId: 'p2', status: 'PENDING' },
+      ]);
+      const [p1, p2] = await service.listForUser(student);
+      expect(p1.owned).toEqual({ purchaseId: 'c1', accessUntil: future });
+      expect(p2.owned).toBeUndefined();
+      expect(p2.pendingPurchaseId).toBe('c2');
+    });
   });
 
   it('404 para produto inexistente ou não publicado', async () => {

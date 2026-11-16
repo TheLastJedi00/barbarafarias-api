@@ -1,5 +1,13 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { CurriculumService } from '../curriculum/curriculum.service';
+import type { AuthenticatedUser } from '../decorators/current-user.decorator';
+import { hasPaidAccess } from '../users/paid-access';
+import { UserRepository } from '../users/user.repository';
+import { StorePurchaseRepository } from './store-purchase.repository';
+import {
+  STORE_PURCHASE_STATUS,
+  isPurchaseActive,
+} from './store-purchase.model';
 import { Level } from '../types/student.level';
 import {
   STORE_FILE_STATUS,
@@ -35,6 +43,14 @@ export interface StoreProductSummary {
   fileCount?: number;
 }
 
+/** A vitrine vista por quem está logado: o que já é dele vem marcado. */
+export interface StoreCatalogItem extends StoreProductSummary {
+  /** Compra valendo agora: abre em "Meus módulos" em vez de comprar. */
+  owned?: { purchaseId: string; accessUntil: string };
+  /** Compra começada e não paga (PIX aguardando, cartão em desafio). */
+  pendingPurchaseId?: string;
+}
+
 export interface StoreProductDetail extends StoreProductSummary {
   module?: {
     title: string;
@@ -49,7 +65,55 @@ export class StoreCatalogService {
     private readonly products: StoreProductRepository,
     private readonly content: StoreContentRepository,
     private readonly curriculum: CurriculumService,
+    private readonly users: UserRepository,
+    private readonly purchases: StorePurchaseRepository,
   ) {}
+
+  /**
+   * A vitrine do aluno logado (spec 032 §8). O assinante **não vê** os módulos
+   * do próprio nível — já estão no plano dele (decisão 4) —, e o que a pessoa
+   * já comprou vem marcado, para a tela abrir em vez de vender de novo.
+   */
+  async listForUser(requester: AuthenticatedUser): Promise<StoreCatalogItem[]> {
+    const [products, user, mine] = await Promise.all([
+      this.listPublished(),
+      this.users.findById(requester.sub),
+      this.purchases.findByUser(requester.sub),
+    ]);
+    const planLevel =
+      user && user.level && hasPaidAccess(user) ? user.level : null;
+
+    return products
+      .filter(
+        (p) =>
+          !(
+            planLevel &&
+            p.kind === STORE_PRODUCT_KIND.MODULE &&
+            p.level === planLevel
+          ),
+      )
+      .map((p) => {
+        const owned = mine.find(
+          (c) => c.productId === p.id && isPurchaseActive(c),
+        );
+        const pending = mine.find(
+          (c) =>
+            c.productId === p.id && c.status === STORE_PURCHASE_STATUS.PENDING,
+        );
+        return {
+          ...p,
+          ...(owned
+            ? {
+                owned: {
+                  purchaseId: owned.id,
+                  accessUntil: owned.accessUntil!,
+                },
+              }
+            : {}),
+          ...(!owned && pending ? { pendingPurchaseId: pending.id } : {}),
+        };
+      });
+  }
 
   async listPublished(): Promise<StoreProductSummary[]> {
     const products = (await this.products.findPublished()).sort(

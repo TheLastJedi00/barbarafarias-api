@@ -10,7 +10,10 @@ import { CurriculumModule } from '../curriculum/curriculum.module';
 import { UploadModule } from '../uploads/upload.module';
 import { StoreAdminController } from './store-admin.controller';
 import { StoreAdminService } from './store-admin.service';
-import { StoreCatalogController } from './store-catalog.controller';
+import {
+  StoreCatalogController,
+  StoreUserCatalogController,
+} from './store-catalog.controller';
 import { StoreCatalogService } from './store-catalog.service';
 import { StoreContentRepository } from './store-content.repository';
 import { StoreSignupController } from './store-signup.controller';
@@ -47,6 +50,7 @@ import { StorePurchaseRepository } from './store-purchase.repository';
   controllers: [
     StoreAdminController,
     StoreCatalogController,
+    StoreUserCatalogController,
     StoreSignupController,
     StorePurchaseController,
     StoreAdminPurchaseController,
