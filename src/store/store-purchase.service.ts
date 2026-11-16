@@ -10,6 +10,7 @@ import {
 import { ConfigService } from '@nestjs/config';
 import type { AuthenticatedUser } from '../decorators/current-user.decorator';
 import { LegalService } from '../legal/legal.service';
+import { NotificationService } from '../notifications/notification.service';
 import { CARD_REJECTED_MESSAGE } from '../subscriptions/subscription.service';
 import {
   GatewayBusyError,
@@ -121,6 +122,7 @@ export class StorePurchaseService {
     private readonly pix: PixGateway,
     private readonly card: CardGateway,
     private readonly config: ConfigService,
+    private readonly notifications: NotificationService,
   ) {}
 
   // ---------------------------------------------------------------- compra
@@ -404,11 +406,12 @@ export class StorePurchaseService {
     switch (order.status) {
       case ORDER_STATUS.REFUNDED:
         if (purchase.status !== STORE_PURCHASE_STATUS.REFUNDED) {
-          await this.save({
+          const refunded = await this.save({
             ...purchase,
             status: STORE_PURCHASE_STATUS.REFUNDED,
             refund: purchase.refund ?? { by: 'gateway', at: now() },
           });
+          await this.notifications.storePurchaseRefunded(refunded);
         }
         return true;
       case ORDER_STATUS.CHARGED_BACK:
@@ -501,7 +504,7 @@ export class StorePurchaseService {
       );
     }
 
-    return this.save({
+    const refunded = await this.save({
       ...purchase,
       status: STORE_PURCHASE_STATUS.REFUNDED,
       refund: {
@@ -510,6 +513,8 @@ export class StorePurchaseService {
         ...(reason?.trim() ? { reason: reason.trim() } : {}),
       },
     });
+    await this.notifications.storePurchaseRefunded(refunded);
+    return refunded;
   }
 
   // --------------------------------------------------------------- leitura
@@ -570,12 +575,15 @@ export class StorePurchaseService {
   private async markPaid(purchase: StorePurchase): Promise<StorePurchase> {
     if (purchase.status === STORE_PURCHASE_STATUS.PAID) return purchase;
     const paidAt = now();
-    return this.save({
+    const paid = await this.save({
       ...purchase,
       status: STORE_PURCHASE_STATUS.PAID,
       paidAt,
       accessUntil: addDays(paidAt, STORE_ACCESS_DAYS),
     });
+    // Nunca lança: e-mail fora do ar não desfaz um pagamento confirmado.
+    await this.notifications.storePurchasePaid(paid);
+    return paid;
   }
 
   private async cancel(purchase: StorePurchase): Promise<StorePurchase> {

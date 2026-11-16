@@ -183,6 +183,54 @@ describe('NotificationService — recrutamento (spec 028)', () => {
     expect(resend.send.mock.calls[0][0].html).not.toContain('<img');
   });
 
+  describe('loja (spec 032)', () => {
+    const compra = {
+      userId: 'comprador',
+      titleSnapshot: 'Módulo 1 — A1',
+      priceSnapshot: 97,
+      accessUntil: '2027-02-14T12:00:00.000Z',
+    };
+
+    beforeEach(() => {
+      userRepository.findById.mockResolvedValue({
+        id: 'comprador',
+        fullName: 'Lead <b>Silva</b>',
+        email: 'lead@x.com',
+      });
+    });
+
+    it('compra paga: confirma ao comprador com a validade e avisa as gerentes', async () => {
+      await service.storePurchasePaid(compra);
+
+      const [paraComprador, paraGerentes] = resend.send.mock.calls.map(
+        (c) => c[0],
+      );
+      expect(paraComprador.to).toEqual(['lead@x.com']);
+      expect(paraComprador.html).toContain('14/02/2027');
+      expect(paraComprador.html).not.toContain('<b>');
+      expect(paraGerentes.to).toEqual(['gerente@x.com']);
+      expect(paraGerentes.subject).toContain('Módulo 1 — A1');
+    });
+
+    it('desistência avisa o comprador e as gerentes', async () => {
+      await service.storePurchaseRefunded({
+        ...compra,
+        refund: { by: 'buyer' },
+      });
+      expect(resend.send).toHaveBeenCalledTimes(2);
+      expect(resend.send.mock.calls[0][0].html).toContain('desistência');
+    });
+
+    it('reembolso da gerente avisa só o comprador', async () => {
+      await service.storePurchaseRefunded({
+        ...compra,
+        refund: { by: 'manager' },
+      });
+      expect(resend.send).toHaveBeenCalledTimes(1);
+      expect(resend.send.mock.calls[0][0].to).toEqual(['lead@x.com']);
+    });
+  });
+
   it('falha de e-mail não propaga', async () => {
     resend.send.mockRejectedValueOnce(new Error('resend fora do ar'));
     await expect(

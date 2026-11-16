@@ -4,6 +4,7 @@ import { ThrottlerModule } from '@nestjs/throttler';
 import { AuthModule } from '../auth/auth.module';
 import { LegalModule } from '../legal/legal.module';
 import { MercadoPagoModule } from '../subscriptions/mercadopago.module';
+import { NotificationModule } from '../notifications/notification.module';
 import { UserModule } from '../users/user.module';
 import { CurriculumModule } from '../curriculum/curriculum.module';
 import { UploadModule } from '../uploads/upload.module';
@@ -35,6 +36,7 @@ import { StorePurchaseRepository } from './store-purchase.repository';
     CurriculumModule,
     LegalModule,
     MercadoPagoModule,
+    NotificationModule,
     UploadModule,
     UserModule,
     // O cadastro é público: freio por IP, como no recrutamento (o

@@ -107,6 +107,80 @@ export class NotificationService {
     );
   }
 
+  /**
+   * Compra paga na loja (spec 032): confirmação para o comprador e aviso de
+   * venda para as gerentes. São dois envios, e a falha de um não segura o outro.
+   */
+  async storePurchasePaid(purchase: {
+    userId: string;
+    titleSnapshot: string;
+    priceSnapshot: number;
+    accessUntil?: string;
+  }): Promise<void> {
+    const buyer = await this.safeFind(purchase.userId);
+    const accessUntil = purchase.accessUntil;
+    if (buyer?.email && accessUntil) {
+      await this.safeSend(() =>
+        Promise.resolve({
+          to: [buyer.email],
+          ...templates.storePurchaseConfirmed(
+            buyer.fullName ?? '',
+            purchase.titleSnapshot,
+            accessUntil,
+          ),
+        }),
+      );
+    }
+    await this.safeSend(async () => ({
+      to: await this.managerEmails(),
+      ...templates.storeSale(
+        buyer?.fullName ?? 'Um comprador',
+        purchase.titleSnapshot,
+        purchase.priceSnapshot,
+      ),
+    }));
+  }
+
+  /** Compra devolvida (spec 032). Na desistência, as gerentes também sabem. */
+  async storePurchaseRefunded(purchase: {
+    userId: string;
+    titleSnapshot: string;
+    refund?: { by: 'buyer' | 'manager' | 'gateway' };
+  }): Promise<void> {
+    const by = purchase.refund?.by ?? 'gateway';
+    const buyer = await this.safeFind(purchase.userId);
+    if (buyer?.email) {
+      await this.safeSend(() =>
+        Promise.resolve({
+          to: [buyer.email],
+          ...templates.storePurchaseRefunded(
+            buyer.fullName ?? '',
+            purchase.titleSnapshot,
+            by,
+          ),
+        }),
+      );
+    }
+    if (by === 'buyer') {
+      await this.safeSend(async () => ({
+        to: await this.managerEmails(),
+        ...templates.storeWithdrawal(
+          buyer?.fullName ?? 'Um comprador',
+          purchase.titleSnapshot,
+        ),
+      }));
+    }
+  }
+
+  private async safeFind(id: string) {
+    try {
+      return await this.userRepository.findById(id);
+    } catch (error) {
+      this.logger.error(`Falha ao ler o usuário ${id}: ${String(error)}`);
+      return null;
+    }
+  }
+
   private async safeSend(
     build: () => Promise<{ to: string[]; subject: string; html: string }>,
   ): Promise<void> {

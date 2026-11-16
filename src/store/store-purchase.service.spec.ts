@@ -104,6 +104,10 @@ function setup(env: Record<string, string> = {}) {
     refundOrder: jest.fn().mockResolvedValue({ status: 'refunded' }),
   };
   const config = { get: (key: string) => env[key] };
+  const notifications = {
+    storePurchasePaid: jest.fn().mockResolvedValue(undefined),
+    storePurchaseRefunded: jest.fn().mockResolvedValue(undefined),
+  };
   const service = new StorePurchaseService(
     products as any,
     purchases as any,
@@ -112,10 +116,20 @@ function setup(env: Record<string, string> = {}) {
     gateway as any,
     gateway as any,
     config as any,
+    notifications as any,
   );
   const lastSaved = (): StorePurchase =>
     purchases.save.mock.calls.at(-1)![0] as StorePurchase;
-  return { service, products, purchases, users, legal, gateway, lastSaved };
+  return {
+    service,
+    products,
+    purchases,
+    users,
+    legal,
+    gateway,
+    notifications,
+    lastSaved,
+  };
 }
 
 const createPix = {
@@ -515,6 +529,46 @@ describe('StorePurchaseService (spec 032 §7)', () => {
       expect(canWithdraw({ status: 'PAID', paidAt: ago(6) })).toBe(true);
       expect(canWithdraw({ status: 'PAID', paidAt: ago(8) })).toBe(false);
       expect(canWithdraw({ status: 'REFUNDED', paidAt: ago(1) })).toBe(false);
+    });
+  });
+
+  describe('e-mails', () => {
+    it('pagamento confirmado avisa uma vez; a reentrega do webhook não repete', async () => {
+      const { service, purchases, notifications } = setup();
+      purchases.findByOrderId.mockResolvedValue(purchase());
+      await service.handleOrderEvent('ORD-PIX', {
+        status: 'processed',
+        status_detail: 'accredited',
+      });
+      expect(notifications.storePurchasePaid).toHaveBeenCalledTimes(1);
+      expect(notifications.storePurchasePaid.mock.calls[0][0]).toMatchObject({
+        status: 'PAID',
+      });
+
+      purchases.findByOrderId.mockResolvedValue(
+        purchase({ status: 'PAID', paidAt: ago(0), accessUntil: ahead(90) }),
+      );
+      await service.handleOrderEvent('ORD-PIX', {
+        status: 'processed',
+        status_detail: 'accredited',
+      });
+      expect(notifications.storePurchasePaid).toHaveBeenCalledTimes(1);
+    });
+
+    it('desistência avisa com quem desistiu', async () => {
+      const { service, purchases, notifications } = setup();
+      purchases.findById.mockResolvedValue(
+        purchase({
+          status: 'PAID',
+          paidAt: ago(1),
+          accessUntil: ahead(89),
+          gateway: { orderId: 'ORD-PIX' },
+        }),
+      );
+      await service.withdraw(requester, 'c1');
+      expect(
+        notifications.storePurchaseRefunded.mock.calls[0][0].refund.by,
+      ).toBe('buyer');
     });
   });
 
