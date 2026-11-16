@@ -20,6 +20,7 @@ import {
   StorePurchaseController,
 } from './store-purchase.controller';
 import { StorePurchaseService } from './store-purchase.service';
+import { ModuleAccessService } from './module-access.service';
 import { StoreProductRepository } from './store-product.repository';
 import { StorePurchaseRepository } from './store-purchase.repository';
 
@@ -56,6 +57,7 @@ import { StorePurchaseRepository } from './store-purchase.repository';
     StoreContentRepository,
     StoreSignupService,
     StorePurchaseService,
+    ModuleAccessService,
     StoreProductRepository,
     StorePurchaseRepository,
   ],
@@ -63,6 +65,7 @@ import { StorePurchaseRepository } from './store-purchase.repository';
     StoreProductRepository,
     StorePurchaseRepository,
     StorePurchaseService,
+    ModuleAccessService,
   ],
 })
 export class StoreModule {}
