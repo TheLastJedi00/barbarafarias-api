@@ -69,3 +69,60 @@ describe('CurriculumRepository (leitura tolerante ao campo pré-020)', () => {
     expect((await semModulos.getLevel('A1'))!.modules).toEqual([]);
   });
 });
+
+describe('CurriculumRepository.findStoreLockedModules (spec 032)', () => {
+  it('trava todo módulo com produto na loja e os que têm compra válida', async () => {
+    const future = new Date(Date.now() + 86_400_000).toISOString();
+    const past = new Date(Date.now() - 86_400_000).toISOString();
+    const snapshots: Record<
+      string,
+      { docs: { get: (f: string) => unknown }[] }
+    > = {
+      storeProducts: {
+        docs: [
+          { get: (f) => ({ moduleId: 'm-produto' })[f] },
+          { get: (f) => ({ moduleId: undefined })[f] },
+        ],
+      },
+      storePurchases: {
+        docs: [
+          {
+            get: (f) =>
+              ({ moduleId: 'm-valida', status: 'PAID', accessUntil: future })[
+                f
+              ],
+          },
+          {
+            get: (f) =>
+              ({ moduleId: 'm-vencida', status: 'PAID', accessUntil: past })[f],
+          },
+          {
+            get: (f) =>
+              ({
+                moduleId: 'm-reembolso',
+                status: 'REFUNDED',
+                accessUntil: future,
+              })[f],
+          },
+        ],
+      },
+    };
+    const where = jest.fn();
+    const db = {
+      collection: jest.fn((name: string) => ({
+        where: (...args: unknown[]) => {
+          where(name, ...args);
+          return { get: () => Promise.resolve(snapshots[name]) };
+        },
+      })),
+    };
+
+    const locked = await new CurriculumRepository(
+      db as any,
+    ).findStoreLockedModules('A1');
+
+    expect(where).toHaveBeenCalledWith('storeProducts', 'level', '==', 'A1');
+    expect(where).toHaveBeenCalledWith('storePurchases', 'level', '==', 'A1');
+    expect([...locked].sort()).toEqual(['m-produto', 'm-valida']);
+  });
+});
