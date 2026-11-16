@@ -84,6 +84,17 @@ describe('StorageService (upload direto — spec 027)', () => {
     expect(bucket.handle.download).not.toHaveBeenCalled();
   });
 
+  it('lê um trecho do objeto, com início e fim inclusivos (spec 032)', async () => {
+    const data = await service.readRange('video-lessons/v1/m.pdf', 0, 99);
+    expect(bucket.handle.download).toHaveBeenCalledWith({ start: 0, end: 99 });
+    expect(data?.toString()).toBe('jpeg');
+  });
+
+  it('trecho de objeto inexistente devolve null', async () => {
+    bucket.handle.download.mockRejectedValue({ code: 404 });
+    expect(await service.readRange('x', 0, 1)).toBeNull();
+  });
+
   it('remoção por prefixo não propaga falha', async () => {
     bucket.deleteFiles.mockRejectedValue(new Error('boom'));
     await expect(service.removePrefix('video-lessons/v1/')).resolves.toBe(

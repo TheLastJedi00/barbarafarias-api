@@ -1,8 +1,11 @@
 import {
   BadRequestException,
   ConflictException,
+  ForbiddenException,
+  NotFoundException,
   ServiceUnavailableException,
 } from '@nestjs/common';
+import { PAYMENT_PENDING_MESSAGE } from '../guards/active-plan.guard';
 import { VideoLessonService } from './video-lesson.service';
 import { VideoLesson } from './video-lesson.model';
 
@@ -68,6 +71,7 @@ function setup() {
     signedReadUrl: jest.fn().mockResolvedValue('https://signed-read'),
     remove: jest.fn().mockResolvedValue(undefined),
     removePrefix: jest.fn().mockResolvedValue(undefined),
+    readRange: jest.fn().mockResolvedValue(Buffer.from('%PDF')),
   };
   const mux = {
     isAvailable: jest.fn().mockReturnValue(true),
@@ -86,14 +90,27 @@ function setup() {
       ),
   };
   const users = { findById: jest.fn().mockResolvedValue({ level: 'A1' }) };
+  // Quem decide o acesso é a loja (spec 032); aqui, o aluno do nível em dia.
+  const access = {
+    resolve: jest.fn().mockResolvedValue({ mode: 'full' }),
+  };
   const service = new VideoLessonService(
     repository as any,
     curriculumService as any,
     storage as any,
     mux as any,
     users as any,
+    access as any,
   );
-  return { service, repository, curriculumService, storage, mux, users };
+  return {
+    service,
+    repository,
+    curriculumService,
+    storage,
+    mux,
+    users,
+    access,
+  };
 }
 
 const createDto = {
@@ -201,13 +218,25 @@ describe('VideoLessonService — leitura (spec 027)', () => {
   });
 
   describe('quem vê o quê', () => {
-    it('aluno de outro nível recebe 404', async () => {
-      const { service, repository, users } = setup();
+    it('aluno sem acesso ao módulo recebe 404', async () => {
+      const { service, repository, access } = setup();
       repository.findById.mockResolvedValue(ready());
-      users.findById.mockResolvedValue({ level: 'B1' });
+      access.resolve.mockResolvedValue(null);
 
       await expect(service.getPlayback('v1', student)).rejects.toThrow(
         'Vídeo aula não encontrada',
+      );
+      // O módulo vem da árvore do currículo: a aula guarda só o tópico.
+      expect(access.resolve).toHaveBeenCalledWith(student, 'A1', 'm1');
+    });
+
+    it('aluno do plano em atraso recebe o 403 de pagamento pendente', async () => {
+      const { service, repository, access } = setup();
+      repository.findById.mockResolvedValue(ready());
+      access.resolve.mockResolvedValue({ mode: 'payment-pending' });
+
+      await expect(service.getDetail('v1', student)).rejects.toThrow(
+        PAYMENT_PENDING_MESSAGE,
       );
     });
 
@@ -281,6 +310,155 @@ describe('VideoLessonService — leitura (spec 027)', () => {
       await expect(
         service.getMaterialDownload('v1', 'm1', student),
       ).rejects.toThrow('Material não encontrado');
+    });
+  });
+
+  describe('comprador da loja (spec 032)', () => {
+    const material = (
+      id: string,
+      mimeType: string,
+      size = 3 * 1024 * 1024,
+    ) => ({
+      id,
+      fileName: `${id}.bin`,
+      storagePath: `video-lessons/v1/materials/${id}`,
+      mimeType,
+      size,
+      status: 'ready' as const,
+      uploadedAt: '',
+    });
+    const withMaterials = () =>
+      ready({
+        materials: [
+          material('pdf', 'application/pdf'),
+          material('audio', 'audio/mpeg'),
+          material(
+            'docx',
+            'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+          ),
+        ],
+      });
+    const comLoja = (setupResult: ReturnType<typeof setup>) =>
+      setupResult.access.resolve.mockResolvedValue({
+        mode: 'store',
+        purchaseId: 'c1',
+        accessUntil: '2027-02-14T00:00:00.000Z',
+      });
+
+    it('vê só os PDFs de apoio', async () => {
+      const s = setup();
+      s.repository.findById.mockResolvedValue(withMaterials());
+      comLoja(s);
+
+      const detail = await s.service.getDetail('v1', student);
+      expect(detail.lesson.materials.map((m) => m.id)).toEqual(['pdf']);
+    });
+
+    it('assinante continua vendo todos os materiais', async () => {
+      const s = setup();
+      s.repository.findById.mockResolvedValue(withMaterials());
+
+      const detail = await s.service.getDetail('v1', student);
+      expect(detail.lesson.materials).toHaveLength(3);
+    });
+
+    it('não baixa: só lê', async () => {
+      const s = setup();
+      s.repository.findById.mockResolvedValue(withMaterials());
+      comLoja(s);
+
+      await expect(
+        s.service.getMaterialDownload('v1', 'pdf', student),
+      ).rejects.toBeInstanceOf(ForbiddenException);
+      expect(s.storage.signedReadUrl).not.toHaveBeenCalled();
+    });
+
+    it('assiste ao vídeo', async () => {
+      const s = setup();
+      s.repository.findById.mockResolvedValue(ready());
+      comLoja(s);
+      expect((await s.service.getPlayback('v1', student)).playbackId).toBe(
+        'pb',
+      );
+    });
+
+    it('lê o PDF pela API, em trechos de até 1 MiB', async () => {
+      const s = setup();
+      s.repository.findById.mockResolvedValue(withMaterials());
+      comLoja(s);
+
+      expect(await s.service.getMaterialReadInfo('v1', 'pdf', student)).toEqual(
+        {
+          fileName: 'pdf.bin',
+          size: 3 * 1024 * 1024,
+          mimeType: 'application/pdf',
+        },
+      );
+
+      const data = await s.service.readMaterialRange(
+        'v1',
+        'pdf',
+        student,
+        0,
+        1024 * 1024 - 1,
+      );
+      expect(data.toString()).toBe('%PDF');
+      expect(s.storage.readRange).toHaveBeenCalledWith(
+        'video-lessons/v1/materials/pdf',
+        0,
+        1024 * 1024 - 1,
+      );
+    });
+
+    it.each([
+      ['maior que 1 MiB', 0, 1024 * 1024],
+      ['fim antes do início', 10, 5],
+      ['além do fim do arquivo', 0, 3 * 1024 * 1024],
+      ['negativo', -1, 10],
+    ])('recusa trecho %s', async (_label, start, end) => {
+      const s = setup();
+      s.repository.findById.mockResolvedValue(withMaterials());
+      await expect(
+        s.service.readMaterialRange('v1', 'pdf', student, start, end),
+      ).rejects.toBeInstanceOf(BadRequestException);
+    });
+
+    it('só PDF abre no leitor', async () => {
+      const s = setup();
+      s.repository.findById.mockResolvedValue(withMaterials());
+      await expect(
+        s.service.getMaterialReadInfo('v1', 'audio', student),
+      ).rejects.toBeInstanceOf(NotFoundException);
+    });
+
+    it('árvore de um módulo só, com a validade da compra', async () => {
+      const s = setup();
+      s.repository.findByLevel.mockResolvedValue([
+        withMaterials(),
+        lesson({ id: 'up', status: 'processing' }),
+      ]);
+      comLoja(s);
+
+      const tree = await s.service.getModuleTree('A1', 'm1', student);
+      expect(s.access.resolve).toHaveBeenCalledWith(student, 'A1', 'm1');
+      expect(tree.access).toEqual({
+        mode: 'store',
+        accessUntil: '2027-02-14T00:00:00.000Z',
+      });
+      expect(tree.module.id).toBe('m1');
+      // Tópico sem aula pronta some; o PDF é o único material.
+      expect(tree.module.topics.map((t) => t.id)).toEqual(['t1']);
+      expect(
+        tree.module.topics[0].lessons[0].materials.map((m) => m.id),
+      ).toEqual(['pdf']);
+    });
+
+    it('árvore de módulo sem acesso é 404', async () => {
+      const s = setup();
+      s.access.resolve.mockResolvedValue(null);
+      await expect(
+        s.service.getModuleTree('A1', 'm1', student),
+      ).rejects.toBeInstanceOf(NotFoundException);
     });
   });
 

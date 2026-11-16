@@ -158,6 +158,25 @@ export class StorageService {
     return url;
   }
 
+  /**
+   * Um trecho do objeto, `start` e `end` inclusivos (spec 032). É como o leitor
+   * de PDF do comprador recebe o arquivo: pela API, em pedaços, sem URL do
+   * bucket no navegador e sem depender do CORS dele (fix 031).
+   */
+  async readRange(
+    path: string,
+    start: number,
+    end: number,
+  ): Promise<Buffer | null> {
+    try {
+      const [data] = await this.bucket().file(path).download({ start, end });
+      return data;
+    } catch (error) {
+      if ((error as { code?: number }).code === 404) return null;
+      throw error;
+    }
+  }
+
   /** Best-effort, como o `remove`: apaga tudo sob um prefixo. */
   async removePrefix(prefix: string): Promise<void> {
     try {
