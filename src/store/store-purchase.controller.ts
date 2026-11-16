@@ -61,6 +61,21 @@ export class StorePurchaseController {
     return this.service.withdraw(user, id);
   }
 
+  /** Material para baixar: os arquivos da compra, enquanto ela vale. */
+  @Get(':id/files')
+  listFiles(@CurrentUser() user: AuthenticatedUser, @Param('id') id: string) {
+    return this.service.listFiles(user, id);
+  }
+
+  @Get(':id/files/:fileId/download')
+  downloadFile(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') id: string,
+    @Param('fileId') fileId: string,
+  ) {
+    return this.service.downloadFile(user, id, fileId);
+  }
+
   /** **Só com `DEV_MODE=true`**: simula a confirmação do pagamento. */
   @Post(':id/mock-pay')
   @HttpCode(200)

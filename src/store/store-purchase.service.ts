@@ -33,6 +33,7 @@ import {
 import { hasPaidAccess } from '../users/paid-access';
 import type { User } from '../users/user.entity';
 import { UserRepository } from '../users/user.repository';
+import { StorageService } from '../uploads/storage.service';
 import {
   CreateStorePurchaseDto,
   PayStorePurchaseCardDto,
@@ -40,6 +41,7 @@ import {
 } from './dto/store-purchase.dto';
 import {
   STORE_ACCESS_DAYS,
+  STORE_FILE_STATUS,
   STORE_PRODUCT_KIND,
   StoreProduct,
 } from './store-product.model';
@@ -53,6 +55,9 @@ import {
 } from './store-purchase.model';
 import { StoreProductRepository } from './store-product.repository';
 import { StorePurchaseRepository } from './store-purchase.repository';
+
+/** Validade do link de download de um arquivo comprado. */
+const FILE_DOWNLOAD_TTL_MS = 15 * 60 * 1000;
 
 /** Tipo do termo de compra no Painel Jurídico (spec 029/032). */
 export const STORE_TERMS_TYPE = 'store-purchase';
@@ -123,6 +128,7 @@ export class StorePurchaseService {
     private readonly card: CardGateway,
     private readonly config: ConfigService,
     private readonly notifications: NotificationService,
+    private readonly storage: StorageService,
   ) {}
 
   // ---------------------------------------------------------------- compra
@@ -553,6 +559,64 @@ export class StorePurchaseService {
         },
       };
     });
+  }
+
+  // ------------------------------------------------- material para baixar
+
+  /** Os arquivos de um produto `download` que a pessoa comprou e ainda vale. */
+  async listFiles(
+    requester: AuthenticatedUser,
+    purchaseId: string,
+  ): Promise<
+    { id: string; fileName: string; mimeType: string; size: number }[]
+  > {
+    const { product } = await this.activeDownload(requester, purchaseId);
+    return product.files
+      .filter((f) => f.status === STORE_FILE_STATUS.READY)
+      .map((f) => ({
+        id: f.id,
+        fileName: f.fileName,
+        mimeType: f.mimeType,
+        size: f.size,
+      }));
+  }
+
+  /** Link de 15 min com o nome original. Aqui baixar é o que foi comprado. */
+  async downloadFile(
+    requester: AuthenticatedUser,
+    purchaseId: string,
+    fileId: string,
+  ): Promise<{ url: string }> {
+    const { product } = await this.activeDownload(requester, purchaseId);
+    const file = product.files.find(
+      (f) => f.id === fileId && f.status === STORE_FILE_STATUS.READY,
+    );
+    if (!file) throw new NotFoundException('Arquivo não encontrado.');
+    return {
+      url: await this.storage.signedReadUrl(
+        file.storagePath,
+        FILE_DOWNLOAD_TTL_MS,
+        file.fileName,
+      ),
+    };
+  }
+
+  private async activeDownload(
+    requester: AuthenticatedUser,
+    purchaseId: string,
+  ): Promise<{ purchase: StorePurchase; product: StoreProduct }> {
+    const purchase = await this.requireOwn(requester.sub, purchaseId);
+    if (purchase.kind !== STORE_PRODUCT_KIND.DOWNLOAD) {
+      throw new NotFoundException('Compra não encontrada.');
+    }
+    if (!isPurchaseActive(purchase)) {
+      throw new ForbiddenException(
+        'O acesso a esta compra terminou ou foi encerrado.',
+      );
+    }
+    const product = await this.products.findById(purchase.productId);
+    if (!product) throw new NotFoundException('Produto não encontrado.');
+    return { purchase, product };
   }
 
   /** Simulação local do pagamento. Só com `DEV_MODE=true`. */

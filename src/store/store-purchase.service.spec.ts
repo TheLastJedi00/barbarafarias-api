@@ -108,6 +108,9 @@ function setup(env: Record<string, string> = {}) {
     storePurchasePaid: jest.fn().mockResolvedValue(undefined),
     storePurchaseRefunded: jest.fn().mockResolvedValue(undefined),
   };
+  const storage = {
+    signedReadUrl: jest.fn().mockResolvedValue('https://signed'),
+  };
   const service = new StorePurchaseService(
     products as any,
     purchases as any,
@@ -117,6 +120,7 @@ function setup(env: Record<string, string> = {}) {
     gateway as any,
     config as any,
     notifications as any,
+    storage as any,
   );
   const lastSaved = (): StorePurchase =>
     purchases.save.mock.calls.at(-1)![0] as StorePurchase;
@@ -128,6 +132,7 @@ function setup(env: Record<string, string> = {}) {
     legal,
     gateway,
     notifications,
+    storage,
     lastSaved,
   };
 }
@@ -529,6 +534,98 @@ describe('StorePurchaseService (spec 032 §7)', () => {
       expect(canWithdraw({ status: 'PAID', paidAt: ago(6) })).toBe(true);
       expect(canWithdraw({ status: 'PAID', paidAt: ago(8) })).toBe(false);
       expect(canWithdraw({ status: 'REFUNDED', paidAt: ago(1) })).toBe(false);
+    });
+  });
+
+  describe('material para baixar', () => {
+    const file = (id: string, status: 'ready' | 'uploading') => ({
+      id,
+      fileName: `Apostila ${id}.pdf`,
+      storagePath: `store-products/p2/files/${id}.pdf`,
+      mimeType: 'application/pdf',
+      size: 10,
+      status,
+      uploadedAt: '',
+    });
+    const download = () =>
+      product({
+        id: 'p2',
+        kind: 'download',
+        level: undefined,
+        moduleId: undefined,
+        files: [file('f1', 'ready'), file('f2', 'uploading')],
+      });
+    const compra = (overrides: Partial<StorePurchase> = {}) =>
+      purchase({
+        productId: 'p2',
+        kind: 'download',
+        level: undefined,
+        moduleId: undefined,
+        status: 'PAID',
+        paidAt: ago(1),
+        accessUntil: ahead(89),
+        ...overrides,
+      });
+
+    it('lista só os arquivos prontos, sem caminho', async () => {
+      const { service, purchases, products } = setup();
+      purchases.findById.mockResolvedValue(compra());
+      products.findById.mockResolvedValue(download());
+      const files = await service.listFiles(requester, 'c1');
+      expect(files).toEqual([
+        {
+          id: 'f1',
+          fileName: 'Apostila f1.pdf',
+          mimeType: 'application/pdf',
+          size: 10,
+        },
+      ]);
+    });
+
+    it('baixa com link de 15 min e o nome original', async () => {
+      const { service, purchases, products, storage } = setup();
+      purchases.findById.mockResolvedValue(compra());
+      products.findById.mockResolvedValue(download());
+      expect(await service.downloadFile(requester, 'c1', 'f1')).toEqual({
+        url: 'https://signed',
+      });
+      expect(storage.signedReadUrl).toHaveBeenCalledWith(
+        'store-products/p2/files/f1.pdf',
+        15 * 60 * 1000,
+        'Apostila f1.pdf',
+      );
+    });
+
+    it('vencida ou reembolsada não baixa', async () => {
+      const { service, purchases, products } = setup();
+      products.findById.mockResolvedValue(download());
+      purchases.findById.mockResolvedValue(compra({ accessUntil: ago(1) }));
+      await expect(
+        service.downloadFile(requester, 'c1', 'f1'),
+      ).rejects.toBeInstanceOf(ForbiddenException);
+      purchases.findById.mockResolvedValue(compra({ status: 'REFUNDED' }));
+      await expect(
+        service.downloadFile(requester, 'c1', 'f1'),
+      ).rejects.toBeInstanceOf(ForbiddenException);
+    });
+
+    it('compra de módulo não tem arquivo para baixar', async () => {
+      const { service, purchases } = setup();
+      purchases.findById.mockResolvedValue(
+        purchase({ status: 'PAID', paidAt: ago(1), accessUntil: ahead(89) }),
+      );
+      await expect(service.listFiles(requester, 'c1')).rejects.toBeInstanceOf(
+        NotFoundException,
+      );
+    });
+
+    it('arquivo ainda subindo é 404', async () => {
+      const { service, purchases, products } = setup();
+      purchases.findById.mockResolvedValue(compra());
+      products.findById.mockResolvedValue(download());
+      await expect(
+        service.downloadFile(requester, 'c1', 'f2'),
+      ).rejects.toBeInstanceOf(NotFoundException);
     });
   });
 
