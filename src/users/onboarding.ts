@@ -1,4 +1,4 @@
-import { User } from './user.entity';
+import { USER_TIER, User } from './user.entity';
 import { ROLES, resolveRole } from '../types/role';
 
 /**
@@ -23,6 +23,17 @@ import { ROLES, resolveRole } from '../types/role';
  * mesma regra e não deveria importar o serviço de usuários inteiro para isso.
  */
 export function missingOnboardingFields(user: User): string[] {
+  // Comprador da loja (spec 032): entra pelo cadastro público com nome e
+  // celular. O CPF é pedido no checkout, que é quando o gateway o exige, e o
+  // objetivo é do material do plano — cobrá-los aqui o prenderia na tela de
+  // boas-vindas do convite, que nem é a porta por onde ele entrou.
+  if (user.tier === USER_TIER.MODULES && resolveRole(user) === ROLES.STUDENT) {
+    return [
+      ...(user.fullName ? [] : ['nome']),
+      ...(user.phone ? [] : ['celular']),
+    ];
+  }
+
   const comuns = [
     ...(user.fullName ? [] : ['nome']),
     ...(user.phone ? [] : ['celular']),
