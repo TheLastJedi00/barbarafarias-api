@@ -1,4 +1,12 @@
-import { Body, Controller, Get, HttpCode, Param, Post } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Delete,
+  Get,
+  HttpCode,
+  Param,
+  Post,
+} from '@nestjs/common';
 import { Roles } from '../decorators/roles.decorator';
 import {
   CurrentUser,
@@ -58,5 +66,19 @@ export class StoreAdminSupplyController {
   @Get()
   list() {
     return this.service.listExpired();
+  }
+
+  /** Apaga todos os liberados (30 dias depois do fim). */
+  @Post('purge-eligible')
+  @HttpCode(200)
+  purgeEligible() {
+    return this.service.purgeEligible();
+  }
+
+  /** Apaga um. 409 antes dos 30 dias ou se o acesso voltou a valer. */
+  @Delete(':id')
+  @HttpCode(204)
+  async remove(@Param('id') id: string): Promise<void> {
+    await this.service.deleteExpired(id);
   }
 }

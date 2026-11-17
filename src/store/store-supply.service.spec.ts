@@ -502,6 +502,58 @@ describe('StoreSupplyService (spec 033)', () => {
       ]);
     });
 
+    it('apaga o liberado: cabeçalho e conteúdo', async () => {
+      const { service, repo } = await expiredSetup('2026-10-01T00:00:00.000Z');
+
+      await service.deleteExpired('u1_p1');
+
+      expect(repo.headers.size).toBe(0);
+      expect(repo.contents.size).toBe(0);
+    });
+
+    it('antes dos 30 dias, 409 com a data de liberação', async () => {
+      const { service, repo } = await expiredSetup('2026-11-10T00:00:00.000Z');
+
+      await expect(service.deleteExpired('u1_p1')).rejects.toMatchObject({
+        status: 409,
+        response: { deletableAt: '2026-12-10T00:00:00.000Z' },
+      });
+      expect(repo.headers.size).toBe(1);
+    });
+
+    it('acesso que voltou a valer (renovação) não é apagado', async () => {
+      const { service, purchases } = await expiredSetup(
+        '2026-10-01T00:00:00.000Z',
+      );
+      purchases.findByUser.mockResolvedValue([
+        { ...purchase, accessUntil: '2026-10-01T00:00:00.000Z' },
+        { ...purchase, id: 'c2' },
+      ]);
+
+      await expect(service.deleteExpired('u1_p1')).rejects.toBeInstanceOf(
+        ConflictException,
+      );
+    });
+
+    it('material inexistente, 404', async () => {
+      await expect(setup().service.deleteExpired('x')).rejects.toBeInstanceOf(
+        NotFoundException,
+      );
+    });
+
+    it('apagar todos os liberados pula os que ainda não podem', async () => {
+      const { service, repo } = await expiredSetup('2026-10-01T00:00:00.000Z');
+      repo.headers.set('u2_p1', {
+        ...repo.headers.get('u1_p1')!,
+        id: 'u2_p1',
+        userId: 'u2',
+      });
+
+      // u2 não tem compra: cai na data do próprio material (hoje), não liberado.
+      expect(await service.purgeEligible()).toEqual({ deleted: 1 });
+      expect([...repo.headers.keys()]).toEqual(['u2_p1']);
+    });
+
     it('material de compra valendo não aparece', async () => {
       const { service } = setup();
       await service.start('u1', 'c1');

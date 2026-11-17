@@ -416,6 +416,50 @@ export class StoreSupplyService {
       );
   }
 
+  /**
+   * Apaga um material vencido: cabeçalho e todas as gerações. Só depois de 30
+   * dias do fim — é a janela em que a renovação ainda o reaproveita — e nunca
+   * se a pessoa voltou a ter acesso. A situação é recalculada aqui, e não
+   * lida da lista: entre abrir a tela e clicar, a pessoa pode ter renovado.
+   */
+  async deleteExpired(id: string): Promise<void> {
+    const supply = await this.supplies.findById(id);
+    if (!supply) throw new NotFoundException('Material não encontrado.');
+
+    const purchases = (await this.purchases.findByUser(supply.userId)).filter(
+      (p) => p.productId === supply.productId,
+    );
+    const state = supplyEndState(purchases, this.clock(), supply.updatedAt);
+    if (state.active) {
+      throw new ConflictException(
+        'Este acesso voltou a valer (renovação). O material não pode ser apagado.',
+      );
+    }
+    if (!state.deletable) {
+      throw new ConflictException({
+        message: `Este material só pode ser apagado a partir de ${formatDay(state.deletableAt)}.`,
+        deletableAt: state.deletableAt,
+      });
+    }
+    await this.supplies.delete(id);
+  }
+
+  /** "Apagar todos os liberados": cada um passa de novo pela trava. */
+  async purgeEligible(): Promise<{ deleted: number }> {
+    const eligible = (await this.listExpired()).filter((row) => row.deletable);
+    let deleted = 0;
+    for (const row of eligible) {
+      try {
+        await this.deleteExpired(row.id);
+        deleted++;
+      } catch (error) {
+        // Renovou no meio do caminho: fica, e os outros seguem.
+        if (!(error instanceof ConflictException)) throw error;
+      }
+    }
+    return { deleted };
+  }
+
   // ------------------------------------------------------------- internos
 
   /** Chama o Gemini para uma etapa, com as respostas copiadas na abertura. */
@@ -588,4 +632,11 @@ function pendingView(
     stuck: isPendingStuck(pending),
     steps: pending.order.map((id) => ({ id, ...pending.steps[id] })),
   };
+}
+
+/** DD/MM/AAAA no fuso da escola. */
+function formatDay(iso: string): string {
+  return new Date(iso).toLocaleDateString('pt-BR', {
+    timeZone: 'America/Sao_Paulo',
+  });
 }
