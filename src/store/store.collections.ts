@@ -5,3 +5,6 @@
  */
 export const STORE_PRODUCTS_COLLECTION = 'storeProducts';
 export const STORE_PURCHASES_COLLECTION = 'storePurchases';
+/** Material personalizado da loja (spec 033): cabeçalho e conteúdo. */
+export const STORE_SUPPLIES_COLLECTION = 'storeSupplies';
+export const STORE_SUPPLY_MODULES_COLLECTION = 'storeSupplyModules';
