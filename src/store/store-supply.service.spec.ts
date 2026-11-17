@@ -9,6 +9,7 @@ import { StoreSupplyService } from './store-supply.service';
 import type { StorePurchase } from './store-purchase.model';
 import type { StoreSupply, StoreSupplyContent } from './store-supply.model';
 import { User } from '../users/user.entity';
+import { isPendingStuck } from './store-supply.rules';
 
 const H = 60 * 60 * 1000;
 const NOW = new Date('2026-11-17T10:00:00.000Z');
@@ -236,6 +237,88 @@ describe('StoreSupplyService (spec 033)', () => {
       curriculum.toBlueprint.mockReturnValue({ level: 'A1', modules: [] });
       await expect(service.start('u1', 'c1')).rejects.toBeInstanceOf(
         UnprocessableEntityException,
+      );
+    });
+  });
+
+  describe('step', () => {
+    it('gera a intro com o questionário e guarda no servidor', async () => {
+      const { service, repo, gemini } = setup();
+      await service.start('u1', 'c1');
+
+      const result = await service.step('u1', 'c1', 'intro');
+
+      expect(result).toEqual({
+        stepId: 'intro',
+        status: 'done',
+        content: 'Intro do Bruno',
+      });
+      const prompt = gemini.generateJson.mock.calls[0][0];
+      expect(prompt).toContain('Área de trabalho: Saúde');
+      expect(prompt).toContain('Persona');
+      expect(repo.contents.get('u1_p1_1')!.steps.intro).toBe('Intro do Bruno');
+      expect(repo.headers.get('u1_p1')!.pending!.steps.intro).toEqual({
+        title: 'Introdução',
+        status: 'done',
+        attempts: 1,
+      });
+    });
+
+    it('etapa pronta devolve o que já tem, sem chamar o Gemini', async () => {
+      const { service, gemini } = setup();
+      await service.start('u1', 'c1');
+      await service.step('u1', 'c1', 't1');
+
+      const again = await service.step('u1', 'c1', 't1');
+
+      expect(again.content).toEqual(topic('Reuniões'));
+      expect(gemini.generateJson).toHaveBeenCalledTimes(1);
+    });
+
+    it('falha marca a etapa e devolve 502; refazer não gasta geração', async () => {
+      const { service, repo, gemini } = setup();
+      await service.start('u1', 'c1');
+      gemini.generateJson.mockRejectedValueOnce(new Error('timeout'));
+
+      await expect(service.step('u1', 'c1', 't1')).rejects.toMatchObject({
+        status: 502,
+      });
+      expect(repo.headers.get('u1_p1')!.pending!.steps.t1).toMatchObject({
+        status: 'failed',
+        attempts: 1,
+      });
+
+      await service.step('u1', 'c1', 't1');
+      expect(repo.headers.get('u1_p1')!.chances.used).toBe(1);
+    });
+
+    it('a quarta tentativa é recusada com a orientação de suporte', async () => {
+      const { service, gemini, repo } = setup();
+      await service.start('u1', 'c1');
+      gemini.generateJson.mockRejectedValue(new Error('timeout'));
+      for (let i = 0; i < 3; i++) {
+        await expect(service.step('u1', 'c1', 't1')).rejects.toBeInstanceOf(
+          HttpException,
+        );
+      }
+      gemini.generateJson.mockClear();
+
+      await expect(service.step('u1', 'c1', 't1')).rejects.toMatchObject({
+        status: 429,
+      });
+      expect(gemini.generateJson).not.toHaveBeenCalled();
+      // Travada: a próxima abertura troca esta geração por uma nova.
+      expect(isPendingStuck(repo.headers.get('u1_p1')!.pending!)).toBe(true);
+    });
+
+    it('sem geração aberta, 409; etapa desconhecida, 404', async () => {
+      const { service } = setup();
+      await expect(service.step('u1', 'c1', 't1')).rejects.toBeInstanceOf(
+        ConflictException,
+      );
+      await service.start('u1', 'c1');
+      await expect(service.step('u1', 'c1', 'tx')).rejects.toBeInstanceOf(
+        NotFoundException,
       );
     });
   });

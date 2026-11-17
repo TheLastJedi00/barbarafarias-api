@@ -1,9 +1,13 @@
 import {
+  BadGatewayException,
   BadRequestException,
   ConflictException,
   ForbiddenException,
+  HttpException,
+  HttpStatus,
   Inject,
   Injectable,
+  Logger,
   NotFoundException,
   Optional,
   UnprocessableEntityException,
@@ -13,8 +17,18 @@ import {
   type Blueprint,
 } from '../curriculum/curriculum.service';
 import { GeminiProvider } from '../supply/gemini/gemini.service';
-import { composeBasePrompt } from '../supply/prompts';
-import type { Module } from '../types/student.supply';
+import {
+  buildModuleIntrosPrompt,
+  buildTopicPrompt,
+  composeBasePrompt,
+  storeStudentInfo,
+} from '../supply/prompts';
+import {
+  ModuleIntrosSchema,
+  TopicSchema,
+  type Module,
+  type Topic,
+} from '../types/student.supply';
 import { UserRepository } from '../users/user.repository';
 import type { User } from '../users/user.entity';
 import { STORE_PRODUCT_KIND } from './store-product.model';
@@ -22,6 +36,7 @@ import { StorePurchase, isPurchaseActive } from './store-purchase.model';
 import { StorePurchaseRepository } from './store-purchase.repository';
 import {
   INTRO_STEP,
+  STORE_MAX_STEP_ATTEMPTS,
   StoreSupply,
   StoreSupplyPending,
   StoreSupplyStep,
@@ -30,6 +45,9 @@ import {
 } from './store-supply.model';
 import { StoreSupplyRepository } from './store-supply.repository';
 import { StoreChances, chancesFor, isPendingStuck } from './store-supply.rules';
+
+export const STEP_SUPPORT_MESSAGE =
+  'Não conseguimos gerar esta parte do material. Fale com o suporte pelo WhatsApp.';
 
 export const EXPIRED_MATERIAL_MESSAGE =
   'Este acesso venceu. Renove o módulo para voltar ao material.';
@@ -55,6 +73,13 @@ export interface StoreMaterialView {
   } | null;
 }
 
+export interface StoreStepResult {
+  stepId: string;
+  status: 'done';
+  /** Intro: texto. Tópico: o tópico inteiro. */
+  content: string | Topic;
+}
+
 /** Relógio injetável: a regra das 6 h só se testa com o tempo na mão. */
 export type Clock = () => Date;
 export const STORE_CLOCK = 'STORE_CLOCK';
@@ -70,6 +95,8 @@ export const STORE_CLOCK = 'STORE_CLOCK';
  */
 @Injectable()
 export class StoreSupplyService {
+  private readonly logger = new Logger(StoreSupplyService.name);
+
   constructor(
     private readonly supplies: StoreSupplyRepository,
     private readonly purchases: StorePurchaseRepository,
@@ -168,7 +195,167 @@ export class StoreSupplyService {
     return this.view(purchase, user, supply);
   }
 
+  /**
+   * Gera uma etapa (`intro` ou o id de um tópico) da geração em andamento.
+   *
+   * Idempotente: etapa pronta devolve o que já foi gerado. A tentativa é
+   * contada **antes** de chamar o Gemini, numa transação — duas abas não passam
+   * juntas do teto. Falhar não gasta geração; passar de 3 tentativas manda ao
+   * suporte.
+   */
+  async step(
+    userId: string,
+    purchaseId: string,
+    stepId: string,
+  ): Promise<StoreStepResult> {
+    const purchase = await this.requireActive(userId, purchaseId);
+    const id = storeSupplyId(userId, purchase.productId);
+    const supply = await this.supplies.findById(id);
+    const pending = this.requirePending(supply, purchase);
+    const step = pending.steps[stepId];
+    if (!step) throw new NotFoundException('Etapa não encontrada.');
+
+    if (step.status === 'done') {
+      const content = await this.supplies.findContent(id, pending.number);
+      const saved = content?.steps[stepId];
+      if (saved !== undefined)
+        return { stepId, status: 'done', content: saved };
+    }
+
+    await this.updateStep(id, pending.number, stepId, (current) => {
+      if (current.status === 'done') return current;
+      if (current.attempts >= STORE_MAX_STEP_ATTEMPTS) {
+        throw new HttpException(
+          { message: STEP_SUPPORT_MESSAGE, support: true },
+          HttpStatus.TOO_MANY_REQUESTS,
+        );
+      }
+      return { ...current, attempts: current.attempts + 1 };
+    });
+
+    let content: string | Topic;
+    try {
+      content = await this.generate(purchase, userId, pending, stepId);
+    } catch (error) {
+      this.logger.error(
+        `Falha ao gerar a etapa ${stepId} de ${id}`,
+        error instanceof Error ? error.stack : String(error),
+      );
+      const failed = await this.updateStep(
+        id,
+        pending.number,
+        stepId,
+        (current) =>
+          current.status === 'done'
+            ? current
+            : { ...current, status: 'failed' },
+      );
+      const left = STORE_MAX_STEP_ATTEMPTS - (failed?.attempts ?? 0);
+      throw new BadGatewayException({
+        message:
+          left > 0
+            ? 'Não foi possível gerar esta parte agora. Tente de novo.'
+            : STEP_SUPPORT_MESSAGE,
+        attemptsLeft: Math.max(left, 0),
+      });
+    }
+
+    await this.supplies.saveStepContent(id, pending.number, stepId, content);
+    await this.updateStep(id, pending.number, stepId, (current) => ({
+      ...current,
+      status: 'done',
+    }));
+    return { stepId, status: 'done', content };
+  }
+
   // ------------------------------------------------------------- internos
+
+  /** Chama o Gemini para uma etapa, com as respostas copiadas na abertura. */
+  private async generate(
+    purchase: StorePurchase,
+    userId: string,
+    pending: StoreSupplyPending,
+    stepId: string,
+  ): Promise<string | Topic> {
+    const [user, loaded] = await Promise.all([
+      this.requireUser(userId),
+      this.loadModule(purchase).catch(() => null),
+    ]);
+    const student = storeStudentInfo(
+      user.fullName ?? '',
+      pending.careerProfile,
+    );
+    const basePrompt = loaded?.basePrompt ?? '';
+    const context = loaded?.module.context ?? '';
+
+    if (stepId === INTRO_STEP) {
+      const module = loaded?.module ?? {
+        id: purchase.moduleId!,
+        title: pending.moduleTitle,
+        context: '',
+        topics: [],
+      };
+      const intros = await this.genAi.generateJson(
+        buildModuleIntrosPrompt(basePrompt, student, {
+          level: purchase.level!,
+          modules: [module],
+        }),
+        ModuleIntrosSchema,
+      );
+      return intros[0] ?? '';
+    }
+
+    // O título é o da abertura: o currículo pode ter mudado no meio.
+    return this.genAi.generateJson(
+      buildTopicPrompt(
+        basePrompt,
+        student,
+        pending.moduleTitle,
+        pending.steps[stepId].title,
+        context,
+      ),
+      TopicSchema,
+    );
+  }
+
+  /** Atualiza uma etapa da geração `number`, se ela ainda for a aberta. */
+  private updateStep(
+    id: string,
+    number: number,
+    stepId: string,
+    change: (step: StoreSupplyStep) => StoreSupplyStep,
+  ): Promise<StoreSupplyStep | null> {
+    return this.supplies.transact(id, (current) => {
+      const step = current?.pending?.steps[stepId];
+      if (!current?.pending || current.pending.number !== number || !step) {
+        return { result: null };
+      }
+      const next = change(step);
+      if (next === step) return { result: step };
+      return {
+        write: {
+          ...current,
+          pending: {
+            ...current.pending,
+            steps: { ...current.pending.steps, [stepId]: next },
+          },
+          updatedAt: this.clock().toISOString(),
+        },
+        result: next,
+      };
+    });
+  }
+
+  private requirePending(
+    supply: StoreSupply | null,
+    purchase: StorePurchase,
+  ): StoreSupplyPending {
+    const pending = supply?.pending;
+    if (!pending || pending.purchaseId !== purchase.id) {
+      throw new ConflictException('Nenhuma geração em andamento.');
+    }
+    return pending;
+  }
 
   private async view(
     purchase: StorePurchase,
