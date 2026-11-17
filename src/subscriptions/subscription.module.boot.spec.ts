@@ -32,7 +32,12 @@ describe('SubscriptionModule — fiação', () => {
   it('entrega o mesmo Mercado Pago nas duas portas', async () => {
     const moduleRef = await Test.createTestingModule({
       imports: [
-        ConfigModule.forRoot({ ignoreEnvFile: true }),
+        ConfigModule.forRoot({
+          ignoreEnvFile: true,
+          // A loja (importada) gera material com o Gemini, que exige a chave
+          // para subir — como o app inteiro desde a spec 020 (spec 033).
+          load: [() => ({ GEMINI_API_KEY: 'teste' })],
+        }),
         FakeFirestoreModule,
         SubscriptionModule,
       ],
@@ -51,7 +56,12 @@ describe('SubscriptionModule — fiação', () => {
   it('sobe sem chave nenhuma, com o gateway desligado', async () => {
     const moduleRef = await Test.createTestingModule({
       imports: [
-        ConfigModule.forRoot({ ignoreEnvFile: true }),
+        ConfigModule.forRoot({
+          ignoreEnvFile: true,
+          // A loja (importada) gera material com o Gemini, que exige a chave
+          // para subir — como o app inteiro desde a spec 020 (spec 033).
+          load: [() => ({ GEMINI_API_KEY: 'teste' })],
+        }),
         FakeFirestoreModule,
         SubscriptionModule,
       ],
