@@ -379,7 +379,18 @@ export class UserService {
     if (!foundUser) {
       throw new NotFoundException('User not found');
     }
-    const patch = pickDefined(dto);
+    const { careerProfile, ...rest } = dto;
+    const patch: Partial<User> = pickDefined(rest);
+    if (careerProfile) {
+      // Objeto plano: a instância do DTO não passaria pelo `instanceToPlain`
+      // com o carimbo da data.
+      patch.careerProfile = {
+        workArea: careerProfile.workArea,
+        careerStage: careerProfile.careerStage,
+        englishContact: careerProfile.englishContact,
+        answeredAt: new Date().toISOString(),
+      };
+    }
     const user = new User({ ...foundUser, ...patch, id });
     const concluido = onboardingCompletedAt(user);
     if (concluido) {

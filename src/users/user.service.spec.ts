@@ -229,6 +229,27 @@ describe('UserService', () => {
       expect(gravado.fullName).toBe('Ana');
     });
 
+    it('o PATCH /users/me também edita, carimbando a data', async () => {
+      userRepository.findById.mockResolvedValue(
+        new User({
+          id: 'uid-1',
+          role: ROLES.STUDENT,
+          careerProfile: { ...respostas, answeredAt: '2026-01-01T00:00:00Z' },
+        }),
+      );
+
+      const user = await service.updateOwnProfile('uid-1', {
+        careerProfile: { ...respostas, workArea: 'direito' },
+      } as any);
+
+      expect(user.careerProfile).toEqual({
+        ...respostas,
+        workArea: 'direito',
+        answeredAt: expect.any(String),
+      });
+      expect(user.careerProfile!.answeredAt).not.toMatch(/^2026-01-01/);
+    });
+
     it('404 para quem não existe', async () => {
       userRepository.findById.mockResolvedValue(null);
       await expect(
