@@ -29,7 +29,11 @@ import {
   TopicSchema,
   type Topic,
 } from '../types/student.supply';
-import { buildModuleIntrosPrompt, buildTopicPrompt } from './prompts';
+import {
+  buildModuleIntrosPrompt,
+  buildTopicPrompt,
+  composeBasePrompt,
+} from './prompts';
 
 @Injectable()
 export class SupplyService {
@@ -78,10 +82,7 @@ export class SupplyService {
       );
     }
 
-    const basePrompt = [principal.prompt, curriculum.prompt]
-      .map((part) => part.trim())
-      .filter(Boolean)
-      .join('\n\n');
+    const basePrompt = composeBasePrompt(principal.prompt, curriculum.prompt);
 
     const studentInfo: StudentInfo = {
       firstName: student.fullName.split(' ')[0],
@@ -121,7 +122,11 @@ export class SupplyService {
         );
       }
 
-      const prompt = buildModuleIntrosPrompt(basePrompt, studentInfo, blueprint);
+      const prompt = buildModuleIntrosPrompt(
+        basePrompt,
+        studentInfo,
+        blueprint,
+      );
       const intros = await this.genAi.generateJson(prompt, ModuleIntrosSchema);
 
       const modules: SkeletonModuleWithId[] = blueprint.modules.map(
