@@ -45,7 +45,13 @@ import {
   storeSupplyId,
 } from './store-supply.model';
 import { StoreSupplyRepository } from './store-supply.repository';
-import { StoreChances, chancesFor, isPendingStuck } from './store-supply.rules';
+import {
+  StoreChances,
+  SupplyEndReason,
+  chancesFor,
+  isPendingStuck,
+  supplyEndState,
+} from './store-supply.rules';
 
 export const STEP_SUPPORT_MESSAGE =
   'Não conseguimos gerar esta parte do material. Fale com o suporte pelo WhatsApp.';
@@ -79,6 +85,20 @@ export interface StoreStepResult {
   status: 'done';
   /** Intro: texto. Tópico: o tópico inteiro. */
   content: string | Topic;
+}
+
+/** Linha de "Acessos vencidos" no painel da gerente. */
+export interface StoreExpiredSupplyView {
+  id: string;
+  userId: string;
+  userName: string;
+  productId: string;
+  title: string;
+  level: string;
+  reason: SupplyEndReason;
+  endedAt: string;
+  deletableAt: string;
+  deletable: boolean;
 }
 
 /** Relógio injetável: a regra das 6 h só se testa com o tempo na mão. */
@@ -338,6 +358,62 @@ export class StoreSupplyService {
       supply!.current?.generation,
     );
     return this.view(purchase, user, next);
+  }
+
+  // --------------------------------------------------------------- gerente
+
+  /**
+   * Material de quem não tem mais compra valendo (spec 033 §0.2). Liberados
+   * para apagar primeiro; depois, quem venceu antes.
+   *
+   * Lê as duas coleções inteiras: a loja é pequena, e uma consulta por
+   * material seria uma ida ao banco por linha.
+   */
+  async listExpired(): Promise<StoreExpiredSupplyView[]> {
+    const [supplies, purchases] = await Promise.all([
+      this.supplies.findAll(),
+      this.purchases.findAll(),
+    ]);
+    const now = this.clock();
+    const rows = supplies.flatMap((supply) => {
+      const own = purchases
+        .filter(
+          (p) => p.userId === supply.userId && p.productId === supply.productId,
+        )
+        .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+      const state = supplyEndState(own, now, supply.updatedAt);
+      return state.active
+        ? []
+        : [{ supply, state, title: own[0]?.titleSnapshot }];
+    });
+
+    const names = new Map(
+      await Promise.all(
+        [...new Set(rows.map((r) => r.supply.userId))].map(
+          async (id) =>
+            [id, (await this.users.findById(id))?.fullName ?? ''] as const,
+        ),
+      ),
+    );
+
+    return rows
+      .map(({ supply, state, title }) => ({
+        id: supply.id,
+        userId: supply.userId,
+        userName: names.get(supply.userId) ?? '',
+        productId: supply.productId,
+        title: title ?? '',
+        level: supply.level,
+        reason: state.reason,
+        endedAt: state.endedAt,
+        deletableAt: state.deletableAt,
+        deletable: state.deletable,
+      }))
+      .sort(
+        (a, b) =>
+          Number(b.deletable) - Number(a.deletable) ||
+          a.endedAt.localeCompare(b.endedAt),
+      );
   }
 
   // ------------------------------------------------------------- internos

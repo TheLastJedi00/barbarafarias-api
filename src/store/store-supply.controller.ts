@@ -48,3 +48,15 @@ export class StoreSupplyController {
     return this.service.finish(user.sub, id);
   }
 }
+
+/** "Acessos vencidos" da gerente (spec 033): material guardado e bloqueado. */
+@Controller('store/admin/expired-supplies')
+@Roles(ROLES.MANAGER)
+export class StoreAdminSupplyController {
+  constructor(private readonly service: StoreSupplyService) {}
+
+  @Get()
+  list() {
+    return this.service.listExpired();
+  }
+}

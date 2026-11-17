@@ -106,6 +106,15 @@ function memoryRepo() {
     deleteContent: jest.fn(async (id: string, n: number) => {
       contents.delete(key(id, n));
     }),
+    findAll: jest.fn(async () =>
+      [...headers.values()].map((h) => structuredClone(h)),
+    ),
+    delete: jest.fn(async (id: string) => {
+      headers.delete(id);
+      for (const k of [...contents.keys()]) {
+        if (k.startsWith(`${id}_`)) contents.delete(k);
+      }
+    }),
   };
 }
 
@@ -117,6 +126,8 @@ function setup(
     findById: jest.fn(async (id: string) =>
       id === 'c1' ? { ...purchase, ...opts.purchase } : null,
     ),
+    findAll: jest.fn(async () => [{ ...purchase, ...opts.purchase }]),
+    findByUser: jest.fn(async () => [{ ...purchase, ...opts.purchase }]),
   };
   const users = {
     findById: jest.fn(
@@ -454,6 +465,47 @@ describe('StoreSupplyService (spec 033)', () => {
       await expect(service.step('u1', 'c1', 'tx')).rejects.toBeInstanceOf(
         NotFoundException,
       );
+    });
+  });
+
+  describe('acessos vencidos (gerente)', () => {
+    /** Material pronto da compra c1, que depois vence. */
+    async function expiredSetup(accessUntil: string) {
+      const ctx = setup();
+      await ctx.service.start('u1', 'c1');
+      for (const step of ['intro', 't1', 't2']) {
+        await ctx.service.step('u1', 'c1', step);
+      }
+      await ctx.service.finish('u1', 'c1');
+      const expired = { ...purchase, accessUntil };
+      ctx.purchases.findAll.mockResolvedValue([expired]);
+      ctx.purchases.findByUser.mockResolvedValue([expired]);
+      return ctx;
+    }
+
+    it('lista quem venceu, com o motivo e quando pode apagar', async () => {
+      const { service } = await expiredSetup('2026-10-01T00:00:00.000Z');
+
+      expect(await service.listExpired()).toEqual([
+        {
+          id: 'u1_p1',
+          userId: 'u1',
+          userName: 'Bruno Lima',
+          productId: 'p1',
+          title: 'Trabalho',
+          level: 'A1',
+          reason: 'expired',
+          endedAt: '2026-10-01T00:00:00.000Z',
+          deletableAt: '2026-10-31T00:00:00.000Z',
+          deletable: true,
+        },
+      ]);
+    });
+
+    it('material de compra valendo não aparece', async () => {
+      const { service } = setup();
+      await service.start('u1', 'c1');
+      expect(await service.listExpired()).toEqual([]);
     });
   });
 });
