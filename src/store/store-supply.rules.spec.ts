@@ -1,4 +1,8 @@
-import { chancesFor, isPendingStuck } from './store-supply.rules';
+import {
+  chancesFor,
+  isPendingStuck,
+  supplyEndState,
+} from './store-supply.rules';
 import type { StoreSupply, StoreSupplyPending } from './store-supply.model';
 
 const H = 60 * 60 * 1000;
@@ -83,5 +87,87 @@ describe('isPendingStuck', () => {
         pending({ t1: { title: 'T1', status: 'failed', attempts: 2 } }),
       ),
     ).toBe(false);
+  });
+});
+
+describe('supplyEndState (spec 033)', () => {
+  const base = {
+    id: 'c1',
+    userId: 'u1',
+    productId: 'p1',
+    kind: 'module' as const,
+    titleSnapshot: 'M',
+    priceSnapshot: 97,
+    installments: 1,
+    method: 'PIX' as const,
+    gateway: {},
+    termsVersion: 'v1',
+    createdAt: '2026-08-01T00:00:00.000Z',
+    updatedAt: '2026-08-01T00:00:00.000Z',
+  };
+  const now = new Date('2026-11-17T00:00:00.000Z');
+
+  it('compra valendo: ativo, sem data de fim', () => {
+    expect(
+      supplyEndState(
+        [{ ...base, status: 'PAID', accessUntil: '2026-12-01T00:00:00.000Z' }],
+        now,
+      ),
+    ).toEqual({ active: true });
+  });
+
+  it('vencida: fim no accessUntil e exclusão liberada 30 dias depois', () => {
+    expect(
+      supplyEndState(
+        [{ ...base, status: 'PAID', accessUntil: '2026-11-01T00:00:00.000Z' }],
+        now,
+      ),
+    ).toEqual({
+      active: false,
+      reason: 'expired',
+      endedAt: '2026-11-01T00:00:00.000Z',
+      deletableAt: '2026-12-01T00:00:00.000Z',
+      deletable: false,
+    });
+  });
+
+  it('reembolso conta da data do estorno; a compra mais recente manda', () => {
+    const state = supplyEndState(
+      [
+        { ...base, status: 'PAID', accessUntil: '2026-09-01T00:00:00.000Z' },
+        {
+          ...base,
+          id: 'c2',
+          status: 'REFUNDED',
+          accessUntil: '2027-01-01T00:00:00.000Z',
+          refund: { by: 'buyer', at: '2026-10-01T00:00:00.000Z' },
+        },
+        { ...base, id: 'c3', status: 'CANCELLED' },
+      ],
+      now,
+    );
+    expect(state).toMatchObject({
+      reason: 'refunded',
+      endedAt: '2026-10-01T00:00:00.000Z',
+      deletable: true,
+    });
+  });
+
+  it('contestação conta da última atualização da compra', () => {
+    expect(
+      supplyEndState(
+        [
+          {
+            ...base,
+            status: 'CHARGED_BACK',
+            updatedAt: '2026-11-10T00:00:00.000Z',
+          },
+        ],
+        now,
+      ),
+    ).toMatchObject({
+      reason: 'charged_back',
+      endedAt: '2026-11-10T00:00:00.000Z',
+    });
   });
 });
