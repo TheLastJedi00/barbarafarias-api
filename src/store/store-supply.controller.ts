@@ -34,4 +34,11 @@ export class StoreSupplyController {
   ) {
     return this.service.step(user.sub, id, dto.stepId);
   }
+
+  /** Fecha a geração e troca o material vigente. */
+  @Post(':id/generation/finish')
+  @HttpCode(200)
+  finish(@CurrentUser() user: AuthenticatedUser, @Param('id') id: string) {
+    return this.service.finish(user.sub, id);
+  }
 }

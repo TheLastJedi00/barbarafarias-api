@@ -25,6 +25,7 @@ import {
 } from '../supply/prompts';
 import {
   ModuleIntrosSchema,
+  ModuleSchema,
   TopicSchema,
   type Module,
   type Topic,
@@ -266,6 +267,60 @@ export class StoreSupplyService {
       status: 'done',
     }));
     return { stepId, status: 'done', content };
+  }
+
+  /**
+   * Fecha a geração: confere as etapas, monta o módulo na ordem do currículo
+   * e o torna o material vigente. Até aqui o anterior continuou visível; a
+   * troca e a exclusão dele vão num lote só.
+   */
+  async finish(userId: string, purchaseId: string): Promise<StoreMaterialView> {
+    const purchase = await this.requireActive(userId, purchaseId);
+    const user = await this.requireUser(userId);
+    const id = storeSupplyId(userId, purchase.productId);
+    const supply = await this.supplies.findById(id);
+    const pending = this.requirePending(supply, purchase);
+
+    const content = await this.supplies.findContent(id, pending.number);
+    const missing = pending.order.filter(
+      (stepId) =>
+        pending.steps[stepId]?.status !== 'done' ||
+        content?.steps[stepId] === undefined,
+    );
+    if (missing.length > 0) {
+      throw new ConflictException({
+        message: 'Material incompleto: faltam etapas.',
+        missing,
+      });
+    }
+
+    const parsed = ModuleSchema.safeParse({
+      title: pending.moduleTitle,
+      text: content!.steps[INTRO_STEP],
+      topics: pending.order
+        .filter((stepId) => stepId !== INTRO_STEP)
+        .map((stepId) => content!.steps[stepId]),
+    });
+    if (!parsed.success) {
+      throw new UnprocessableEntityException(
+        'O material gerado veio num formato inesperado. Fale com o suporte.',
+      );
+    }
+
+    const at = this.clock().toISOString();
+    const next: StoreSupply = {
+      ...supply!,
+      current: { generation: pending.number, finishedAt: at },
+      updatedAt: at,
+    };
+    delete next.pending;
+    await this.supplies.finish(
+      next,
+      pending.number,
+      parsed.data,
+      supply!.current?.generation,
+    );
+    return this.view(purchase, user, next);
   }
 
   // ------------------------------------------------------------- internos

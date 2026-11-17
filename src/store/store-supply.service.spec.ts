@@ -241,6 +241,64 @@ describe('StoreSupplyService (spec 033)', () => {
     });
   });
 
+  describe('finish', () => {
+    async function generateAll(service: StoreSupplyService) {
+      await service.start('u1', 'c1');
+      for (const step of ['intro', 't1', 't2']) {
+        await service.step('u1', 'c1', step);
+      }
+    }
+
+    it('monta o módulo na ordem do currículo e o torna o vigente', async () => {
+      const { service, repo } = setup();
+      await generateAll(service);
+
+      const view = await service.finish('u1', 'c1');
+
+      expect(view.material).toEqual({
+        title: 'Trabalho',
+        text: 'Intro do Bruno',
+        topics: [topic('Reuniões'), topic('E-mails')],
+      });
+      expect(view.generatedAt).toBe(NOW.toISOString());
+      expect(view.pending).toBeNull();
+      expect(repo.headers.get('u1_p1')!.current).toEqual({
+        generation: 1,
+        finishedAt: NOW.toISOString(),
+      });
+    });
+
+    it('com etapa faltando, 409 com a lista', async () => {
+      const { service } = setup();
+      await service.start('u1', 'c1');
+      await service.step('u1', 'c1', 'intro');
+
+      await expect(service.finish('u1', 'c1')).rejects.toMatchObject({
+        response: { missing: ['t1', 't2'] },
+      });
+    });
+
+    it('a geração nova só substitui a antiga quando termina', async () => {
+      const { service, repo, advance } = setup();
+      await generateAll(service);
+      await service.finish('u1', 'c1');
+      advance(6 * 60 * 60 * 1000);
+
+      const meio = await service.start('u1', 'c1');
+      expect(meio.material!.text).toBe('Intro do Bruno');
+      expect(meio.chances.used).toBe(2);
+
+      for (const step of ['intro', 't1', 't2']) {
+        await service.step('u1', 'c1', step);
+      }
+      await service.finish('u1', 'c1');
+
+      expect(repo.headers.get('u1_p1')!.current!.generation).toBe(2);
+      expect(repo.contents.has('u1_p1_1')).toBe(false);
+      expect(repo.contents.has('u1_p1_2')).toBe(true);
+    });
+  });
+
   describe('step', () => {
     it('gera a intro com o questionário e guarda no servidor', async () => {
       const { service, repo, gemini } = setup();
