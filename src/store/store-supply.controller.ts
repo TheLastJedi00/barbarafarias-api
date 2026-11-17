@@ -1,4 +1,4 @@
-import { Body, Controller, HttpCode, Param, Post } from '@nestjs/common';
+import { Body, Controller, Get, HttpCode, Param, Post } from '@nestjs/common';
 import { Roles } from '../decorators/roles.decorator';
 import {
   CurrentUser,
@@ -16,6 +16,12 @@ import { StoreSupplyService } from './store-supply.service';
 @Roles(ROLES.STUDENT)
 export class StoreSupplyController {
   constructor(private readonly service: StoreSupplyService) {}
+
+  /** Material vigente + geração em andamento + chances. */
+  @Get(':id/material')
+  material(@CurrentUser() user: AuthenticatedUser, @Param('id') id: string) {
+    return this.service.material(user.sub, id);
+  }
 
   /** Abre (ou retoma) uma geração. Gasta uma chance só quando abre. */
   @Post(':id/generation/start')

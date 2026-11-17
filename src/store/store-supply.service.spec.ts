@@ -241,6 +241,29 @@ describe('StoreSupplyService (spec 033)', () => {
     });
   });
 
+  describe('material', () => {
+    it('antes de gerar: sem material, com a primeira chance livre', async () => {
+      const { service } = setup({ user: { careerProfile: undefined } });
+
+      expect(await service.material('u1', 'c1')).toEqual({
+        purchaseId: 'c1',
+        careerProfileAnswered: false,
+        material: null,
+        chances: { used: 0, max: 3, canGenerate: true },
+        pending: null,
+      });
+    });
+
+    it('vencida a compra, o material fica inacessível (403)', async () => {
+      const { service } = setup({
+        purchase: { status: 'REFUNDED' },
+      });
+      await expect(service.material('u1', 'c1')).rejects.toBeInstanceOf(
+        ForbiddenException,
+      );
+    });
+  });
+
   describe('finish', () => {
     async function generateAll(service: StoreSupplyService) {
       await service.start('u1', 'c1');

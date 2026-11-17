@@ -110,6 +110,23 @@ export class StoreSupplyService {
   ) {}
 
   /**
+   * Material vigente, geração em andamento e chances. Passa pela mesma regra
+   * de acesso da compra (spec 032): vencida, reembolsada ou contestada, 403 —
+   * o material continua guardado até a gerente apagá-lo.
+   */
+  async material(
+    userId: string,
+    purchaseId: string,
+  ): Promise<StoreMaterialView> {
+    const purchase = await this.requireActive(userId, purchaseId);
+    const [user, supply] = await Promise.all([
+      this.requireUser(userId),
+      this.supplies.findById(storeSupplyId(userId, purchase.productId)),
+    ]);
+    return this.view(purchase, user, supply);
+  }
+
+  /**
    * Abre uma geração, gastando uma chance. Se já há uma em andamento desta
    * compra, devolve ela (a aba fechou e voltou); só a travada — etapa sem
    * tentativa — é trocada por uma nova.
