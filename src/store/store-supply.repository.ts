@@ -107,6 +107,11 @@ export class StoreSupplyRepository {
     await batch.commit();
   }
 
+  /** Conteúdo de uma geração abandonada (travada e trocada por outra). */
+  async deleteContent(id: string, generation: number): Promise<void> {
+    await this.contents().doc(storeSupplyContentId(id, generation)).delete();
+  }
+
   /** Apaga o material inteiro: cabeçalho e todas as gerações. */
   async delete(id: string): Promise<void> {
     const snapshot = await this.contents().where('supplyId', '==', id).get();
