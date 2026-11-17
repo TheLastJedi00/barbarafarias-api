@@ -23,7 +23,10 @@ describe('StoreModule — fiação', () => {
   it('sobe sem dependência faltando', async () => {
     const moduleRef = await Test.createTestingModule({
       imports: [
-        ConfigModule.forRoot({ ignoreEnvFile: true }),
+        ConfigModule.forRoot({
+          ignoreEnvFile: true,
+          load: [() => ({ GEMINI_API_KEY: 'teste' })],
+        }),
         FakeFirestoreModule,
         StoreModule,
       ],

@@ -19,6 +19,10 @@ import { StoreContentRepository } from './store-content.repository';
 import { StoreSignupController } from './store-signup.controller';
 import { StoreSignupService } from './store-signup.service';
 import { StoreOnboardingController } from './store-onboarding.controller';
+import { StoreSupplyController } from './store-supply.controller';
+import { StoreSupplyService } from './store-supply.service';
+import { StoreSupplyRepository } from './store-supply.repository';
+import { GeminiProvider } from '../supply/gemini/gemini.service';
 import {
   StoreAdminPurchaseController,
   StorePurchaseController,
@@ -56,6 +60,7 @@ import { StorePurchaseRepository } from './store-purchase.repository';
     StoreOnboardingController,
     StorePurchaseController,
     StoreAdminPurchaseController,
+    StoreSupplyController,
   ],
   providers: [
     StoreAdminService,
@@ -66,6 +71,10 @@ import { StorePurchaseRepository } from './store-purchase.repository';
     ModuleAccessService,
     StoreProductRepository,
     StorePurchaseRepository,
+    StoreSupplyService,
+    StoreSupplyRepository,
+    // Instância própria, como na Campanha: o SupplyModule não a exporta.
+    GeminiProvider,
   ],
   exports: [
     StoreProductRepository,
