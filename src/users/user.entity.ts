@@ -3,6 +3,7 @@ import type {
   SubscriptionPlan,
   SubscriptionStatus,
 } from '../subscriptions/subscription.entity';
+import type { CareerProfile } from './career-profile';
 
 /** Slot recorrente (dia da semana + hora), usado como reposição pré-combinada. */
 export interface WeeklySlot {
@@ -72,6 +73,12 @@ export class User {
    * um plano depois: o que libera o painel do plano é o `isPaying`, não isto.
    */
   tier?: UserTier;
+  /**
+   * Respostas do questionário da loja (spec 033): área de trabalho, etapa na
+   * carreira e contato com o inglês. Ausente = ainda não respondeu. Reaproveitado
+   * nas compras seguintes e editável pelo próprio aluno.
+   */
+  careerProfile?: CareerProfile;
   /**
    * Quando o aluno terminou o onboarding (spec 018 Task 102). **Ausente = foi
    * convidado e ainda não completou o cadastro** — é o que o guard do front lê
