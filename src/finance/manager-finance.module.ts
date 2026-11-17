@@ -11,6 +11,7 @@ import { RevenueGoalRepository } from './revenue-goal.repository';
 import { BillingModule } from '../billing/billing.module';
 import { SubscriptionModule } from '../subscriptions/subscription.module';
 import { ManualPaymentModule } from '../manual-payments/manual-payment.module';
+import { StoreModule } from '../store/store.module';
 
 /**
  * Dono do prefixo `/finance` inteiro (spec 012 RF6–RF12, RF15).
@@ -30,7 +31,13 @@ import { ManualPaymentModule } from '../manual-payments/manual-payment.module';
  * a cadeia que gerou o ciclo.
  */
 @Module({
-  imports: [BillingModule, SubscriptionModule, ManualPaymentModule],
+  imports: [
+    BillingModule,
+    SubscriptionModule,
+    ManualPaymentModule,
+    // Vendas da loja entram na receita (spec 032).
+    StoreModule,
+  ],
   controllers: [ManagerFinanceController, FinanceController],
   providers: [
     ManagerFinanceService,

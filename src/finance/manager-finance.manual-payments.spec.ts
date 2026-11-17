@@ -77,6 +77,7 @@ function build(subscriptions: Subscription[], manual: ManualPayment[]) {
         manual.filter((item) => item.month.startsWith(String(year))),
       ),
     } as any,
+    { findAll: jest.fn().mockResolvedValue([]) } as any,
   );
   return service;
 }

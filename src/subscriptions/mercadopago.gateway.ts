@@ -565,6 +565,32 @@ export class MercadoPagoGateway extends CardGateway implements PixGateway {
     }
   }
 
+  /**
+   * Reembolso **total** (spec 032): `POST /v1/orders/{id}/refund` sem
+   * `transactions` no corpo — é a ausência do nó que a Orders API lê como
+   * "devolva tudo". O parcial exigiria o id de cada transação, e a loja não o
+   * oferece.
+   *
+   * O prazo do lado do Mercado Pago é de até 180 dias depois da aprovação; o
+   * nosso (7 dias para o comprador) é regra de negócio e mora no service.
+   */
+  async refundOrder(
+    orderId: string,
+    reference: string,
+  ): Promise<{ status?: string; status_detail?: string }> {
+    try {
+      const order = await this.require().orders.refund({
+        id: orderId,
+        requestOptions: {
+          idempotencyKey: idempotencyKeyFor(`refund|${reference}`),
+        },
+      });
+      return { status: order.status, status_detail: order.status_detail };
+    } catch (error) {
+      this.rethrow(error, `Reembolso da order ${orderId}`);
+    }
+  }
+
   /** Traduz a order para o desfecho que a regra de negócio entende. */
   protected resultOfOrder(order: OrderResponse): CheckoutResult {
     const payment = order.transactions?.payments?.[0];

@@ -32,6 +32,7 @@ const FOLDER_ROLES: Record<UploadFolder, Role[]> = {
   avatars: ALL_ROLES,
   articles: ALL_ROLES,
   artworks: [ROLES.MANAGER],
+  store: [ROLES.MANAGER],
 };
 const FOLDERS = Object.keys(FOLDER_ROLES) as UploadFolder[];
 

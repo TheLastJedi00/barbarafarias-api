@@ -1,6 +1,7 @@
 import {
   BadRequestException,
   ConflictException,
+  ForbiddenException,
   Injectable,
   Logger,
   NotFoundException,
@@ -13,6 +14,12 @@ import { UserRepository } from '../users/user.repository';
 import type { AuthenticatedUser } from '../decorators/current-user.decorator';
 import { LEVELS, Level } from '../types/student.level';
 import { ROLES } from '../types/role';
+import { PAYMENT_PENDING_MESSAGE } from '../guards/active-plan.guard';
+import {
+  ModuleAccessService,
+  type ModuleAccess,
+} from '../store/module-access.service';
+import { STORE_READABLE_MIME } from '../store/store-content.repository';
 import {
   MuxAssetState,
   MuxGateway,
@@ -59,6 +66,26 @@ export interface MaterialView {
 const DOWNLOAD_URL_TTL_MS = 15 * 60 * 1000;
 
 /**
+ * Maior trecho de PDF por pedido de leitura (spec 032). Folgado para o leitor
+ * pedir poucas vezes, e bem abaixo do teto de resposta da Vercel (~4,5 MB).
+ */
+export const MAX_READ_CHUNK_BYTES = 1024 * 1024;
+
+/** Quem tem o módulo pela loja lê, não baixa (spec 032 decisão 2). */
+export const READ_ONLY_MESSAGE =
+  'Este material está disponível só para leitura.';
+
+/** Acesso que não é o de pagamento pendente: o que de fato libera algo. */
+type GrantedAccess = Exclude<ModuleAccess, { mode: 'payment-pending' }>;
+
+/** Árvore de um módulo só, para quem o tem (spec 032). */
+export interface ModuleLessonTree {
+  level: Level;
+  module: VideoLessonTree<StudentLessonView>['modules'][number];
+  access: { mode: 'full' | 'store'; accessUntil?: string };
+}
+
+/**
  * O que o aluno recebe de uma aula: só o que está pronto, sem nome do arquivo
  * original, status ou motivo de erro.
  */
@@ -88,6 +115,11 @@ export interface VideoLessonTree<L> {
 /** Detalhe de uma aula, com a vizinhança dentro do tópico. */
 export interface VideoLessonDetail<L> {
   lesson: L;
+  /**
+   * `store`: quem vê entrou pela loja (spec 032) — só PDFs, só leitura. A tela
+   * troca o "baixar" pelo leitor.
+   */
+  access: 'full' | 'store';
   module: { id: string; title: string };
   topic: { id: string; title: string };
   previousId: string | null;
@@ -126,6 +158,7 @@ export class VideoLessonService {
     private readonly storage: StorageService,
     private readonly mux: MuxGateway,
     private readonly users: UserRepository,
+    private readonly access: ModuleAccessService,
   ) {}
 
   /**
@@ -310,7 +343,7 @@ export class VideoLessonService {
 
     const lessons = (await this.repository.findByLevel(level)).filter(isReady);
     const tree = await this.buildTree(level, lessons, (l) =>
-      this.toStudentView(l),
+      this.toStudentView(l, { mode: 'full' }),
     );
     return {
       level,
@@ -341,7 +374,7 @@ export class VideoLessonService {
     id: string,
     user: AuthenticatedUser,
   ): Promise<VideoLessonDetail<StudentLessonView | VideoLessonView>> {
-    const lesson = await this.getVisible(id, user);
+    const { lesson, access } = await this.getVisible(id, user);
     const student = user.role === ROLES.STUDENT;
 
     const curriculum = await this.curriculum.getLevel(lesson.level);
@@ -356,7 +389,10 @@ export class VideoLessonService {
     const index = siblings.findIndex((l) => l.id === lesson.id);
 
     return {
-      lesson: student ? await this.toStudentView(lesson) : toView(lesson),
+      lesson: student
+        ? await this.toStudentView(lesson, access)
+        : toView(lesson),
+      access: access.mode === 'store' ? 'store' : 'full',
       module: { id: module?.id ?? '', title: module?.title ?? '' },
       topic: { id: topic?.id ?? lesson.topicId, title: topic?.title ?? '' },
       previousId: index > 0 ? siblings[index - 1].id : null,
@@ -372,7 +408,7 @@ export class VideoLessonService {
     id: string,
     user: AuthenticatedUser,
   ): Promise<{ playbackId: string; tokens: PlaybackTokens }> {
-    const lesson = await this.getVisible(id, user);
+    const { lesson } = await this.getVisible(id, user);
     const playbackId = lesson.mux?.playbackId;
     if (!isReady(lesson) || !playbackId) {
       throw new ConflictException('O vídeo ainda está em processamento.');
@@ -386,7 +422,9 @@ export class VideoLessonService {
     materialId: string,
     user: AuthenticatedUser,
   ): Promise<{ url: string }> {
-    const lesson = await this.getVisible(id, user);
+    const { lesson, access } = await this.getVisible(id, user);
+    if (access.mode === 'store')
+      throw new ForbiddenException(READ_ONLY_MESSAGE);
     const material = this.findMaterial(lesson, materialId);
     if (material.status !== MATERIAL_STATUS.READY) {
       throw new NotFoundException('Material não encontrado.');
@@ -408,15 +446,129 @@ export class VideoLessonService {
   private async getVisible(
     id: string,
     user: AuthenticatedUser,
-  ): Promise<VideoLesson> {
+  ): Promise<{ lesson: VideoLesson; access: GrantedAccess }> {
     const lesson = await this.getOrThrow(id);
-    if (user.role !== ROLES.STUDENT) return lesson;
-
-    const level = await this.studentLevel(user);
-    if (!isReady(lesson) || lesson.level !== level) {
+    if (user.role !== ROLES.STUDENT) {
+      return { lesson, access: { mode: 'full' } };
+    }
+    if (!isReady(lesson)) {
       throw new NotFoundException('Vídeo aula não encontrada.');
     }
-    return lesson;
+
+    // O módulo sai da árvore do currículo: a aula guarda o tópico (spec 027).
+    const curriculum = await this.curriculum.getLevel(lesson.level);
+    const module = curriculum.modules.find((m) =>
+      m.topics.some((t) => t.id === lesson.topicId),
+    );
+    const access = module
+      ? await this.access.resolve(user, lesson.level, module.id)
+      : null;
+    return { lesson, access: this.granted(access) };
+  }
+
+  /**
+   * Traduz o acesso em resposta. O aluno do plano em atraso recebe o 403 com a
+   * mensagem que o front reconhece — o mesmo que o `ActivePlanGuard` dava
+   * antes destas rotas passarem a aceitar o comprador da loja (spec 032).
+   * Quem não tem acesso nenhum recebe 404, que não confirma que a aula existe.
+   */
+  private granted(access: ModuleAccess | null): GrantedAccess {
+    if (access?.mode === 'payment-pending') {
+      throw new ForbiddenException(PAYMENT_PENDING_MESSAGE);
+    }
+    if (!access) throw new NotFoundException('Vídeo aula não encontrada.');
+    return access;
+  }
+
+  /**
+   * Um módulo só, para quem o tem (spec 032): o comprador da loja, mas também
+   * o assinante do nível e a equipe. Só aulas prontas, e só PDFs para quem
+   * entrou pela loja.
+   */
+  async getModuleTree(
+    level: Level,
+    moduleId: string,
+    user: AuthenticatedUser,
+  ): Promise<ModuleLessonTree> {
+    const access = this.granted(
+      await this.access.resolve(user, level, moduleId),
+    );
+    const lessons = (await this.repository.findByLevel(level)).filter(isReady);
+    const tree = await this.buildTree(level, lessons, (l) =>
+      this.toStudentView(l, access),
+    );
+    const module = tree.modules.find((m) => m.id === moduleId);
+    if (!module) throw new NotFoundException('Módulo não encontrado.');
+    return {
+      level,
+      module: {
+        ...module,
+        topics: module.topics.filter((t) => t.lessons.length),
+      },
+      access:
+        access.mode === 'store'
+          ? { mode: 'store', accessUntil: access.accessUntil }
+          : { mode: 'full' },
+    };
+  }
+
+  /** Para o leitor de PDF: nome e tamanho, sem caminho nem URL. */
+  async getMaterialReadInfo(
+    id: string,
+    materialId: string,
+    user: AuthenticatedUser,
+  ): Promise<{ fileName: string; size: number; mimeType: string }> {
+    const material = await this.readableMaterial(id, materialId, user);
+    return {
+      fileName: material.fileName,
+      size: material.size,
+      mimeType: material.mimeType,
+    };
+  }
+
+  /**
+   * Um trecho do PDF (`start`/`end` inclusivos), servido pela API (spec 032).
+   * O leitor pede só as páginas que mostra; o arquivo inteiro nunca vira um
+   * link que se copia e cola.
+   */
+  async readMaterialRange(
+    id: string,
+    materialId: string,
+    user: AuthenticatedUser,
+    start: number,
+    end: number,
+  ): Promise<Buffer> {
+    const material = await this.readableMaterial(id, materialId, user);
+    if (
+      !Number.isInteger(start) ||
+      !Number.isInteger(end) ||
+      start < 0 ||
+      end < start ||
+      end >= material.size ||
+      end - start + 1 > MAX_READ_CHUNK_BYTES
+    ) {
+      throw new BadRequestException('Trecho inválido.');
+    }
+    const data = await this.storage.readRange(material.storagePath, start, end);
+    if (!data) throw new NotFoundException('Material não encontrado.');
+    return data;
+  }
+
+  /** Só PDF pronto, e só para quem vê a aula. */
+  private async readableMaterial(
+    id: string,
+    materialId: string,
+    user: AuthenticatedUser,
+  ): Promise<VideoLessonMaterial> {
+    const { lesson } = await this.getVisible(id, user);
+    const material = this.findMaterial(lesson, materialId);
+    if (
+      material.status !== MATERIAL_STATUS.READY ||
+      material.mimeType !== STORE_READABLE_MIME
+    ) {
+      throw new NotFoundException('Material não encontrado.');
+    }
+    return material;
   }
 
   private async studentLevel(user: AuthenticatedUser): Promise<Level | null> {
@@ -458,7 +610,15 @@ export class VideoLessonService {
     return { level, modules };
   }
 
-  private async toStudentView(lesson: VideoLesson): Promise<StudentLessonView> {
+  /**
+   * A visão do aluno. Quem entrou pela loja vê **só os PDFs** de apoio: os
+   * outros tipos não abrem no navegador, e baixar não é o que ele comprou
+   * (spec 032 decisão 10).
+   */
+  private async toStudentView(
+    lesson: VideoLesson,
+    access: GrantedAccess,
+  ): Promise<StudentLessonView> {
     return {
       id: lesson.id,
       level: lesson.level,
@@ -475,6 +635,9 @@ export class VideoLessonService {
       ...(await this.thumbnail(lesson)),
       materials: lesson.materials
         .filter((m) => m.status === MATERIAL_STATUS.READY)
+        .filter(
+          (m) => access.mode !== 'store' || m.mimeType === STORE_READABLE_MIME,
+        )
         .map(toMaterialView),
     };
   }

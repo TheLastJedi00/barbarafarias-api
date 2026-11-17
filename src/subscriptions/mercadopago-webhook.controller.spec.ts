@@ -20,12 +20,16 @@ function build() {
       order: { status: 'processed', status_detail: 'accredited' },
     }),
   };
+  // Por padrão a order não é da loja: segue para a assinatura.
+  const store = { handleOrderEvent: jest.fn().mockResolvedValue(false) };
   return {
     service,
     gateway,
+    store,
     controller: new MercadoPagoWebhookController(
       service as any,
       gateway as any,
+      store as any,
     ),
   };
 }
@@ -140,5 +144,59 @@ describe('MercadoPagoWebhookController', () => {
     await expect(
       controller.handle(NOTIFICACAO, 'ts=1,v1=abc', 'req-1', 'ORD01ABC'),
     ).rejects.toThrow('firestore');
+  });
+
+  describe('roteamento da order entre loja e assinatura (spec 032)', () => {
+    it('order da loja fica na loja e não chega à assinatura', async () => {
+      const { controller, service, store } = build();
+      store.handleOrderEvent.mockResolvedValue(true);
+
+      await controller.handle(NOTIFICACAO, 'ts=1,v1=abc', 'req-1', 'ORD01ABC');
+
+      expect(store.handleOrderEvent).toHaveBeenCalledWith('ORD01ABC', {
+        status: 'processed',
+        status_detail: 'accredited',
+      });
+      expect(service.handleMercadoPagoEvent).not.toHaveBeenCalled();
+    });
+
+    it('order que não é da loja segue para a assinatura', async () => {
+      const { controller, service, store } = build();
+
+      await controller.handle(NOTIFICACAO, 'ts=1,v1=abc', 'req-1', 'ORD01ABC');
+
+      expect(store.handleOrderEvent).toHaveBeenCalled();
+      expect(service.handleMercadoPagoEvent).toHaveBeenCalled();
+    });
+
+    it('tópicos de assinatura nem passam pela loja', async () => {
+      const { controller, gateway, service, store } = build();
+      gateway.resolveNotification.mockResolvedValue({
+        topic: 'subscription_preapproval',
+        id: 'pre-1',
+        status: 'cancelled',
+      });
+
+      await controller.handle(
+        { type: 'subscription_preapproval', data: { id: 'pre-1' } },
+        'ts=1,v1=abc',
+        'req-1',
+        'pre-1',
+      );
+
+      expect(store.handleOrderEvent).not.toHaveBeenCalled();
+      expect(service.handleMercadoPagoEvent).toHaveBeenCalled();
+    });
+
+    it('assinatura inválida não chega à loja', async () => {
+      const { controller, gateway, store } = build();
+      gateway.verifyNotification.mockImplementation(() => {
+        throw new Error('InvalidWebhookSignatureError');
+      });
+      await expect(
+        controller.handle(NOTIFICACAO, 'ts=1,v1=falsa', 'req-1', 'ORD01ABC'),
+      ).rejects.toBeInstanceOf(UnauthorizedException);
+      expect(store.handleOrderEvent).not.toHaveBeenCalled();
+    });
   });
 });

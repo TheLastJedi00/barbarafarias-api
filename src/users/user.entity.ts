@@ -10,6 +10,10 @@ export interface WeeklySlot {
   hour: number; // 8..20
 }
 
+/** Ver `User.tier` (spec 032). */
+export const USER_TIER = { MODULES: 'modules' } as const;
+export type UserTier = (typeof USER_TIER)[keyof typeof USER_TIER];
+
 export class User {
   id: string | undefined;
   fullName!: string;
@@ -61,6 +65,13 @@ export class User {
   active?: boolean;
 
   // --- aluno (role student) ---
+  /**
+   * Por onde o aluno entrou (spec 032). `'modules'` = cadastrou-se pela loja e
+   * compra módulos avulsos. **Ausente = aluno de plano**, cadastrado pela
+   * gerente ou por convite — não há migração. Não muda se o comprador assinar
+   * um plano depois: o que libera o painel do plano é o `isPaying`, não isto.
+   */
+  tier?: UserTier;
   /**
    * Quando o aluno terminou o onboarding (spec 018 Task 102). **Ausente = foi
    * convidado e ainda não completou o cadastro** — é o que o guard do front lê

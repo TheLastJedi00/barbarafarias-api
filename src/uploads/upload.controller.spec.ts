@@ -36,6 +36,14 @@ describe('UploadController — pastas', () => {
     },
   );
 
+  it('store (capas da loja) é da gerente (spec 032)', async () => {
+    await controller.upload('store', file, as(ROLES.MANAGER));
+    expect(storage.upload).toHaveBeenCalledWith(file, 'store');
+    await expect(
+      controller.upload('store', file, as(ROLES.TEACHER)),
+    ).rejects.toBeInstanceOf(ForbiddenException);
+  });
+
   it('pasta desconhecida é 400', async () => {
     await expect(
       controller.upload('qualquer', file, as(ROLES.MANAGER)),

@@ -10,6 +10,8 @@ export interface MonthlyOverview {
   revenue: number;
   /** Parte da receita que entrou por fora do gateway (spec 026 §9). */
   manualRevenue: number;
+  /** Parte da receita que veio da loja de módulos, líquida (spec 032). */
+  storeRevenue: number;
   /** Folha das professoras no fechamento do mês, sem a gerente (RF11). */
   teacherExpenses: number;
   /** Snapshot de infraestrutura vigente naquele mês (RF10). */

@@ -159,6 +159,19 @@ export interface CheckoutResult {
 export abstract class PaymentGateway {
   /** `false` quando não há chave configurada — o plano nasce sem cobrança. */
   abstract isEnabled(): boolean;
+  /**
+   * Devolve **tudo** o que uma cobrança avulsa recebeu (spec 032: desistência
+   * da compra na loja). Vale para PIX e cartão — no parcelado, o emissor
+   * cancela as parcelas que faltam.
+   *
+   * `reference` é a nossa chave da cobrança: dela sai a chave de idempotência,
+   * para dois cliques no "desistir" virarem um estorno só. Devolve o par de
+   * status da order **depois** do pedido; quem confirma o fim é o webhook.
+   */
+  abstract refundOrder(
+    orderId: string,
+    reference: string,
+  ): Promise<{ status?: string; status_detail?: string }>;
 }
 
 /**

@@ -3,8 +3,11 @@ import * as admin from 'firebase-admin';
 import { randomUUID } from 'node:crypto';
 import { initializeFirebase } from '../firestore/firebase-init';
 
-/** `artworks`: fotos e prévias da Campanha (spec 031), só da gerente. */
-export type UploadFolder = 'avatars' | 'articles' | 'artworks';
+/**
+ * `artworks`: fotos e prévias da Campanha (spec 031); `store`: capas dos
+ * produtos da loja (spec 032). As duas são só da gerente.
+ */
+export type UploadFolder = 'avatars' | 'articles' | 'artworks' | 'store';
 
 /** Extensões aceitas, mapeadas a partir do mime type já validado no controller. */
 const EXTENSION_BY_MIME: Record<string, string> = {
@@ -153,6 +156,25 @@ export class StorageService {
           : {}),
       });
     return url;
+  }
+
+  /**
+   * Um trecho do objeto, `start` e `end` inclusivos (spec 032). É como o leitor
+   * de PDF do comprador recebe o arquivo: pela API, em pedaços, sem URL do
+   * bucket no navegador e sem depender do CORS dele (fix 031).
+   */
+  async readRange(
+    path: string,
+    start: number,
+    end: number,
+  ): Promise<Buffer | null> {
+    try {
+      const [data] = await this.bucket().file(path).download({ start, end });
+      return data;
+    } catch (error) {
+      if ((error as { code?: number }).code === 404) return null;
+      throw error;
+    }
   }
 
   /** Best-effort, como o `remove`: apaga tudo sob um prefixo. */

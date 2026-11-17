@@ -10,6 +10,10 @@ import {
   Patch,
   Post,
   Put,
+  Query,
+  StreamableFile,
+  Header,
+  ParseIntPipe,
 } from '@nestjs/common';
 import { Roles } from '../decorators/roles.decorator';
 import {
@@ -50,26 +54,75 @@ export class VideoLessonController {
   }
 
   /**
-   * Leitura de uma aula. Aberta a aluno e professora; o service aplica a regra
-   * do nível, e o guard de plano só pesa para o aluno.
+   * Um módulo só (spec 032): o comprador da loja chega por aqui. O acesso é
+   * decidido no service, por módulo.
    */
+  @Get('modules/:level/:moduleId')
+  @Roles(ROLES.STUDENT, ROLES.TEACHER)
+  getModule(
+    @Param('level') level: string,
+    @Param('moduleId') moduleId: string,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.service.getModuleTree(parseLevel(level), moduleId, user);
+  }
+
+  /*
+   * As leituras abaixo **não** levam `@RequiresActivePlan` desde a spec 032: o
+   * comprador da loja não tem plano e precisa delas. Quem decide é o service,
+   * por módulo (`ModuleAccessService`) — e o aluno do plano em atraso continua
+   * recebendo o mesmo 403 de pagamento pendente que o guard dava.
+   */
+
   @Get(':id')
   @Roles(ROLES.STUDENT, ROLES.TEACHER)
-  @RequiresActivePlan()
   getDetail(@Param('id') id: string, @CurrentUser() user: AuthenticatedUser) {
     return this.service.getDetail(id, user);
   }
 
   @Get(':id/playback')
   @Roles(ROLES.STUDENT, ROLES.TEACHER)
-  @RequiresActivePlan()
   getPlayback(@Param('id') id: string, @CurrentUser() user: AuthenticatedUser) {
     return this.service.getPlayback(id, user);
   }
 
+  /** Leitor de PDF (spec 032): nome e tamanho, para pedir os trechos. */
+  @Get(':id/materials/:materialId/read')
+  @Roles(ROLES.STUDENT, ROLES.TEACHER)
+  getMaterialReadInfo(
+    @Param('id') id: string,
+    @Param('materialId') materialId: string,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.service.getMaterialReadInfo(id, materialId, user);
+  }
+
+  /** Um trecho do PDF, `start`/`end` inclusivos, até 1 MiB. */
+  @Get(':id/materials/:materialId/read/bytes')
+  @Roles(ROLES.STUDENT, ROLES.TEACHER)
+  @Header('Cache-Control', 'private, no-store')
+  async readMaterialRange(
+    @Param('id') id: string,
+    @Param('materialId') materialId: string,
+    @Query('start', ParseIntPipe) start: number,
+    @Query('end', ParseIntPipe) end: number,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    const data = await this.service.readMaterialRange(
+      id,
+      materialId,
+      user,
+      start,
+      end,
+    );
+    return new StreamableFile(data, {
+      type: 'application/octet-stream',
+      length: data.length,
+    });
+  }
+
   @Get(':id/materials/:materialId/download')
   @Roles(ROLES.STUDENT, ROLES.TEACHER)
-  @RequiresActivePlan()
   getMaterialDownload(
     @Param('id') id: string,
     @Param('materialId') materialId: string,

@@ -4,6 +4,11 @@ import { FIRESTORE } from '../firestore/firestore.module';
 import { Level } from '../types/student.level';
 import { VIDEO_LESSONS_COLLECTION } from '../video-lessons/video-lesson.collection';
 import {
+  STORE_PRODUCTS_COLLECTION,
+  STORE_PURCHASES_COLLECTION,
+} from '../store/store.collections';
+import { isPurchaseActive } from '../store/store-purchase.model';
+import {
   CurriculumModule,
   LevelCurriculum,
   PRINCIPAL_DOC_ID,
@@ -95,6 +100,39 @@ export class CurriculumRepository {
       if (topicId) counts.set(topicId, (counts.get(topicId) ?? 0) + 1);
     }
     return counts;
+  }
+
+  /**
+   * Módulos do nível que a loja trava (spec 032): todo módulo com produto na
+   * loja — publicado ou rascunho, que apontaria para o vazio — e todo módulo
+   * com compra ainda dando acesso.
+   */
+  async findStoreLockedModules(level: Level): Promise<Set<string>> {
+    const [products, purchases] = await Promise.all([
+      this.db
+        .collection(STORE_PRODUCTS_COLLECTION)
+        .where('level', '==', level)
+        .get(),
+      this.db
+        .collection(STORE_PURCHASES_COLLECTION)
+        .where('level', '==', level)
+        .get(),
+    ]);
+
+    const locked = new Set<string>();
+    for (const doc of products.docs) {
+      const moduleId = doc.get('moduleId') as string | undefined;
+      if (moduleId) locked.add(moduleId);
+    }
+    for (const doc of purchases.docs) {
+      const moduleId = doc.get('moduleId') as string | undefined;
+      const active = isPurchaseActive({
+        status: doc.get('status'),
+        accessUntil: doc.get('accessUntil'),
+      });
+      if (moduleId && active) locked.add(moduleId);
+    }
+    return locked;
   }
 
   async upsertLevel(data: LevelCurriculum): Promise<void> {

@@ -320,7 +320,7 @@ describe('LegalAdminService — resumo e aceites (spec 029)', () => {
     });
   });
 
-  it('o resumo traz os três documentos, com rascunho e contagem de pendentes', async () => {
+  it('o resumo traz os quatro documentos, com rascunho e contagem de pendentes', async () => {
     const { service, repository } = setup();
     repository.getDocument.mockImplementation((type: string) =>
       Promise.resolve(
@@ -337,7 +337,10 @@ describe('LegalAdminService — resumo e aceites (spec 029)', () => {
       'terms-of-use',
       'privacy-policy',
       'recruitment',
+      'store-purchase',
     ]);
+    // O termo da loja é aceito na compra, não exigido de ninguém (spec 032).
+    expect(overview[3].pendingCount).toBe(0);
     expect(overview[0]).toMatchObject({
       publishedVersion: '1.0',
       hasDraft: false,

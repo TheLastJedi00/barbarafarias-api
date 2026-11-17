@@ -3,6 +3,7 @@ import { ConfigModule, ConfigService } from '@nestjs/config';
 import { CurriculumModule } from '../curriculum/curriculum.module';
 import { UploadModule } from '../uploads/upload.module';
 import { UserModule } from '../users/user.module';
+import { StoreModule } from '../store/store.module';
 import { MUX_CLIENT, MuxGateway, createMuxClient } from './mux.gateway';
 import { MuxWebhookController } from './mux-webhook.controller';
 import { VideoLessonController } from './video-lesson.controller';
@@ -14,7 +15,15 @@ import { VideoLessonService } from './video-lesson.service';
  * árvore é a do currículo do nível.
  */
 @Module({
-  imports: [ConfigModule, CurriculumModule, UploadModule, UserModule],
+  // `StoreModule`: o acesso por módulo (spec 032). A loja não importa este
+  // módulo, e é isso que mantém a dependência numa direção só.
+  imports: [
+    ConfigModule,
+    CurriculumModule,
+    StoreModule,
+    UploadModule,
+    UserModule,
+  ],
   controllers: [VideoLessonController, MuxWebhookController],
   providers: [
     VideoLessonService,

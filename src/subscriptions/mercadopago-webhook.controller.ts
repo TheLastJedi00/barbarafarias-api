@@ -13,6 +13,8 @@ import {
   type MercadoPagoNotification,
 } from './mercadopago.gateway';
 import { Public } from '../decorators/public.decorator';
+import { StorePurchaseService } from '../store/store-purchase.service';
+import { MP_TOPICS } from './mercadopago.gateway';
 
 /**
  * Retorno do Mercado Pago (spec 023).
@@ -38,6 +40,7 @@ export class MercadoPagoWebhookController {
   constructor(
     private readonly service: SubscriptionService,
     private readonly mercadoPago: MercadoPagoGateway,
+    private readonly store: StorePurchaseService,
   ) {}
 
   /**
@@ -82,6 +85,17 @@ export class MercadoPagoWebhookController {
       data: { id: notification.data?.id ?? dataId },
     });
     if (!event) return { received: true };
+
+    // **Um webhook, dois donos** (spec 032). A URL é uma só no painel do
+    // Mercado Pago, e a order pode ser de uma assinatura ou de uma compra na
+    // loja. A loja responde primeiro — pelo id da order, que ela guardou —, e
+    // o que não for dela segue para a assinatura como sempre seguiu.
+    if (
+      event.topic === MP_TOPICS.ORDER &&
+      (await this.store.handleOrderEvent(event.id, event.order))
+    ) {
+      return { received: true };
+    }
 
     await this.service.handleMercadoPagoEvent(event);
     return { received: true };

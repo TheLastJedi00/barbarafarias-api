@@ -73,6 +73,15 @@ const APPLICATION_STATUS_LABELS: Record<ApplicationStatus, string> = {
   rejected: 'Não selecionada',
 };
 
+/** ISO → '14/02/2027'. */
+function formatIsoDate(iso: string): string {
+  return iso.slice(0, 10).split('-').reverse().join('/');
+}
+
+function formatMoney(amount: number): string {
+  return amount.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+}
+
 export const templates = {
   rescheduleRequested(request: RescheduleRequest): EmailContent {
     const motivo = REASON_LABELS[request.reasonType] ?? request.reasonType;
@@ -231,6 +240,79 @@ export const templates = {
           paragraph(
             'Acompanhe pelo seu painel no Trabalhe Conosco. Você pode excluir seus dados a qualquer momento por lá.',
           ),
+      ),
+    };
+  },
+
+  /** Compra paga na loja (spec 032): para o comprador. */
+  storePurchaseConfirmed(
+    buyerName: string,
+    title: string,
+    accessUntil: string,
+  ): EmailContent {
+    return {
+      subject: `Compra confirmada — ${title}`,
+      html: layout(
+        'Sua compra foi confirmada',
+        paragraph(`Olá, ${escapeHtml(buyerName)}.`) +
+          paragraph(
+            `O pagamento de <strong>${escapeHtml(title)}</strong> foi confirmado. Seu acesso vale até <strong>${formatIsoDate(accessUntil)}</strong>.`,
+          ) +
+          paragraph('Acesse em <strong>Meus módulos</strong>, no painel.') +
+          paragraph(
+            'Você pode desistir da compra em até 7 dias a partir do pagamento, pelo próprio painel, e recebe o valor de volta.',
+          ),
+      ),
+    };
+  },
+
+  /** Venda na loja (spec 032): para as gerentes. */
+  storeSale(buyerName: string, title: string, price: number): EmailContent {
+    return {
+      subject: `Nova venda na loja — ${title}`,
+      html: layout(
+        'Nova venda na loja',
+        paragraph(
+          `<strong>${escapeHtml(buyerName)}</strong> comprou <strong>${escapeHtml(title)}</strong> por ${formatMoney(price)}.`,
+        ),
+      ),
+    };
+  },
+
+  /** Compra devolvida (spec 032): desistência, reembolso ou estorno. */
+  storePurchaseRefunded(
+    buyerName: string,
+    title: string,
+    by: 'buyer' | 'manager' | 'gateway',
+  ): EmailContent {
+    const motivo =
+      by === 'buyer'
+        ? 'Recebemos sua desistência.'
+        : 'Sua compra foi reembolsada.';
+    return {
+      subject: `Compra reembolsada — ${title}`,
+      html: layout(
+        'Compra reembolsada',
+        paragraph(`Olá, ${escapeHtml(buyerName)}.`) +
+          paragraph(
+            `${motivo} O valor de <strong>${escapeHtml(title)}</strong> volta pelo mesmo meio de pagamento, e o acesso ao conteúdo foi encerrado.`,
+          ) +
+          paragraph(
+            'No cartão, o estorno aparece na fatura conforme o prazo do banco emissor.',
+          ),
+      ),
+    };
+  },
+
+  /** Desistência do comprador (spec 032): para as gerentes saberem. */
+  storeWithdrawal(buyerName: string, title: string): EmailContent {
+    return {
+      subject: `Desistência na loja — ${title}`,
+      html: layout(
+        'Desistência de compra',
+        paragraph(
+          `<strong>${escapeHtml(buyerName)}</strong> desistiu de <strong>${escapeHtml(title)}</strong> dentro do prazo de 7 dias. O estorno foi pedido ao Mercado Pago.`,
+        ),
       ),
     };
   },

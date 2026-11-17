@@ -51,6 +51,26 @@ describe('missingOnboardingFields', () => {
     ).toEqual(['chave PIX']);
   });
 
+  it('comprador da loja: só nome e celular (spec 032)', () => {
+    // CPF é pedido no checkout e o objetivo não se aplica a quem compra um
+    // módulo avulso: cobrá-los aqui prenderia o lead na tela do convite.
+    expect(
+      missingOnboardingFields(
+        new User({ role: ROLES.STUDENT, tier: 'modules' }),
+      ),
+    ).toEqual(['nome', 'celular']);
+    expect(
+      missingOnboardingFields(
+        new User({
+          role: ROLES.STUDENT,
+          tier: 'modules',
+          fullName: 'Lead',
+          phone: '11999999999',
+        }),
+      ),
+    ).toEqual([]);
+  });
+
   it('não cobra nada da gerente', () => {
     expect(missingOnboardingFields(new User({ role: ROLES.MANAGER }))).toEqual(
       [],

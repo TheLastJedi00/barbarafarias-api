@@ -1,3 +1,4 @@
+import { ConflictException } from '@nestjs/common';
 import { CurriculumService } from './curriculum.service';
 
 describe('CurriculumService', () => {
@@ -8,6 +9,7 @@ describe('CurriculumService', () => {
     getLevel: jest.Mock;
     upsertLevel: jest.Mock;
     countVideosByTopic: jest.Mock;
+    findStoreLockedModules: jest.Mock;
   };
 
   beforeEach(() => {
@@ -17,6 +19,7 @@ describe('CurriculumService', () => {
       getLevel: jest.fn(),
       upsertLevel: jest.fn().mockResolvedValue(undefined),
       countVideosByTopic: jest.fn().mockResolvedValue(new Map()),
+      findStoreLockedModules: jest.fn().mockResolvedValue(new Set()),
     };
     service = new CurriculumService(repository as any);
   });
@@ -214,6 +217,35 @@ describe('CurriculumService', () => {
       await expect(
         service.createVideoTopic('A1', 'nope', { title: 'x' }),
       ).rejects.toThrow('Módulo não encontrado');
+    });
+  });
+
+  describe('trava da loja (spec 032)', () => {
+    const tree = (moduleIds: string[]) => ({
+      prompt: '',
+      modules: moduleIds.map((id) => ({
+        id,
+        title: id,
+        context: '',
+        topics: [],
+      })),
+    });
+
+    it('recusa remover módulo que está na loja ou com compra válida', async () => {
+      repository.findStoreLockedModules.mockResolvedValue(new Set(['m2']));
+
+      await expect(
+        service.upsertLevel('A1', tree(['m1'])),
+      ).rejects.toBeInstanceOf(ConflictException);
+      expect(repository.upsertLevel).not.toHaveBeenCalled();
+    });
+
+    it('permite renomear e reordenar módulo da loja', async () => {
+      repository.findStoreLockedModules.mockResolvedValue(new Set(['m2']));
+
+      await service.upsertLevel('A1', tree(['m2', 'm1']));
+      expect(repository.findStoreLockedModules).toHaveBeenCalledWith('A1');
+      expect(repository.upsertLevel).toHaveBeenCalledTimes(1);
     });
   });
 

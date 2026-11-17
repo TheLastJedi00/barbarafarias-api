@@ -83,6 +83,7 @@ export class CurriculumService {
     }));
 
     await this.assertNoVideoOrphaned(level, modules);
+    await this.assertNoStoreModuleRemoved(level, modules);
 
     const data: LevelCurriculum = { level, prompt: dto.prompt, modules };
     await this.repository.upsertLevel(data);
@@ -140,6 +141,29 @@ export class CurriculumService {
     const count = videos === 1 ? '1 vídeo' : `${videos} vídeos`;
     throw new ConflictException(
       `Não é possível remover ${topics} vídeo aula (${count}). Mova ou apague os vídeos antes.`,
+    );
+  }
+
+  /**
+   * Módulo à venda (ou com compra válida) não sai do currículo: o produto e o
+   * comprador apontam para o **id** dele (spec 032). Renomear e reordenar
+   * seguem livres. Para remover, a gerente tira o produto da loja antes.
+   */
+  private async assertNoStoreModuleRemoved(
+    level: Level,
+    modules: CurriculumModule[],
+  ): Promise<void> {
+    const locked = await this.repository.findStoreLockedModules(level);
+    if (locked.size === 0) return;
+
+    const kept = new Set(modules.map((m) => m.id));
+    const removed = [...locked].filter((id) => !kept.has(id)).length;
+    if (removed === 0) return;
+
+    throw new ConflictException(
+      removed === 1
+        ? 'Não é possível remover um módulo que está na loja ou com compra válida. Tire o produto da loja antes.'
+        : `Não é possível remover ${removed} módulos que estão na loja ou com compra válida. Tire os produtos da loja antes.`,
     );
   }
 

@@ -1,6 +1,8 @@
 import { createHmac } from 'node:crypto';
+import { MPRateLimitError } from 'mercadopago/dist/utils/errors';
 import { ConfigService } from '@nestjs/config';
 import {
+  GatewayBusyError,
   GatewayConflictError,
   GatewayRejectedError,
   MercadoPagoGateway,
@@ -38,6 +40,11 @@ function fakeClients() {
       status_detail: 'accredited',
     }),
     get: jest.fn(),
+    refund: jest.fn().mockResolvedValue({
+      id: 'ORD01ABC',
+      status: 'refunded',
+      status_detail: 'refunded',
+    }),
   };
   const subscriptions = {
     create: jest.fn().mockResolvedValue({ id: 'preapproval_1' }),
@@ -49,7 +56,7 @@ function fakeClients() {
     subscriptions,
     subscriptionsToken: 'TEST-token',
   } as unknown as MercadoPagoClients & {
-    orders: { create: jest.Mock; get: jest.Mock };
+    orders: { create: jest.Mock; get: jest.Mock; refund: jest.Mock };
     subscriptions: { create: jest.Mock; update: jest.Mock; get: jest.Mock };
   };
 }
@@ -683,6 +690,34 @@ describe('MercadoPagoGateway — PIX', () => {
       transactions: { payments: [{ payment_method: { qr_code: 'abc' } }] },
     };
     expect(readPixCodes(semImagem as any)).toBeUndefined();
+  });
+});
+
+describe('MercadoPagoGateway — reembolso (spec 032)', () => {
+  it('reembolso total: sem `transactions` no corpo e chave derivada da referência', async () => {
+    const { clients, gateway } = build();
+
+    const result = await gateway.refundOrder('ORD01ABC', 'store:compra-1');
+
+    const call = clients.orders.refund.mock.calls[0][0];
+    expect(call.id).toBe('ORD01ABC');
+    // Corpo sem `transactions` é o que a Orders API lê como **total**.
+    expect(call.body?.transactions).toBeUndefined();
+    // Dois cliques no "desistir" produzem a mesma chave: um estorno só.
+    expect(call.requestOptions.idempotencyKey).toBe(
+      idempotencyKeyFor('refund|store:compra-1'),
+    );
+    expect(result).toEqual({ status: 'refunded', status_detail: 'refunded' });
+  });
+
+  it('429 vira GatewayBusyError, não 500', async () => {
+    const { clients, gateway } = build();
+    clients.orders.refund.mockRejectedValue(
+      new MPRateLimitError({ status: 429, message: 'muitas' } as never, 30),
+    );
+    await expect(
+      gateway.refundOrder('ORD01ABC', 'store:compra-1'),
+    ).rejects.toBeInstanceOf(GatewayBusyError);
   });
 });
 
