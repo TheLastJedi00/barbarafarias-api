@@ -12,6 +12,8 @@ import { pickDefined } from '../common/patch';
 import { ResponseUserDto } from './dto/ResponseUser.dto';
 import { UserRepository } from './user.repository';
 import { onboardingCompletedAt } from './onboarding';
+import type { CareerProfile } from './career-profile';
+import type { CareerProfileDto } from './dto/CareerProfile.dto';
 import { extendGrant } from './access-grant';
 import { AuthService } from '../auth/auth.service';
 import { ROLES, Role, resolveRole } from '../types/role';
@@ -385,6 +387,30 @@ export class UserService {
     }
     await this.userRepository.update(user);
     return user;
+  }
+
+  /**
+   * Respostas do questionário da loja (spec 033). Ficam no usuário, e não na
+   * compra, porque valem para as próximas compras e são editáveis no perfil.
+   */
+  async setCareerProfile(
+    id: string,
+    dto: CareerProfileDto,
+  ): Promise<CareerProfile> {
+    const foundUser = await this.userRepository.findById(id);
+    if (!foundUser) {
+      throw new NotFoundException('User not found');
+    }
+    const careerProfile: CareerProfile = {
+      workArea: dto.workArea,
+      careerStage: dto.careerStage,
+      englishContact: dto.englishContact,
+      answeredAt: new Date().toISOString(),
+    };
+    await this.userRepository.update(
+      new User({ ...foundUser, careerProfile, id }),
+    );
+    return careerProfile;
   }
 
   async findById(id: string): Promise<User> {

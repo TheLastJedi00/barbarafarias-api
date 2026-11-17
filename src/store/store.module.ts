@@ -18,6 +18,7 @@ import { StoreCatalogService } from './store-catalog.service';
 import { StoreContentRepository } from './store-content.repository';
 import { StoreSignupController } from './store-signup.controller';
 import { StoreSignupService } from './store-signup.service';
+import { StoreOnboardingController } from './store-onboarding.controller';
 import {
   StoreAdminPurchaseController,
   StorePurchaseController,
@@ -52,6 +53,7 @@ import { StorePurchaseRepository } from './store-purchase.repository';
     StoreCatalogController,
     StoreUserCatalogController,
     StoreSignupController,
+    StoreOnboardingController,
     StorePurchaseController,
     StoreAdminPurchaseController,
   ],

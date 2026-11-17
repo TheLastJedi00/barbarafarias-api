@@ -209,6 +209,34 @@ describe('UserService', () => {
     });
   });
 
+  describe('setCareerProfile (spec 033)', () => {
+    const respostas = {
+      workArea: 'saude',
+      careerStage: 'pleno',
+      englishContact: 'nenhum',
+    };
+
+    it('grava as respostas com a data e devolve o que gravou', async () => {
+      userRepository.findById.mockResolvedValue(
+        new User({ id: 'uid-1', role: ROLES.STUDENT, fullName: 'Ana' }),
+      );
+
+      const profile = await service.setCareerProfile('uid-1', respostas);
+
+      expect(profile).toEqual({ ...respostas, answeredAt: expect.any(String) });
+      const gravado = userRepository.update.mock.calls[0][0] as User;
+      expect(gravado.careerProfile).toEqual(profile);
+      expect(gravado.fullName).toBe('Ana');
+    });
+
+    it('404 para quem não existe', async () => {
+      userRepository.findById.mockResolvedValue(null);
+      await expect(
+        service.setCareerProfile('x', respostas),
+      ).rejects.toBeInstanceOf(NotFoundException);
+    });
+  });
+
   describe('delete', () => {
     it('apaga o documento e a conta de autenticação', async () => {
       // Só apagar o documento deixava a conta órfã. Antes isso passava batido
