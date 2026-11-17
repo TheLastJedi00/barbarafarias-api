@@ -166,6 +166,7 @@ function setup(
   return {
     service,
     repo,
+    purchases,
     gemini,
     curriculum,
     users,
@@ -238,6 +239,58 @@ describe('StoreSupplyService (spec 033)', () => {
       await expect(service.start('u1', 'c1')).rejects.toBeInstanceOf(
         UnprocessableEntityException,
       );
+    });
+  });
+
+  describe('renovação', () => {
+    it('a compra nova reaproveita o material e devolve as chances', async () => {
+      const { service, repo, purchases } = setup();
+      await service.start('u1', 'c1');
+      for (const step of ['intro', 't1', 't2']) {
+        await service.step('u1', 'c1', step);
+      }
+      await service.finish('u1', 'c1');
+      // Gasta as outras duas chances sem terminar a última.
+      repo.headers.get('u1_p1')!.chances.used = 3;
+      await service.start('u1', 'c1').catch(() => undefined);
+
+      // Venceu e comprou de novo o mesmo produto.
+      purchases.findById.mockImplementation(async (id: string) =>
+        id === 'c1'
+          ? { ...purchase, accessUntil: '2026-11-01T00:00:00.000Z' }
+          : id === 'c2'
+            ? { ...purchase, id: 'c2' }
+            : null,
+      );
+      await expect(service.material('u1', 'c1')).rejects.toBeInstanceOf(
+        ForbiddenException,
+      );
+
+      const view = await service.material('u1', 'c2');
+      expect(view.material!.text).toBe('Intro do Bruno');
+      expect(view.chances).toEqual({ used: 0, max: 3, canGenerate: true });
+
+      const started = await service.start('u1', 'c2');
+      expect(started.pending!.number).toBe(2);
+      expect(repo.headers.get('u1_p1')!.chances).toMatchObject({
+        purchaseId: 'c2',
+        used: 1,
+      });
+    });
+
+    it('a geração em andamento da compra antiga é descartada', async () => {
+      const { service, repo, purchases } = setup();
+      await service.start('u1', 'c1');
+      await service.step('u1', 'c1', 'intro');
+      purchases.findById.mockImplementation(async (id: string) =>
+        id === 'c2' ? { ...purchase, id: 'c2' } : null,
+      );
+
+      expect((await service.material('u1', 'c2')).pending).toBeNull();
+      await service.start('u1', 'c2');
+
+      expect(repo.contents.has('u1_p1_1')).toBe(false);
+      expect(repo.headers.get('u1_p1')!.pending!.purchaseId).toBe('c2');
     });
   });
 
