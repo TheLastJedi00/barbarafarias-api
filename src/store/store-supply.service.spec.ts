@@ -106,6 +106,15 @@ function memoryRepo() {
     deleteContent: jest.fn(async (id: string, n: number) => {
       contents.delete(key(id, n));
     }),
+    findAll: jest.fn(async () =>
+      [...headers.values()].map((h) => structuredClone(h)),
+    ),
+    delete: jest.fn(async (id: string) => {
+      headers.delete(id);
+      for (const k of [...contents.keys()]) {
+        if (k.startsWith(`${id}_`)) contents.delete(k);
+      }
+    }),
   };
 }
 
@@ -117,6 +126,8 @@ function setup(
     findById: jest.fn(async (id: string) =>
       id === 'c1' ? { ...purchase, ...opts.purchase } : null,
     ),
+    findAll: jest.fn(async () => [{ ...purchase, ...opts.purchase }]),
+    findByUser: jest.fn(async () => [{ ...purchase, ...opts.purchase }]),
   };
   const users = {
     findById: jest.fn(
@@ -166,6 +177,7 @@ function setup(
   return {
     service,
     repo,
+    purchases,
     gemini,
     curriculum,
     users,
@@ -238,6 +250,58 @@ describe('StoreSupplyService (spec 033)', () => {
       await expect(service.start('u1', 'c1')).rejects.toBeInstanceOf(
         UnprocessableEntityException,
       );
+    });
+  });
+
+  describe('renovação', () => {
+    it('a compra nova reaproveita o material e devolve as chances', async () => {
+      const { service, repo, purchases } = setup();
+      await service.start('u1', 'c1');
+      for (const step of ['intro', 't1', 't2']) {
+        await service.step('u1', 'c1', step);
+      }
+      await service.finish('u1', 'c1');
+      // Gasta as outras duas chances sem terminar a última.
+      repo.headers.get('u1_p1')!.chances.used = 3;
+      await service.start('u1', 'c1').catch(() => undefined);
+
+      // Venceu e comprou de novo o mesmo produto.
+      purchases.findById.mockImplementation(async (id: string) =>
+        id === 'c1'
+          ? { ...purchase, accessUntil: '2026-11-01T00:00:00.000Z' }
+          : id === 'c2'
+            ? { ...purchase, id: 'c2' }
+            : null,
+      );
+      await expect(service.material('u1', 'c1')).rejects.toBeInstanceOf(
+        ForbiddenException,
+      );
+
+      const view = await service.material('u1', 'c2');
+      expect(view.material!.text).toBe('Intro do Bruno');
+      expect(view.chances).toEqual({ used: 0, max: 3, canGenerate: true });
+
+      const started = await service.start('u1', 'c2');
+      expect(started.pending!.number).toBe(2);
+      expect(repo.headers.get('u1_p1')!.chances).toMatchObject({
+        purchaseId: 'c2',
+        used: 1,
+      });
+    });
+
+    it('a geração em andamento da compra antiga é descartada', async () => {
+      const { service, repo, purchases } = setup();
+      await service.start('u1', 'c1');
+      await service.step('u1', 'c1', 'intro');
+      purchases.findById.mockImplementation(async (id: string) =>
+        id === 'c2' ? { ...purchase, id: 'c2' } : null,
+      );
+
+      expect((await service.material('u1', 'c2')).pending).toBeNull();
+      await service.start('u1', 'c2');
+
+      expect(repo.contents.has('u1_p1_1')).toBe(false);
+      expect(repo.headers.get('u1_p1')!.pending!.purchaseId).toBe('c2');
     });
   });
 
@@ -401,6 +465,99 @@ describe('StoreSupplyService (spec 033)', () => {
       await expect(service.step('u1', 'c1', 'tx')).rejects.toBeInstanceOf(
         NotFoundException,
       );
+    });
+  });
+
+  describe('acessos vencidos (gerente)', () => {
+    /** Material pronto da compra c1, que depois vence. */
+    async function expiredSetup(accessUntil: string) {
+      const ctx = setup();
+      await ctx.service.start('u1', 'c1');
+      for (const step of ['intro', 't1', 't2']) {
+        await ctx.service.step('u1', 'c1', step);
+      }
+      await ctx.service.finish('u1', 'c1');
+      const expired = { ...purchase, accessUntil };
+      ctx.purchases.findAll.mockResolvedValue([expired]);
+      ctx.purchases.findByUser.mockResolvedValue([expired]);
+      return ctx;
+    }
+
+    it('lista quem venceu, com o motivo e quando pode apagar', async () => {
+      const { service } = await expiredSetup('2026-10-01T00:00:00.000Z');
+
+      expect(await service.listExpired()).toEqual([
+        {
+          id: 'u1_p1',
+          userId: 'u1',
+          userName: 'Bruno Lima',
+          productId: 'p1',
+          title: 'Trabalho',
+          level: 'A1',
+          reason: 'expired',
+          endedAt: '2026-10-01T00:00:00.000Z',
+          deletableAt: '2026-10-31T00:00:00.000Z',
+          deletable: true,
+        },
+      ]);
+    });
+
+    it('apaga o liberado: cabeçalho e conteúdo', async () => {
+      const { service, repo } = await expiredSetup('2026-10-01T00:00:00.000Z');
+
+      await service.deleteExpired('u1_p1');
+
+      expect(repo.headers.size).toBe(0);
+      expect(repo.contents.size).toBe(0);
+    });
+
+    it('antes dos 30 dias, 409 com a data de liberação', async () => {
+      const { service, repo } = await expiredSetup('2026-11-10T00:00:00.000Z');
+
+      await expect(service.deleteExpired('u1_p1')).rejects.toMatchObject({
+        status: 409,
+        response: { deletableAt: '2026-12-10T00:00:00.000Z' },
+      });
+      expect(repo.headers.size).toBe(1);
+    });
+
+    it('acesso que voltou a valer (renovação) não é apagado', async () => {
+      const { service, purchases } = await expiredSetup(
+        '2026-10-01T00:00:00.000Z',
+      );
+      purchases.findByUser.mockResolvedValue([
+        { ...purchase, accessUntil: '2026-10-01T00:00:00.000Z' },
+        { ...purchase, id: 'c2' },
+      ]);
+
+      await expect(service.deleteExpired('u1_p1')).rejects.toBeInstanceOf(
+        ConflictException,
+      );
+    });
+
+    it('material inexistente, 404', async () => {
+      await expect(setup().service.deleteExpired('x')).rejects.toBeInstanceOf(
+        NotFoundException,
+      );
+    });
+
+    it('apagar todos os liberados pula os que ainda não podem', async () => {
+      const { service, repo } = await expiredSetup('2026-10-01T00:00:00.000Z');
+      repo.headers.set('u2_p1', {
+        ...repo.headers.get('u1_p1')!,
+        id: 'u2_p1',
+        userId: 'u2',
+      });
+
+      // u2 não tem compra: cai na data do próprio material (hoje), não liberado.
+      expect(await service.purgeEligible()).toEqual({ deleted: 1 });
+      expect([...repo.headers.keys()]).toEqual(['u2_p1']);
+    });
+
+    it('material de compra valendo não aparece', async () => {
+      const { service } = setup();
+      await service.start('u1', 'c1');
+      expect(await service.listExpired()).toEqual([]);
     });
   });
 });

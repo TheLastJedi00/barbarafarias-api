@@ -1,4 +1,10 @@
 import {
+  STORE_PURCHASE_STATUS,
+  StorePurchase,
+  addDays,
+  isPurchaseActive,
+} from './store-purchase.model';
+import {
   STORE_GENERATION_INTERVAL_MS,
   STORE_MAX_GENERATIONS,
   STORE_MAX_STEP_ATTEMPTS,
@@ -60,4 +66,64 @@ export function isPendingStuck(
     (step) =>
       step.status !== 'done' && step.attempts >= STORE_MAX_STEP_ATTEMPTS,
   );
+}
+
+/** Dias que o material vencido fica guardado antes de poder ser apagado. */
+export const STORE_SUPPLY_RETENTION_DAYS = 30;
+
+export type SupplyEndReason = 'expired' | 'refunded' | 'charged_back';
+
+export type SupplyEndState =
+  | { active: true }
+  | {
+      active: false;
+      reason: SupplyEndReason;
+      endedAt: string;
+      /** A partir de quando a gerente pode apagar (fim + 30 dias). */
+      deletableAt: string;
+      deletable: boolean;
+    };
+
+/**
+ * Situação do material a partir das compras da pessoa **daquele produto**
+ * (spec 033 §0.2). Calculada, nunca gravada: vencer é passar de uma data, e
+ * nada avisa quando isso acontece — como o acesso da 032.
+ *
+ * Basta uma compra valendo para o material estar ativo. Senão, quem manda é a
+ * compra que terminou por último: o fim é o `accessUntil` (vencida), a data do
+ * estorno (reembolso) ou a última atualização (contestação). Compras que
+ * nunca foram pagas não contam. `fallback` cobre o material sem compra paga
+ * nenhuma, que não deveria existir.
+ */
+export function supplyEndState(
+  purchases: StorePurchase[],
+  now: Date = new Date(),
+  fallback = now.toISOString(),
+): SupplyEndState {
+  if (purchases.some((p) => isPurchaseActive(p, now))) return { active: true };
+
+  const ends = purchases.flatMap((p): [string, SupplyEndReason][] => {
+    switch (p.status) {
+      case STORE_PURCHASE_STATUS.PAID:
+        return p.accessUntil ? [[p.accessUntil, 'expired']] : [];
+      case STORE_PURCHASE_STATUS.REFUNDED:
+        return [[p.refund?.at ?? p.updatedAt, 'refunded']];
+      case STORE_PURCHASE_STATUS.CHARGED_BACK:
+        return [[p.updatedAt, 'charged_back']];
+      default:
+        return [];
+    }
+  });
+  const [endedAt, reason] = ends.sort(([a], [b]) => b.localeCompare(a))[0] ?? [
+    fallback,
+    'expired',
+  ];
+  const deletableAt = addDays(endedAt, STORE_SUPPLY_RETENTION_DAYS);
+  return {
+    active: false,
+    reason,
+    endedAt,
+    deletableAt,
+    deletable: now.getTime() >= new Date(deletableAt).getTime(),
+  };
 }

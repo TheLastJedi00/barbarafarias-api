@@ -1,4 +1,12 @@
-import { Body, Controller, Get, HttpCode, Param, Post } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Delete,
+  Get,
+  HttpCode,
+  Param,
+  Post,
+} from '@nestjs/common';
 import { Roles } from '../decorators/roles.decorator';
 import {
   CurrentUser,
@@ -46,5 +54,31 @@ export class StoreSupplyController {
   @HttpCode(200)
   finish(@CurrentUser() user: AuthenticatedUser, @Param('id') id: string) {
     return this.service.finish(user.sub, id);
+  }
+}
+
+/** "Acessos vencidos" da gerente (spec 033): material guardado e bloqueado. */
+@Controller('store/admin/expired-supplies')
+@Roles(ROLES.MANAGER)
+export class StoreAdminSupplyController {
+  constructor(private readonly service: StoreSupplyService) {}
+
+  @Get()
+  list() {
+    return this.service.listExpired();
+  }
+
+  /** Apaga todos os liberados (30 dias depois do fim). */
+  @Post('purge-eligible')
+  @HttpCode(200)
+  purgeEligible() {
+    return this.service.purgeEligible();
+  }
+
+  /** Apaga um. 409 antes dos 30 dias ou se o acesso voltou a valer. */
+  @Delete(':id')
+  @HttpCode(204)
+  async remove(@Param('id') id: string): Promise<void> {
+    await this.service.deleteExpired(id);
   }
 }
