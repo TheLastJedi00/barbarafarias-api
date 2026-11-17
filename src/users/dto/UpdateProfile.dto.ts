@@ -4,8 +4,10 @@ import {
   IsString,
   MaxLength,
   Validate,
+  ValidateNested,
 } from 'class-validator';
-import { Transform } from 'class-transformer';
+import { Transform, Type } from 'class-transformer';
+import { CareerProfileDto } from './CareerProfile.dto';
 import {
   IsBrazilianPhoneConstraint,
   IsCpfConstraint,
@@ -83,6 +85,15 @@ export class UpdateProfileDto extends BaseProfileDto {
   @IsString()
   @Validate(IsCpfConstraint)
   cpf?: string;
+
+  /**
+   * Questionário da loja (spec 033), editável no perfil. Vai inteiro: as três
+   * respostas juntas, como no `PUT /store/onboarding`.
+   */
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => CareerProfileDto)
+  careerProfile?: CareerProfileDto;
 }
 
 /**
