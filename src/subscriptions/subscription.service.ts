@@ -6,8 +6,12 @@ import {
   Injectable,
   Logger,
   NotFoundException,
+  Optional,
   UnauthorizedException,
 } from '@nestjs/common';
+import { ContractService } from '../contracts/contract.service';
+import type { ContractDealLine } from '../contracts/contract.entity';
+import { buildTerms, buildTierTerms } from './plan-terms';
 import { ConfigService } from '@nestjs/config';
 import { SubscriptionRepository } from './subscription.repository';
 import { CouponRepository } from './coupon.repository';
@@ -59,7 +63,12 @@ import type {
   TierPlan,
 } from './subscription.entity';
 import { PlanTierService } from '../plan-tiers/plan-tier.service';
-import { isSellable, type PlanTier } from '../plan-tiers/plan-tier.model';
+import {
+  FIDELITY_MONTHS,
+  PACKAGE_MONTHS,
+  isSellable,
+  type PlanTier,
+} from '../plan-tiers/plan-tier.model';
 import {
   COUPON_PAYMENT_MODES,
   Coupon,
@@ -193,6 +202,7 @@ export class SubscriptionService {
     private readonly card: CardGateway,
     private readonly configService: ConfigService,
     private readonly planTiers: PlanTierService,
+    @Optional() private readonly contracts?: ContractService,
   ) {}
 
   // ---------------------------------------------------------------- aluno
@@ -466,7 +476,7 @@ export class SubscriptionService {
   ): Promise<void> {
     const config = regimeOf(subscription);
     const acordado = payerAmountsOf(subscription);
-    await this.acceptances.create(
+    const aceite = await this.acceptances.create(
       new PlanAcceptance({
         id: randomUUID(),
         studentId: student.id,
@@ -491,6 +501,94 @@ export class SubscriptionService {
         couponCode: subscription.couponCode,
       }),
     );
+    await this.recordContract(student, subscription, aceite);
+  }
+
+  /**
+   * Contrato em PDF (spec 036 §6), no mesmo passo do aceite e com o **texto**
+   * daquele instante — remontar depois devolveria o texto de hoje. No tier o
+   * texto sai com o preço congelado na contratação (`priceSnapshot`), não com
+   * o do catálogo, que pode virar à meia-noite entre a tela e o clique.
+   */
+  private async recordContract(
+    student: User,
+    subscription: Subscription,
+    aceite: PlanAcceptance,
+  ): Promise<void> {
+    if (!this.contracts) return;
+    try {
+      let terms: ReturnType<typeof buildTerms>;
+      if (isTierPlan(subscription.plan)) {
+        const tier = await this.planTiers.getEffective(subscription.tierId!);
+        const price = subscription.priceSnapshot ?? null;
+        terms = buildTierTerms(
+          subscription.plan === TIER_PLANS.PACKAGE
+            ? { ...tier, packagePrice: price }
+            : { ...tier, monthlyPrice: price },
+          subscription.plan,
+        );
+      } else {
+        terms = buildTerms(subscription.plan);
+      }
+      if (terms.version !== aceite.termsVersion) {
+        this.logger.warn(
+          `Aceite ${aceite.id} na versão ${aceite.termsVersion}, contrato gravado com a ${terms.version}.`,
+        );
+      }
+      await this.contracts.recordSafely({
+        studentId: student.id!,
+        studentName: student.fullName,
+        studentEmail: student.email,
+        kind: 'PLAN',
+        refId: aceite.id,
+        title: `Plano — ${terms.planLabel}`,
+        termsVersion: terms.version,
+        summary: terms.summary,
+        clauses: terms.clauses,
+        deal: this.dealOf(subscription, aceite),
+        acceptedAt: aceite.acceptedAt,
+      });
+    } catch (error) {
+      this.logger.error(
+        `Contrato do aceite ${aceite.id} não gravado: ${(error as Error).message}`,
+      );
+    }
+  }
+
+  private dealOf(
+    subscription: Subscription,
+    aceite: PlanAcceptance,
+  ): ContractDealLine[] {
+    const brl = (value: number) =>
+      value.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+    const metodo =
+      subscription.paymentMethod === PAYMENT_METHODS.PIX_RECURRING
+        ? 'PIX'
+        : 'Cartão de crédito';
+    const linhas: ContractDealLine[] = [
+      { label: 'Plano', value: aceite.planLabel },
+    ];
+    if (subscription.plan === TIER_PLANS.PACKAGE) {
+      linhas.push({
+        label: 'Valor',
+        value: `${brl(aceite.totalAmount)} pelo pacote de ${PACKAGE_MONTHS} meses`,
+      });
+    } else if (subscription.plan === TIER_PLANS.SUBSCRIPTION) {
+      linhas.push(
+        { label: 'Mensalidade', value: brl(aceite.installmentAmount) },
+        { label: 'Fidelidade', value: `${FIDELITY_MONTHS} meses` },
+      );
+    } else {
+      linhas.push({
+        label: 'Valor',
+        value: `${aceite.installments}x de ${brl(aceite.installmentAmount)} (total ${brl(aceite.totalAmount)})`,
+      });
+    }
+    linhas.push({ label: 'Forma de pagamento', value: metodo });
+    if (aceite.couponCode) {
+      linhas.push({ label: 'Cupom', value: aceite.couponCode });
+    }
+    return linhas;
   }
 
   /** Todos os aceites, para a página de contratos da gerente (§7.4). */

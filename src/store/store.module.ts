@@ -1,3 +1,4 @@
+import { ContractModule } from '../contracts/contract.module';
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { ThrottlerModule } from '@nestjs/throttler';
@@ -51,6 +52,7 @@ import { StorePurchaseRepository } from './store-purchase.repository';
     NotificationModule,
     UploadModule,
     UserModule,
+    ContractModule,
     // O cadastro é público: freio por IP, como no recrutamento (o
     // ThrottlerGuard não é global de propósito).
     ThrottlerModule.forRoot([{ ttl: 60_000, limit: 10 }]),

@@ -1,3 +1,4 @@
+import { ContractModule } from '../contracts/contract.module';
 import { Module } from '@nestjs/common';
 import { PlanTierModule } from '../plan-tiers/plan-tier.module';
 import { ConfigModule } from '@nestjs/config';
@@ -32,6 +33,7 @@ import { StoreModule } from '../store/store.module';
     StoreModule,
     UserModule,
     PlanTierModule,
+    ContractModule,
   ],
   controllers: [SubscriptionController, MercadoPagoWebhookController],
   providers: [

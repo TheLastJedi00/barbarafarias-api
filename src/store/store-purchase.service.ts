@@ -1,4 +1,5 @@
 import {
+  Optional,
   BadRequestException,
   ConflictException,
   ForbiddenException,
@@ -34,6 +35,8 @@ import { hasPaidAccess } from '../users/paid-access';
 import type { User } from '../users/user.entity';
 import { UserRepository } from '../users/user.repository';
 import { StorageService } from '../uploads/storage.service';
+import { ContractService } from '../contracts/contract.service';
+import { clausesFromMarkdown } from '../contracts/markdown-clauses';
 import {
   CreateStorePurchaseDto,
   PayStorePurchaseCardDto,
@@ -131,6 +134,7 @@ export class StorePurchaseService {
     private readonly config: ConfigService,
     private readonly notifications: NotificationService,
     private readonly storage: StorageService,
+    @Optional() private readonly contracts?: ContractService,
   ) {}
 
   // ---------------------------------------------------------------- compra
@@ -181,6 +185,7 @@ export class StorePurchaseService {
       purchase = this.newPurchase(requester.sub, product, dto, termsVersion);
     }
     await this.purchases.save(purchase);
+    await this.recordContract(purchase, buyer, product);
 
     if (dto.method === 'CREDIT_CARD') {
       return {
@@ -198,6 +203,59 @@ export class StorePurchaseService {
     }
 
     return this.issuePix(purchase, buyer, product);
+  }
+
+  /**
+   * Contrato em PDF (spec 036 §6), com o texto **da versão publicada** que o
+   * comprador aceitou — o Jurídico não reescreve versão publicada, então a
+   * cópia é exata. Um por compra: a compra pendente reaproveitada mantém o
+   * contrato do primeiro aceite.
+   */
+  private async recordContract(
+    purchase: StorePurchase,
+    buyer: User,
+    product: StoreProduct,
+  ): Promise<void> {
+    if (!this.contracts) return;
+    try {
+      const terms = await this.legal.getVersion(
+        STORE_TERMS_TYPE,
+        purchase.termsVersion,
+      );
+      await this.contracts.recordSafely({
+        studentId: purchase.userId,
+        studentName: buyer.fullName,
+        studentEmail: buyer.email,
+        kind: 'STORE',
+        refId: purchase.id,
+        title: `Compra — ${purchase.titleSnapshot}`,
+        termsVersion: purchase.termsVersion,
+        summary: terms.title,
+        clauses: clausesFromMarkdown(terms.markdown),
+        deal: [
+          { label: 'Produto', value: purchase.titleSnapshot },
+          { label: 'Valor', value: formatBrl(purchase.priceSnapshot) },
+          {
+            label: 'Forma de pagamento',
+            value:
+              purchase.method === 'PIX'
+                ? 'PIX'
+                : `Cartão de crédito, em até ${product.maxInstallments}x com juros do comprador`,
+          },
+          {
+            label: 'Acesso',
+            value: `${STORE_ACCESS_DAYS} dias a partir do pagamento`,
+          },
+        ],
+        acceptedAt: new Date().toISOString(),
+      });
+    } catch (error) {
+      // Sem o texto da versão não há contrato fiel a gravar; a compra segue e
+      // o backfill tenta de novo.
+      this.logger.error(
+        `Contrato da compra ${purchase.id} não gravado: ${(error as Error).message}`,
+      );
+    }
   }
 
   private async issuePix(
@@ -805,4 +863,8 @@ function formatDate(iso: string): string {
 
 function now(): string {
   return new Date().toISOString();
+}
+
+function formatBrl(value: number): string {
+  return value.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
 }
