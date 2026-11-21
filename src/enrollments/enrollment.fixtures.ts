@@ -112,12 +112,12 @@ export function buildEnrollments(
   };
   const gateway = {
     isEnabled: jest.fn(() => true),
-    createPixCharge: jest.fn(async () => ({
+    createPixCharge: jest.fn(async (_input: any) => ({
       id: 'ORD-PIX',
       brCode: '000201…',
       brCodeBase64: 'data:image/png;base64,AAA',
     })),
-    createCheckout: jest.fn(async () => ({
+    createCheckout: jest.fn(async (_input: any) => ({
       id: 'ORD-CARD',
       provider: 'MERCADOPAGO',
       outcome: 'PAID',

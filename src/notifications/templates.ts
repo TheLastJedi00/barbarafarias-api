@@ -316,4 +316,167 @@ export const templates = {
       ),
     };
   },
+
+  // ------------------------------------------------ turmas (spec 036)
+
+  /** Sinal pago: a vaga é do aluno até a turma fechar. */
+  enrollmentPaid(
+    studentName: string,
+    turmaName: string,
+    startDate: string,
+    missing: number,
+  ): EmailContent {
+    const faltam =
+      missing > 0
+        ? `Faltam <strong>${missing}</strong> ${missing === 1 ? 'aluno' : 'alunos'} para a turma fechar.`
+        : 'A turma já tem o mínimo de alunos e aguarda a confirmação da escola.';
+    return {
+      subject: `Vaga reservada — ${turmaName}`,
+      html: layout(
+        'Sua vaga está reservada',
+        paragraph(`Olá, ${escapeHtml(studentName)}.`) +
+          paragraph(
+            `Recebemos o sinal da sua matrícula na turma <strong>${escapeHtml(turmaName)}</strong>, com início previsto em <strong>${formatDate(startDate)}</strong>.`,
+          ) +
+          paragraph(faltam) +
+          paragraph(
+            'Você acompanha a formação da turma em <strong>Meu Plano</strong>, e o contrato fica em <strong>Meu Perfil › Meus contratos</strong>. Dá para desistir em até 7 dias do pagamento, com o sinal de volta.',
+          ),
+      ),
+    };
+  },
+
+  /** Sinal devolvido: desistência, turma cancelada ou adiada. */
+  enrollmentRefunded(
+    studentName: string,
+    turmaName: string,
+    reason: 'student' | 'manager' | 'turma-cancelled' | 'overbooked',
+  ): EmailContent {
+    const motivo = {
+      student: 'Recebemos a sua desistência.',
+      manager: 'A escola devolveu o seu sinal.',
+      'turma-cancelled': 'A turma foi cancelada.',
+      overbooked:
+        'A última vaga foi ocupada um instante antes do seu pagamento cair.',
+    }[reason];
+    return {
+      subject: `Sinal devolvido — ${turmaName}`,
+      html: layout(
+        'Sinal devolvido',
+        paragraph(`Olá, ${escapeHtml(studentName)}.`) +
+          paragraph(
+            `${motivo} O sinal da matrícula na turma <strong>${escapeHtml(turmaName)}</strong> volta pelo mesmo meio de pagamento.`,
+          ) +
+          paragraph(
+            'No cartão, o estorno aparece na fatura conforme o prazo do banco emissor.',
+          ),
+      ),
+    };
+  },
+
+  /** Para as gerentes: a turma pode ser confirmada. */
+  turmaMinimumReached(
+    turmaName: string,
+    paid: number,
+    min: number,
+    startDate: string,
+  ): EmailContent {
+    return {
+      subject: `Turma pronta para confirmar — ${turmaName}`,
+      html: layout(
+        'A turma atingiu o mínimo',
+        paragraph(
+          `A turma <strong>${escapeHtml(turmaName)}</strong> tem <strong>${paid}</strong> matrículas pagas (mínimo ${min}) e começa em <strong>${formatDate(startDate)}</strong>.`,
+        ) +
+          paragraph(
+            'Confirme em <strong>Gestão › Turmas</strong> para os alunos receberem a cobrança do plano.',
+          ),
+      ),
+    };
+  },
+
+  /** Para as gerentes: 7 dias antes do start, a turma ainda não foi confirmada. */
+  turmaStartReminder(
+    turmaName: string,
+    paid: number,
+    min: number,
+    startDate: string,
+  ): EmailContent {
+    const situacao =
+      paid >= min
+        ? `Ela já tem o mínimo (${paid} de ${min}) e só falta confirmar.`
+        : `Ela tem ${paid} de ${min} matrículas pagas: abaixo do mínimo.`;
+    return {
+      subject: `Turma começa em 7 dias — ${turmaName}`,
+      html: layout(
+        'Decida a turma',
+        paragraph(
+          `A turma <strong>${escapeHtml(turmaName)}</strong> começa em <strong>${formatDate(startDate)}</strong> e ainda não foi confirmada. ${situacao}`,
+        ) +
+          paragraph(
+            'Em <strong>Gestão › Turmas</strong> você confirma, adia o início ou cancela a turma (o sinal é devolvido a todos).',
+          ),
+      ),
+    };
+  },
+
+  /** Para o aluno: turma confirmada, falta pagar o plano. */
+  turmaConfirmed(
+    studentName: string,
+    turmaName: string,
+    startDate: string,
+  ): EmailContent {
+    return {
+      subject: `Turma confirmada — ${turmaName}`,
+      html: layout(
+        'Sua turma vai começar',
+        paragraph(`Olá, ${escapeHtml(studentName)}.`) +
+          paragraph(
+            `A turma <strong>${escapeHtml(turmaName)}</strong> foi confirmada e começa em <strong>${formatDate(startDate)}</strong>.`,
+          ) +
+          paragraph(
+            'Pague o plano em <strong>Meu Plano</strong> até o início — o sinal já está descontado. O acesso às aulas e aos materiais abre na data de início.',
+          ),
+      ),
+    };
+  },
+
+  /** Para o aluno: start adiado, com o direito ao estorno do sinal. */
+  turmaPostponed(
+    studentName: string,
+    turmaName: string,
+    from: string,
+    to: string,
+  ): EmailContent {
+    return {
+      subject: `Início adiado — ${turmaName}`,
+      html: layout(
+        'O início da turma mudou',
+        paragraph(`Olá, ${escapeHtml(studentName)}.`) +
+          paragraph(
+            `O início da turma <strong>${escapeHtml(turmaName)}</strong> passou de ${formatDate(from)} para <strong>${formatDate(to)}</strong>, no mesmo dia da semana e horário.`,
+          ) +
+          paragraph(
+            'Se a nova data não servir, você pode desistir em <strong>Meu Plano</strong> até o novo início e recebe o sinal de volta.',
+          ),
+      ),
+    };
+  },
+
+  /** Para o aluno: turma cancelada, sinal devolvido. */
+  turmaCancelled(studentName: string, turmaName: string): EmailContent {
+    return {
+      subject: `Turma cancelada — ${turmaName}`,
+      html: layout(
+        'A turma foi cancelada',
+        paragraph(`Olá, ${escapeHtml(studentName)}.`) +
+          paragraph(
+            `A turma <strong>${escapeHtml(turmaName)}</strong> não vai acontecer. O seu sinal foi devolvido pelo mesmo meio de pagamento.`,
+          ) +
+          paragraph(
+            'Quando abrirmos uma nova turma, ela aparece na página da Academy.',
+          ),
+      ),
+    };
+  },
 };

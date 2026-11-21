@@ -1,3 +1,8 @@
+import { EnrollmentService } from '../enrollments/enrollment.service';
+import { EnrollmentRepository } from '../enrollments/enrollment.repository';
+import { EnrollmentController } from '../enrollments/enrollment.controller';
+import { TurmaModule } from '../turmas/turma.module';
+import { NotificationModule } from '../notifications/notification.module';
 import { ContractModule } from '../contracts/contract.module';
 import { Module } from '@nestjs/common';
 import { PlanTierModule } from '../plan-tiers/plan-tier.module';
@@ -34,10 +39,21 @@ import { StoreModule } from '../store/store.module';
     UserModule,
     PlanTierModule,
     ContractModule,
+    TurmaModule,
+    NotificationModule,
   ],
-  controllers: [SubscriptionController, MercadoPagoWebhookController],
+  controllers: [
+    SubscriptionController,
+    MercadoPagoWebhookController,
+    // Spec 036: a matrícula mora em src/enrollments, mas é provida aqui — ela
+    // vira assinatura na confirmação, e um módulo próprio criaria um ciclo
+    // com este (o webhook daqui também a atende).
+    EnrollmentController,
+  ],
   providers: [
     SubscriptionService,
+    EnrollmentService,
+    EnrollmentRepository,
     SubscriptionRepository,
     CouponRepository,
     PlanAcceptanceRepository,
@@ -48,6 +64,8 @@ import { StoreModule } from '../store/store.module';
     SubscriptionRepository,
     PaymentAccessService,
     PlanAcceptanceRepository,
+    EnrollmentService,
+    EnrollmentRepository,
   ],
 })
 export class SubscriptionModule {}
