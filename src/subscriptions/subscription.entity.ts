@@ -393,6 +393,11 @@ export class Subscription {
    * até o fim do ciclo pago; isto só existe para a gerente ver.
    */
   fidelityBrokenAt?: string;
+  /**
+   * Desistência nos 7 dias do CDC (spec 035): o que foi pago voltou e o
+   * acesso caiu. Distingue o estorno do cancelamento comum no histórico.
+   */
+  withdrawnAt?: string;
 
   // --- cupom aplicado (RF15/RF16) ---
   couponCode?: string;
