@@ -2,6 +2,7 @@ import {
   BadRequestException,
   ConflictException,
   ForbiddenException,
+  GoneException,
   Injectable,
   Logger,
   NotFoundException,
@@ -210,6 +211,19 @@ export class SubscriptionService {
       throw new NotFoundException('Aluno não encontrado');
     }
     this.assertPayableProfile(student);
+    // **Fim da venda dos planos antigos (spec 035, T27)** — atrás de uma
+    // variável, e não de um deploy, por causa da ordem de implantação da spec
+    // 025: o front novo tem de parar de mandar o plano antigo **antes** de o
+    // backend passar a recusá-lo. Liga-se depois que o front estiver no ar. O
+    // Mensal antigo segue renovando: renovação não passa por aqui.
+    if (
+      !isTierPlan(dto.plan) &&
+      this.configService.get<string>('LEGACY_PLANS_CLOSED') === 'true'
+    ) {
+      throw new GoneException(
+        'Este plano não é mais vendido. Escolha um dos planos disponíveis.',
+      );
+    }
     assertMethodAllowed(dto.plan, dto.paymentMethod);
     const tier = await this.resolveTier(dto);
 
