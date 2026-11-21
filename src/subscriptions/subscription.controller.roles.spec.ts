@@ -19,6 +19,11 @@ import { ROLES } from '../types/role';
 describe('SubscriptionController — papéis', () => {
   const rolesOf = (method: keyof SubscriptionController): unknown =>
     Reflect.getMetadata(ROLES_KEY, SubscriptionController.prototype[method]);
+  const isPublic = (method: keyof SubscriptionController): unknown =>
+    Reflect.getMetadata(
+      IS_PUBLIC_KEY,
+      SubscriptionController.prototype[method],
+    );
 
   it('deixa a gerente ler o contrato de um plano, não só o aluno', () => {
     expect(rolesOf('terms')).toEqual(
@@ -38,20 +43,12 @@ describe('SubscriptionController — papéis', () => {
    * sair por esta rota sem token.
    */
   it('deixa o catálogo dos planos aberto a quem não está logado', () => {
-    const isPublic: unknown = Reflect.getMetadata(
-      IS_PUBLIC_KEY,
-      SubscriptionController.prototype.plans,
-    );
-    expect(isPublic).toBe(true);
+    expect(isPublic('plans')).toBe(true);
     expect(rolesOf('plans')).toBeUndefined();
   });
 
   it('não abre o contrato do plano junto com o catálogo', () => {
-    const isPublic: unknown = Reflect.getMetadata(
-      IS_PUBLIC_KEY,
-      SubscriptionController.prototype.terms,
-    );
-    expect(isPublic).toBeUndefined();
+    expect(isPublic('terms')).toBeUndefined();
   });
 
   it('devolve só os campos do catálogo', () => {
