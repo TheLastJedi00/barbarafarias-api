@@ -12,6 +12,16 @@ export interface MonthlyOverview {
   manualRevenue: number;
   /** Parte da receita que veio da loja de módulos, líquida (spec 032). */
   storeRevenue: number;
+  /**
+   * Parte da receita que veio dos sinais das turmas que começaram neste mês,
+   * líquida (spec 036 §5).
+   */
+  enrollmentRevenue: number;
+  /**
+   * Sinais pagos neste mês de turmas ainda em formação, líquidos. **Fora da
+   * receita**: viram receita no mês do início, ou voltam no estorno.
+   */
+  enrollmentDeposits: number;
   /** Folha das professoras no fechamento do mês, sem a gerente (RF11). */
   teacherExpenses: number;
   /** Snapshot de infraestrutura vigente naquele mês (RF10). */

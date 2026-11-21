@@ -86,6 +86,23 @@ function setup(env: Record<string, string> = {}) {
   };
   const users = { findById: jest.fn().mockResolvedValue({ ...buyerUser }) };
   const legal = {
+    getVersion: jest.fn().mockResolvedValue({
+      type: 'store-purchase',
+      version: '1.0',
+      title: 'Termo de Compra',
+      markdown: [
+        '# Termo',
+        '',
+        'Intro.',
+        '',
+        '## 1. Acesso',
+        '',
+        'Vale **90 dias**.',
+      ].join('\n'),
+      effectiveDate: '2026-10-01',
+      requiresReacceptance: false,
+      publishedAt: '',
+    }),
     requirement: jest.fn().mockResolvedValue({ publishedVersion: '1.0' }),
   };
   const gateway = {
@@ -111,6 +128,9 @@ function setup(env: Record<string, string> = {}) {
   const storage = {
     signedReadUrl: jest.fn().mockResolvedValue('https://signed'),
   };
+  const contracts = {
+    recordSafely: jest.fn(async (input: any) => input),
+  };
   const service = new StorePurchaseService(
     products as any,
     purchases as any,
@@ -121,11 +141,13 @@ function setup(env: Record<string, string> = {}) {
     config as any,
     notifications as any,
     storage as any,
+    contracts as any,
   );
   const lastSaved = (): StorePurchase =>
     purchases.save.mock.calls.at(-1)![0] as StorePurchase;
   return {
     service,
+    contracts,
     products,
     purchases,
     users,
@@ -144,6 +166,32 @@ const createPix = {
 };
 
 describe('StorePurchaseService (spec 032 §7)', () => {
+  describe('contrato em PDF (spec 036)', () => {
+    it('a compra grava o contrato com o termo publicado aceito, em cláusulas', async () => {
+      const { service, contracts } = setup();
+      await service.create(requester, createPix);
+
+      const contrato = contracts.recordSafely.mock.calls[0][0];
+      expect(contrato).toMatchObject({
+        kind: 'STORE',
+        refId: 'c1',
+        studentId: 'u1',
+        termsVersion: '1.0',
+        title: 'Compra — Módulo 1 — A1',
+      });
+      expect(contrato.clauses).toEqual([
+        { title: 'Termo', body: 'Intro.' },
+        { title: '1. Acesso', body: 'Vale 90 dias.' },
+      ]);
+      expect(contrato.deal).toEqual(
+        expect.arrayContaining([
+          { label: 'Produto', value: 'Módulo 1 — A1' },
+          { label: 'Forma de pagamento', value: 'PIX' },
+        ]),
+      );
+    });
+  });
+
   describe('create', () => {
     it('PIX: grava a compra pendente, emite o QR com a referência da loja e guarda a order', async () => {
       const { service, gateway, lastSaved } = setup();

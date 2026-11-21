@@ -1,6 +1,6 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { User } from './user.entity';
-import { Firestore } from 'firebase-admin/firestore';
+import { FieldValue, Firestore } from 'firebase-admin/firestore';
 import { FIRESTORE } from '../firestore/firestore.module';
 import { instanceToPlain, plainToInstance } from 'class-transformer';
 import { ROLES, Role, resolveRole } from '../types/role';
@@ -101,6 +101,10 @@ export class UserRepository {
       /** Ausente = não mexe (a assinatura antiga não apaga o tier). */
       planTier?: string;
       fidelityBrokenAt?: string;
+      /** Spec 036: início da turma; `null` limpa (plano que já começou). */
+      accessFrom?: string | null;
+      /** Spec 036: plano de tier pago tira o `tier: 'modules'` da loja. */
+      leavesStore?: boolean;
     },
   ): Promise<void> {
     await this.db
@@ -116,6 +120,10 @@ export class UserRepository {
           ...(state.fidelityBrokenAt
             ? { fidelityBrokenAt: state.fidelityBrokenAt }
             : {}),
+          ...(state.accessFrom !== undefined
+            ? { accessFrom: state.accessFrom }
+            : {}),
+          ...(state.leavesStore ? { tier: FieldValue.delete() } : {}),
         },
         { merge: true },
       );

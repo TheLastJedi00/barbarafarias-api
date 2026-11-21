@@ -121,6 +121,7 @@ describe('PlanTierService — gestão', () => {
     expect(tier.pending).toEqual({
       packagePrice: 2000,
       monthlyPrice: 320,
+      enrollmentFee: null,
       effectiveAt: MEIA_NOITE,
       requestedBy: 'gerente-1',
       requestedAt: AGORA.toISOString(),
@@ -261,5 +262,101 @@ describe('PlanTierService — preço para a cobrança', () => {
     await expect(service.getEffective('vip' as any, AGORA)).rejects.toThrow(
       BadRequestException,
     );
+  });
+});
+
+describe('PlanTierService — matrícula dos grupos (spec 036)', () => {
+  const GRUPO = { active: true, packagePrice: 1200, monthlyPrice: 230 };
+
+  it('o sinal é agendado para a meia-noite, como os preços', async () => {
+    const { service, repo } = build({ 'weekly-group': GRUPO });
+    await service.update(
+      'weekly-group',
+      { enrollmentFee: 150 },
+      GERENTE,
+      AGORA,
+    );
+
+    const salvo = repo.store.get('weekly-group')!;
+    expect(salvo.enrollmentFee ?? null).toBeNull();
+    expect(salvo.pending).toMatchObject({
+      enrollmentFee: 150,
+      packagePrice: 1200,
+      monthlyPrice: 230,
+      effectiveAt: MEIA_NOITE,
+    });
+
+    const depois = new Date('2026-11-21T03:00:01Z');
+    const [vitrine] = (await service.listPublic(depois)).filter(
+      (tier) => tier.id === 'weekly-group',
+    );
+    expect(vitrine.enrollmentFee).toBe(150);
+  });
+
+  it('mudar só o pacote não desfaz o sinal agendado', async () => {
+    const { service, repo } = build({ 'weekly-group': GRUPO });
+    await service.update(
+      'weekly-group',
+      { enrollmentFee: 150 },
+      GERENTE,
+      AGORA,
+    );
+    await service.update(
+      'weekly-group',
+      { packagePrice: 1300 },
+      GERENTE,
+      AGORA,
+    );
+    expect(repo.store.get('weekly-group')!.pending).toMatchObject({
+      enrollmentFee: 150,
+      packagePrice: 1300,
+    });
+  });
+
+  it('sinal maior que a mensalidade ou o pacote é recusado', async () => {
+    const { service } = build({ 'weekly-group': GRUPO });
+    await expect(
+      service.update('weekly-group', { enrollmentFee: 300 }, GERENTE, AGORA),
+    ).rejects.toBeInstanceOf(BadRequestException);
+  });
+
+  it('a Premium não tem matrícula: não há turma para formar', async () => {
+    const { service } = build({ private: VENDAVEL });
+    await expect(
+      service.update('private', { enrollmentFee: 100 }, GERENTE, AGORA),
+    ).rejects.toBeInstanceOf(BadRequestException);
+  });
+
+  it('sinal nulo fecha a matrícula (a partir da meia-noite)', async () => {
+    const { service, repo } = build({
+      'monthly-group': { ...GRUPO, monthlyPrice: null, enrollmentFee: 100 },
+    });
+    await service.update(
+      'monthly-group',
+      { enrollmentFee: null },
+      GERENTE,
+      AGORA,
+    );
+    expect(repo.store.get('monthly-group')!.pending).toMatchObject({
+      enrollmentFee: null,
+    });
+  });
+
+  it('agendado antigo, sem o campo, mantém o sinal vigente', async () => {
+    const { service } = build({
+      'weekly-group': {
+        ...GRUPO,
+        enrollmentFee: 120,
+        pending: {
+          packagePrice: 1300,
+          monthlyPrice: 230,
+          effectiveAt: '2026-11-20T03:00:00.000Z',
+          requestedBy: 'g',
+          requestedAt: '',
+        },
+      },
+    });
+    const tier = await service.getEffective('weekly-group', AGORA);
+    expect(tier).toMatchObject({ packagePrice: 1300, enrollmentFee: 120 });
   });
 });

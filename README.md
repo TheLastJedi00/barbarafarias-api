@@ -71,7 +71,7 @@ npm run start:prod
 | `MUX_WEBHOOK_SECRET` | Assinatura do webhook `POST /webhooks/mux`. **Ausente = webhook recusado** |
 | `DEV_MODE` | `true` libera `POST /subscriptions/dev/mock-pay` (simulação de PIX). **Nunca em produção** |
 | `APP_BASE_URL` | Base do frontend, usada nas URLs de retorno do checkout de cartão |
-| `CRON_SECRET` | Segredo do cron da Vercel (spec 035). A Vercel manda `Authorization: Bearer <CRON_SECRET>` em `/internal/cron/plan-prices`. **Ausente = 503** — o cron nunca roda aberto |
+| `CRON_SECRET` | Segredo dos crons da Vercel (specs 035 e 036). A Vercel manda `Authorization: Bearer <CRON_SECRET>` em `/internal/cron/plan-prices` e `/internal/cron/turmas`. **Ausente = 503** — o cron nunca roda aberto |
 | `LEGACY_PLANS_CLOSED` | `true` fecha a venda dos planos antigos (`MONTHLY`/`SEMIANNUAL`/`ANNUAL`) com 410; quem já tem segue como contratou (spec 035). Ligar só depois do front da 035 no ar |
 
 > **`.env.example`** na raiz lista todas as variáveis obrigatórias — copie para `.env` e preencha.
@@ -1287,8 +1287,78 @@ Grupos nomeados de alunos, alocáveis num slot da agenda. Todas as rotas exigem 
 |---|---|---|
 | `GET` | `/turmas` | Lista todas as turmas |
 | `POST` | `/turmas` | Cria turma — body `{ name, studentIds[], studentNames[] }` |
-| `PUT` | `/turmas/:id` | Substitui a turma (mesmo body do POST) |
+| `PUT` | `/turmas/:id` | Atualiza nome, alunos e sala (mescla: não apaga o calendário de uma turma em formação) |
 | `DELETE` | `/turmas/:id` | Exclui a turma |
+
+#### Turmas em formação (spec 036)
+
+As turmas dos planos em grupo (`weekly-group`, `monthly-group`) **se formam antes de
+começar**: a gerente cria com dia, horário, início, mínimo (padrão 5) e máximo (padrão 8); o
+aluno se matricula pagando um **sinal** (abatido do plano); a gerente confirma, adia ou cancela.
+
+- **Calendário** (`turma-schedule.ts`): grupo semanal toda semana no `dayOfWeek`; grupo mensal
+  só nas duas `weeksOfMonth` (semana do mês = `ceil(dia/7)`, sem 5ª semana), uma delas
+  (`founderWeek`) com a fundadora — a gerente que criou a turma (`founderId`). O início precisa
+  ser futuro e cair no calendário; o backend recusa o resto (400). Aula de 1 hora: início até
+  20:00.
+- **Aulas**: turma com calendário próprio **não sai da grade semanal**. `ensureLessons` gera as
+  aulas dela pelo calendário, **só confirmada e a partir do início**.
+- **"Em andamento" não é estado gravado**: é `CONFIRMED` com início no passado.
+
+| Método | Rota | Auth | Descrição |
+|---|---|---|---|
+| `GET` | `/turmas/forming` | `manager` | Turmas com calendário próprio |
+| `POST` | `/turmas/forming` | `manager` | Cria a turma em formação |
+| `PATCH` | `/turmas/forming/:id` | `manager` | Edita (calendário e limites só em `FORMING`; tudo é conferido de novo) |
+| `GET` | `/turmas/forming/overview` | `manager` | Turmas com `paid` e `pending` (Gestão › Turmas) |
+| `GET` | `/turmas/forming/:id/enrollments` | `manager` | Matrículas da turma |
+| `POST` | `/turmas/forming/:id/confirm` | `manager` | Confirma: cada matrícula paga vira assinatura `PENDING` (preço de hoje, cupom, sinal abatido, início da turma). Abaixo do mínimo, só com `{ force: true }`. Devolve `{ converted, failed[] }` |
+| `POST` | `/turmas/forming/:id/postpone` | `manager` | `{ startDate }` compatível; grava `startHistory` e libera a desistência do sinal até o novo início |
+| `POST` | `/turmas/forming/:id/cancel` | `manager` | Devolve todos os sinais pagos; idempotente (cancelar de novo tenta só os estornos que falharam) |
+| `GET` | `/internal/cron/turmas` | `CRON_SECRET` | Cron diário (`0 11 * * *`, 08:00 de Brasília): lembra a gerente das turmas que começam em até 7 dias sem decisão |
+
+### 🎟️ Matrícula — `/enrollments` (Spec 036)
+
+O sinal da vaga numa turma em formação. À vista (PIX ou cartão 1x, Orders API), **só conta
+para o mínimo e o máximo depois de pago**. Desistência em 7 dias do pagamento, ou até o novo
+início se a turma for adiada depois do pagamento. A order leva `external_reference
+enrollment:<id>`, e o webhook do Mercado Pago a entrega aqui depois da loja e antes da
+assinatura. Pagamento que chega com a turma já lotada é **estornado** e avisado.
+
+O valor do sinal é **por tier** (`planTiers.enrollmentFee`), agendado para a meia-noite como os
+preços e limitado à mensalidade e ao pacote. Os arquivos ficam em `src/enrollments/`, mas o
+módulo que os provê é o `SubscriptionModule`: confirmar a turma cria assinaturas, e o webhook de
+lá atende o sinal.
+
+| Método | Rota | Auth | Descrição |
+|---|---|---|---|
+| `GET` | `/enrollments/turmas` | 🔓 pública | Turmas abertas (em formação, início futuro, com vaga e sinal): dia, horário, início, vagas e sinal — **sem alunos**. `s-maxage=300` |
+| `GET` | `/enrollments/terms?turmaId=&mode=` | `student` | Termo da matrícula (`ENROLLMENT_TERMS_VERSION`, rascunho para revisão) |
+| `POST` | `/enrollments` | `student` | `{ turmaId, mode, paymentMethod, couponCode?, acceptance }`. Grava a matrícula e **o contrato**, e cobra o sinal (PIX devolve o QR; cartão devolve `card` para o Brick) |
+| `POST` | `/enrollments/me/card` | `student` | Cobra o sinal com o token do Brick |
+| `POST` | `/enrollments/me/card/refresh` | `student` | Relê a order depois do 3DS |
+| `GET` | `/enrollments/me` | `student` | Matrícula mais recente com a turma (`paid`, `startHistory`) e `withdrawUntil` |
+| `POST` | `/enrollments/me/withdraw` | `student` | Desistência (estorno pelo gateway de origem; pendente só se encerra) |
+| `POST` | `/enrollments/dev/mock-pay` | `student` | **Só com `DEV_MODE=true`** — simula o sinal |
+
+O plano nascido da turma conta **do início da turma**: cronograma, fidelidade e `accessUntil`. O
+acesso só abre no início, mesmo pago antes — `users.accessFrom`, lido por `hasPaidAccess`. Pago o
+plano de tier, quem chegou pelo cadastro da loja perde o `tier: 'modules'`.
+
+### 📄 Contratos — `/contracts` (Spec 036)
+
+**Todo aceite que antecede um pagamento gera um contrato**: matrícula, plano (035 e antigos) e
+compra da loja. O documento guarda **o texto aceito** (resumo e cláusulas) e o negócio, e é
+**imutável** (id `KIND_refId`, `create` do Firestore). O PDF é gerado sob demanda com `pdf-lib`
+(fontes padrão, sem arquivo no disco — o bundle da Vercel não os leva; acentos do Latin-1).
+
+| Método | Rota | Auth | Descrição |
+|---|---|---|---|
+| `GET` | `/contracts/me` | `student` | Contratos do aluno (sem as cláusulas) |
+| `GET` | `/contracts/me/:id/pdf` | `student` | PDF do próprio contrato (404 para o de outra pessoa) |
+| `GET` | `/contracts/student/:studentId` | `manager` | Contratos de um aluno |
+| `GET` | `/contracts/student/:studentId/:id/pdf` | `manager` | PDF de um contrato do aluno |
+| `POST` | `/admin/backfill-contracts` | `manager` | Gera os contratos dos aceites antigos **só com texto exato** (loja: versão publicada no Jurídico; plano antigo: versão vigente no código). Idempotente; devolve `{ created, alreadyExisted, skipped[] }` |
 
 ---
 
@@ -2341,9 +2411,22 @@ Grupos nomeados de alunos.
 {
   "name": "string",
   "studentIds": ["string"],
-  "studentNames": ["string"]
+  "studentNames": ["string"],
+  "teacherId": "string?", "teacherName": "string?", "meetUrl": "string?",
+
+  "tierId": "'weekly-group' | 'monthly-group' — presente = turma em formação (spec 036)",
+  "dayOfWeek": "0..6", "hour": "decimal (19.5 = 19:30)",
+  "weeksOfMonth": "[number, number] — só no mensal",
+  "founderWeek": "number — só no mensal", "founderId": "string?", "founderName": "string?",
+  "startDate": "'YYYY-MM-DD'", "minStudents": "number (5)", "maxStudents": "number (8)",
+  "status": "'FORMING' | 'CONFIRMED' | 'CANCELLED'",
+  "confirmedAt": "ISO?", "cancelledAt": "ISO?",
+  "startHistory": [{ "from": "date", "to": "date", "at": "ISO", "by": "uid" }],
+  "reminderSentAt": "ISO? — lembrete de 7 dias", "minReachedNotifiedAt": "ISO?"
 }
 ```
+
+> Os campos da spec 036 são todos opcionais: turma antiga não muda e continua na agenda.
 
 ### 7. `agenda`
 Slots da grade semanal recorrente (1 ocupante por slot **de 30 min**).
@@ -2772,9 +2855,57 @@ Os três tiers (spec 035). Semeados na primeira leitura, **inativos e sem preço
 }
 ```
 
+> Spec 036: `enrollmentFee: number | null` nos tiers de grupo (sinal da matrícula), agendado
+> junto com os preços em `pending.enrollmentFee`. Agendado antigo sem o campo não mexe no sinal.
+
 > Subcoleção `planTiers/{id}/priceHistory`: um registro por preço que entrou em vigor.
 > `pending` com `effectiveAt` no passado **já é o preço** — a leitura decide, o cron só
 > arruma o documento. Assim um cron atrasado nunca vende pelo preço velho.
+
+### 21. `enrollments`
+Matrículas em turmas em formação (spec 036). Uma viva (`PENDING`/`PAID`) por aluno.
+- **Doc ID:** id automático
+```json
+{
+  "studentId": "string", "studentName": "string",
+  "turmaId": "string", "tierId": "'weekly-group' | 'monthly-group'",
+  "mode": "'PACKAGE' | 'SUBSCRIPTION' — como pagar o plano quando fechar",
+  "paymentMethod": "'PIX_RECURRING' | 'CREDIT_CARD' — do sinal",
+  "feeAmount": "number — sinal congelado",
+  "couponCode": "string? — aplicado no plano na confirmação",
+  "status": "'PENDING' | 'PAID' | 'CONVERTED' | 'REFUNDED' | 'CANCELLED'",
+  "gateway": { "orderId": "string" },
+  "termsVersion": "string",
+  "paidAt": "ISO?", "convertedAt": "ISO?", "refundedAt": "ISO?", "cancelledAt": "ISO?",
+  "refund": { "by": "'student' | 'manager' | 'turma-cancelled'", "at": "ISO" },
+  "startDate": "'YYYY-MM-DD'? — início da turma na conversão (Financeiro)",
+  "createdAt": "ISO", "updatedAt": "ISO"
+}
+```
+
+> No Financeiro o sinal **pago com a turma em formação** aparece à parte
+> (`enrollmentDeposits`), fora da receita; **convertido**, vira receita no mês do início
+> (`enrollmentRevenue`), líquido da taxa como a loja.
+
+### 22. `contracts`
+Contratos em PDF (spec 036 §6). **Imutáveis**: o repositório só cria.
+- **Doc ID:** `KIND_refId` (ex.: `ENROLLMENT_abc`, `PLAN_<aceite>`, `STORE_<compra>`)
+```json
+{
+  "studentId": "string", "studentName": "string", "studentEmail": "string",
+  "kind": "'ENROLLMENT' | 'PLAN' | 'STORE'", "refId": "string",
+  "title": "string", "termsVersion": "string",
+  "summary": "string", "clauses": [{ "title": "string", "body": "string" }],
+  "deal": [{ "label": "string", "value": "string" }],
+  "acceptedAt": "ISO", "createdAt": "ISO"
+}
+```
+
+> O texto é **copiado no aceite**, não remontado: os termos do plano e da matrícula saem do
+> catálogo, e remontar depois devolveria o texto de hoje.
+
+`users` ganhou `accessFrom` (spec 036): plano de turma pago antes do início só dá acesso a
+partir desta data.
 
 ---
 

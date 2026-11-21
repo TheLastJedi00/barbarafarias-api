@@ -42,6 +42,11 @@ export class User {
    * `hasPaidAccess`.
    */
   manualAccessUntil?: string;
+  /**
+   * Plano de turma pago antes do início (spec 036): o acesso só abre nesta
+   * data. Espelho da assinatura, escrito pelo `syncUser`.
+   */
+  accessFrom?: string | null;
   /** @deprecated substituído por `role`; mantido durante a migração (spec 010 §2.1). */
   isTeacher!: boolean;
   role?: Role;

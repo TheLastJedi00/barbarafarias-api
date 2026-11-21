@@ -14,6 +14,7 @@ import {
 } from './mercadopago.gateway';
 import { Public } from '../decorators/public.decorator';
 import { StorePurchaseService } from '../store/store-purchase.service';
+import { EnrollmentService } from '../enrollments/enrollment.service';
 import { MP_TOPICS } from './mercadopago.gateway';
 
 /**
@@ -41,6 +42,7 @@ export class MercadoPagoWebhookController {
     private readonly service: SubscriptionService,
     private readonly mercadoPago: MercadoPagoGateway,
     private readonly store: StorePurchaseService,
+    private readonly enrollments: EnrollmentService,
   ) {}
 
   /**
@@ -93,6 +95,13 @@ export class MercadoPagoWebhookController {
     if (
       event.topic === MP_TOPICS.ORDER &&
       (await this.store.handleOrderEvent(event.id, event.order))
+    ) {
+      return { received: true };
+    }
+    // Spec 036: o sinal da matrícula também é uma order avulsa.
+    if (
+      event.topic === MP_TOPICS.ORDER &&
+      (await this.enrollments.handleOrderEvent(event.id, event.order))
     ) {
       return { received: true };
     }

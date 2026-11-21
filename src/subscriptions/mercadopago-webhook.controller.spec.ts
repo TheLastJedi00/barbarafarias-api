@@ -22,14 +22,18 @@ function build() {
   };
   // Por padrão a order não é da loja: segue para a assinatura.
   const store = { handleOrderEvent: jest.fn().mockResolvedValue(false) };
+  // Nem da matrícula (spec 036).
+  const enrollments = { handleOrderEvent: jest.fn().mockResolvedValue(false) };
   return {
     service,
     gateway,
     store,
+    enrollments,
     controller: new MercadoPagoWebhookController(
       service as any,
       gateway as any,
       store as any,
+      enrollments as any,
     ),
   };
 }

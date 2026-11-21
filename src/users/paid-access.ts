@@ -21,20 +21,25 @@ export function hasPaidAccess(
     isPaying?: boolean;
     accessUntil?: string;
     manualAccessUntil?: string;
+    /** Spec 036: plano de turma pago antes do início só vale a partir dele. */
+    accessFrom?: string | null;
   },
   hoje: Date = new Date(),
 ): boolean {
-  if (user.isPaying !== false) return true;
-
   // Comparação por data, não por instante: o acesso vale o **dia** inteiro do
   // vencimento. Cortar às 00:00 tiraria da aluna o último dia que ela comprou.
   const dia = hoje.toISOString().slice(0, 10);
+
+  // A liberação manual da gerente vale sempre, até antes do início da turma.
+  if (user.manualAccessUntil && dia <= user.manualAccessUntil) return true;
+  if (user.accessFrom && dia < user.accessFrom) return false;
+
+  if (user.isPaying !== false) return true;
 
   // Duas metades, e basta uma. A da assinatura é o que o gateway confirmou; a
   // manual é o que a gerente recebeu por fora e registrou (spec 025). Somar
   // aqui é o que permite ao `syncUser` continuar reescrevendo o espelho da
   // assinatura sem derrubar a concessão dela.
   if (user.accessUntil && dia <= user.accessUntil) return true;
-  if (user.manualAccessUntil && dia <= user.manualAccessUntil) return true;
   return false;
 }

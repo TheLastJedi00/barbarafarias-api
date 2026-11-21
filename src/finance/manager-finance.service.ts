@@ -1,4 +1,9 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Optional } from '@nestjs/common';
+import { EnrollmentRepository } from '../enrollments/enrollment.repository';
+import {
+  ENROLLMENT_STATUS,
+  type Enrollment,
+} from '../enrollments/enrollment.model';
 import { BillingSummaryService } from '../billing/billing-summary.service';
 import { SubscriptionRepository } from '../subscriptions/subscription.repository';
 import { InfraExpenseService } from './infra-expense.service';
@@ -48,6 +53,7 @@ export class ManagerFinanceService {
     private readonly goals: RevenueGoalService,
     private readonly manualPayments: ManualPaymentRepository,
     private readonly storePurchases: StorePurchaseRepository,
+    @Optional() private readonly enrollments?: EnrollmentRepository,
   ) {}
 
   async getMonthlyOverview(month: string): Promise<MonthlyOverview> {
@@ -65,6 +71,8 @@ export class ManagerFinanceService {
       revenue: revenue.total,
       manualRevenue: revenue.manual,
       storeRevenue: revenue.store,
+      enrollmentRevenue: revenue.enrollment,
+      enrollmentDeposits: revenue.deposits,
       teacherExpenses,
       infraExpenses,
       profit: round2(revenue.total - teacherExpenses - infraExpenses),
@@ -82,21 +90,30 @@ export class ManagerFinanceService {
    */
   async getAnnualOverview(year: number): Promise<AnnualOverview> {
     const months = monthsOfYear(year);
-    const [active, infraBreakdown, goals, teacherExpenses, manual, store] =
-      await Promise.all([
-        this.activeSubscriptions(),
-        this.infraExpenses.getAnnualBreakdown(year),
-        this.goals.getGoals(year),
-        Promise.all(months.map((month) => this.teacherExpensesForMonth(month))),
-        this.manualPayments.findByYear(year),
-        this.storePurchases.findAll(),
-      ]);
+    const [
+      active,
+      infraBreakdown,
+      goals,
+      teacherExpenses,
+      manual,
+      store,
+      enrollments,
+    ] = await Promise.all([
+      this.activeSubscriptions(),
+      this.infraExpenses.getAnnualBreakdown(year),
+      this.goals.getGoals(year),
+      Promise.all(months.map((month) => this.teacherExpensesForMonth(month))),
+      this.manualPayments.findByYear(year),
+      this.storePurchases.findAll(),
+      this.allEnrollments(),
+    ]);
 
     const data: MonthData[] = months.map((month, index) => {
       const revenue = round2(
         sumScheduledCharges(active, month) +
           sumManualPayments(manual, month) +
-          sumStoreSales(store, month),
+          sumStoreSales(store, month) +
+          sumEnrollmentRevenue(enrollments, month),
       );
       const infra = infraBreakdown[index].amount;
       const teachers = teacherExpenses[index];
@@ -191,23 +208,36 @@ export class ManagerFinanceService {
     total: number;
     manual: number;
     store: number;
+    enrollment: number;
+    deposits: number;
     activeStudents: number;
   }> {
-    const [active, manual, store] = await Promise.all([
+    const [active, manual, store, enrollments] = await Promise.all([
       this.activeSubscriptions(),
       this.manualPayments.findByMonth(month),
       this.storePurchases.findAll(),
+      this.allEnrollments(),
     ]);
     const manualTotal = sumManualPayments(manual, month);
     const storeTotal = sumStoreSales(store, month);
+    const enrollmentTotal = sumEnrollmentRevenue(enrollments, month);
     return {
       total: round2(
-        sumScheduledCharges(active, month) + manualTotal + storeTotal,
+        sumScheduledCharges(active, month) +
+          manualTotal +
+          storeTotal +
+          enrollmentTotal,
       ),
       manual: manualTotal,
       store: storeTotal,
+      enrollment: enrollmentTotal,
+      deposits: sumEnrollmentDeposits(enrollments, month),
       activeStudents: countPayingStudents(active, manual, month),
     };
+  }
+
+  private async allEnrollments(): Promise<Enrollment[]> {
+    return this.enrollments ? this.enrollments.findAll() : [];
   }
 
   private async activeSubscriptions(): Promise<Subscription[]> {
@@ -346,6 +376,50 @@ export function sumStoreSales(
             toZonedDateString(new Date(purchase.paidAt)).startsWith(month),
         )
         .map((purchase) => purchase.priceSnapshot),
+    ),
+  );
+}
+
+/**
+ * Sinais das turmas que **começaram** no mês (spec 036 §5): receita na
+ * competência do início, junto com o plano. Líquido da taxa, como a loja.
+ */
+export function sumEnrollmentRevenue(
+  enrollments: Enrollment[],
+  month: string,
+): number {
+  return netOfGatewayFee(
+    sum(
+      enrollments
+        .filter(
+          (e) =>
+            e.status === ENROLLMENT_STATUS.CONVERTED &&
+            !!e.startDate &&
+            e.startDate.startsWith(month),
+        )
+        .map((e) => e.feeAmount),
+    ),
+  );
+}
+
+/**
+ * Sinais pagos no mês de turmas ainda em formação: dinheiro em caixa que
+ * ainda não é receita — vira receita no início, ou volta no estorno.
+ */
+export function sumEnrollmentDeposits(
+  enrollments: Enrollment[],
+  month: string,
+): number {
+  return netOfGatewayFee(
+    sum(
+      enrollments
+        .filter(
+          (e) =>
+            e.status === ENROLLMENT_STATUS.PAID &&
+            !!e.paidAt &&
+            toZonedDateString(new Date(e.paidAt)).startsWith(month),
+        )
+        .map((e) => e.feeAmount),
     ),
   );
 }

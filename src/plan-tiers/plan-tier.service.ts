@@ -15,6 +15,7 @@ import {
   type PlanTier,
   type PlanTierId,
   type PublicPlanTier,
+  isGroupTier,
 } from './plan-tier.model';
 import type { UpdatePlanTierDto } from './dto/plan-tier.dto';
 
@@ -73,8 +74,16 @@ export class PlanTierService {
     }
     if (dto.active !== undefined) tier.active = dto.active;
 
+    if (dto.enrollmentFee !== undefined && !isGroupTier(id)) {
+      throw new BadRequestException(
+        'Só os planos em grupo têm matrícula: é a vaga numa turma em formação.',
+      );
+    }
+
     const mexeuNoPreco =
-      dto.packagePrice !== undefined || dto.monthlyPrice !== undefined;
+      dto.packagePrice !== undefined ||
+      dto.monthlyPrice !== undefined ||
+      dto.enrollmentFee !== undefined;
     if (mexeuNoPreco) {
       // A base de cada preço é o agendado, se houver: alterar só a mensalidade
       // não pode desfazer o pacote que a gerente agendou mais cedo.
@@ -89,15 +98,36 @@ export class PlanTierService {
             ? tier.pending.monthlyPrice
             : tier.monthlyPrice;
 
+      const enrollmentFee =
+        dto.enrollmentFee !== undefined
+          ? dto.enrollmentFee
+          : tier.pending && tier.pending.enrollmentFee !== undefined
+            ? tier.pending.enrollmentFee
+            : (tier.enrollmentFee ?? null);
+
+      // O sinal é abatido do plano (spec 036 §5): maior que a mensalidade ou o
+      // pacote, o abatimento deixaria saldo a devolver em vez de a cobrar.
+      if (
+        enrollmentFee !== null &&
+        ((monthlyPrice !== null && enrollmentFee > monthlyPrice) ||
+          (packagePrice !== null && enrollmentFee > packagePrice))
+      ) {
+        throw new BadRequestException(
+          'O sinal da matrícula não pode passar da mensalidade nem do pacote: ele é abatido do plano.',
+        );
+      }
+
       const igualAoVigente =
         packagePrice === tier.packagePrice &&
-        monthlyPrice === tier.monthlyPrice;
+        monthlyPrice === tier.monthlyPrice &&
+        enrollmentFee === (tier.enrollmentFee ?? null);
 
       tier.pending = igualAoVigente
         ? null
         : {
             packagePrice,
             monthlyPrice,
+            enrollmentFee,
             effectiveAt: nextPriceEffectiveAt(now).toISOString(),
             requestedBy: user.sub,
             requestedAt: now.toISOString(),
@@ -147,6 +177,9 @@ export class PlanTierService {
       await this.tiers.addHistory(tier.id, {
         packagePrice: pending.packagePrice,
         monthlyPrice: pending.monthlyPrice,
+        ...(pending.enrollmentFee !== undefined
+          ? { enrollmentFee: pending.enrollmentFee }
+          : {}),
         effectiveAt: pending.effectiveAt,
         requestedBy: pending.requestedBy,
         appliedAt: now.toISOString(),

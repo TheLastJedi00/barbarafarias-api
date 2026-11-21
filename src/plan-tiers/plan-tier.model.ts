@@ -34,6 +34,11 @@ export const FIDELITY_MONTHS = 6;
 export interface PendingPrice {
   packagePrice: number | null;
   monthlyPrice: number | null;
+  /**
+   * Sinal da matrícula (spec 036). **Ausente** num agendado anterior à 036 =
+   * não mexe no sinal vigente; `null` = fecha a matrícula.
+   */
+  enrollmentFee?: number | null;
   /** ISO do instante em que passa a valer. */
   effectiveAt: string;
   requestedBy: string;
@@ -49,6 +54,11 @@ export interface PlanTier {
   packagePrice: number | null;
   /** Mensalidade da assinatura. `null` = o tier não vende assinatura. */
   monthlyPrice: number | null;
+  /**
+   * Sinal da matrícula numa turma em formação (spec 036). Só nos tiers de
+   * grupo; `null` = o tier não abre matrícula.
+   */
+  enrollmentFee?: number | null;
   active: boolean;
   pending?: PendingPrice | null;
   updatedAt: string;
@@ -63,6 +73,8 @@ export interface PublicPlanTier {
   benefits: string[];
   packagePrice: number | null;
   monthlyPrice: number | null;
+  /** Sinal da matrícula (spec 036); `null` = sem matrícula aberta. */
+  enrollmentFee: number | null;
   packageMonths: number;
   fidelityMonths: number;
 }
@@ -147,8 +159,29 @@ export function effectiveTier(
     benefits: [...tier.benefits],
     packagePrice: pending.packagePrice,
     monthlyPrice: pending.monthlyPrice,
+    enrollmentFee:
+      pending.enrollmentFee !== undefined
+        ? pending.enrollmentFee
+        : (tier.enrollmentFee ?? null),
     pending: null,
   };
+}
+
+/** Os tiers que formam turma — e por isso têm matrícula (spec 036). */
+export function isGroupTier(id: PlanTierId): boolean {
+  return (
+    id === PLAN_TIER_IDS.WEEKLY_GROUP || id === PLAN_TIER_IDS.MONTHLY_GROUP
+  );
+}
+
+/** Tier de grupo à venda e com sinal: abre matrícula. */
+export function opensEnrollment(tier: PlanTier): boolean {
+  return (
+    isGroupTier(tier.id) &&
+    isSellable(tier) &&
+    typeof tier.enrollmentFee === 'number' &&
+    tier.enrollmentFee > 0
+  );
 }
 
 /** Ativo e com preço do pacote. É a condição para aparecer e para vender. */
@@ -189,6 +222,7 @@ export function publicTierView(tier: PlanTier): PublicPlanTier {
     benefits: [...tier.benefits],
     packagePrice: tier.packagePrice,
     monthlyPrice: tier.monthlyPrice,
+    enrollmentFee: tier.enrollmentFee ?? null,
     packageMonths: PACKAGE_MONTHS,
     fidelityMonths: FIDELITY_MONTHS,
   };

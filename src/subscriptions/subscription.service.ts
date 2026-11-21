@@ -6,8 +6,12 @@ import {
   Injectable,
   Logger,
   NotFoundException,
+  Optional,
   UnauthorizedException,
 } from '@nestjs/common';
+import { ContractService } from '../contracts/contract.service';
+import type { ContractDealLine } from '../contracts/contract.entity';
+import { buildTerms, buildTierTerms } from './plan-terms';
 import { ConfigService } from '@nestjs/config';
 import { SubscriptionRepository } from './subscription.repository';
 import { CouponRepository } from './coupon.repository';
@@ -59,7 +63,13 @@ import type {
   TierPlan,
 } from './subscription.entity';
 import { PlanTierService } from '../plan-tiers/plan-tier.service';
-import { isSellable, type PlanTier } from '../plan-tiers/plan-tier.model';
+import type { PlanTierId } from '../plan-tiers/plan-tier.model';
+import {
+  FIDELITY_MONTHS,
+  PACKAGE_MONTHS,
+  isSellable,
+  type PlanTier,
+} from '../plan-tiers/plan-tier.model';
 import {
   COUPON_PAYMENT_MODES,
   Coupon,
@@ -193,6 +203,7 @@ export class SubscriptionService {
     private readonly card: CardGateway,
     private readonly configService: ConfigService,
     private readonly planTiers: PlanTierService,
+    @Optional() private readonly contracts?: ContractService,
   ) {}
 
   // ---------------------------------------------------------------- aluno
@@ -466,7 +477,7 @@ export class SubscriptionService {
   ): Promise<void> {
     const config = regimeOf(subscription);
     const acordado = payerAmountsOf(subscription);
-    await this.acceptances.create(
+    const aceite = await this.acceptances.create(
       new PlanAcceptance({
         id: randomUUID(),
         studentId: student.id,
@@ -491,6 +502,159 @@ export class SubscriptionService {
         couponCode: subscription.couponCode,
       }),
     );
+    await this.recordContract(student, subscription, aceite);
+  }
+
+  /**
+   * Contrato em PDF (spec 036 §6), no mesmo passo do aceite e com o **texto**
+   * daquele instante — remontar depois devolveria o texto de hoje. No tier o
+   * texto sai com o preço congelado na contratação (`priceSnapshot`), não com
+   * o do catálogo, que pode virar à meia-noite entre a tela e o clique.
+   */
+  private async recordContract(
+    student: User,
+    subscription: Subscription,
+    aceite: PlanAcceptance,
+  ): Promise<void> {
+    if (!this.contracts) return;
+    try {
+      let terms: ReturnType<typeof buildTerms>;
+      if (isTierPlan(subscription.plan)) {
+        const tier = await this.planTiers.getEffective(subscription.tierId!);
+        const price = subscription.priceSnapshot ?? null;
+        terms = buildTierTerms(
+          subscription.plan === TIER_PLANS.PACKAGE
+            ? { ...tier, packagePrice: price }
+            : { ...tier, monthlyPrice: price },
+          subscription.plan,
+        );
+      } else {
+        terms = buildTerms(subscription.plan);
+      }
+      if (terms.version !== aceite.termsVersion) {
+        this.logger.warn(
+          `Aceite ${aceite.id} na versão ${aceite.termsVersion}, contrato gravado com a ${terms.version}.`,
+        );
+      }
+      await this.contracts.recordSafely({
+        studentId: student.id!,
+        studentName: student.fullName,
+        studentEmail: student.email,
+        kind: 'PLAN',
+        refId: aceite.id,
+        title: `Plano — ${terms.planLabel}`,
+        termsVersion: terms.version,
+        summary: terms.summary,
+        clauses: terms.clauses,
+        deal: this.dealOf(subscription, aceite),
+        acceptedAt: aceite.acceptedAt,
+      });
+    } catch (error) {
+      this.logger.error(
+        `Contrato do aceite ${aceite.id} não gravado: ${(error as Error).message}`,
+      );
+    }
+  }
+
+  private dealOf(
+    subscription: Subscription,
+    aceite: PlanAcceptance,
+  ): ContractDealLine[] {
+    const brl = (value: number) =>
+      value.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+    const metodo =
+      subscription.paymentMethod === PAYMENT_METHODS.PIX_RECURRING
+        ? 'PIX'
+        : 'Cartão de crédito';
+    const linhas: ContractDealLine[] = [
+      { label: 'Plano', value: aceite.planLabel },
+    ];
+    if (subscription.plan === TIER_PLANS.PACKAGE) {
+      linhas.push({
+        label: 'Valor',
+        value: `${brl(aceite.totalAmount)} pelo pacote de ${PACKAGE_MONTHS} meses`,
+      });
+    } else if (subscription.plan === TIER_PLANS.SUBSCRIPTION) {
+      linhas.push(
+        { label: 'Mensalidade', value: brl(aceite.installmentAmount) },
+        { label: 'Fidelidade', value: `${FIDELITY_MONTHS} meses` },
+      );
+    } else {
+      linhas.push({
+        label: 'Valor',
+        value: `${aceite.installments}x de ${brl(aceite.installmentAmount)} (total ${brl(aceite.totalAmount)})`,
+      });
+    }
+    linhas.push({ label: 'Forma de pagamento', value: metodo });
+    if (aceite.couponCode) {
+      linhas.push({ label: 'Cupom', value: aceite.couponCode });
+    }
+    return linhas;
+  }
+
+  /**
+   * O plano de quem se matriculou numa turma que a gerente confirmou (spec
+   * 036 §5): o preço vigente **hoje**, o cupom da matrícula, o sinal abatido e
+   * o cronograma, a fidelidade e o acesso contados do **início da turma**.
+   *
+   * Nasce pendente e no cartão: o aluno paga no Meu Plano (o pacote ainda
+   * pode trocar para PIX lá, e o QR sai na troca). Não grava aceite de plano:
+   * o que ele aceitou foi o termo da matrícula, que já descreve este plano e
+   * virou contrato.
+   */
+  async createFromEnrollment(input: {
+    studentId: string;
+    tierId: PlanTierId;
+    plan: TierPlan;
+    couponCode?: string;
+    credit: number;
+    startDate: string;
+  }): Promise<Subscription> {
+    const existing = await this.subscriptions.findByStudent(input.studentId);
+    if (existing && existing.status !== SUBSCRIPTION_STATUS.CANCELLED) {
+      throw new ConflictException(
+        'O aluno já tem um plano vivo; a troca é feita à mão pela gestão.',
+      );
+    }
+    const tier = await this.planTiers.getEffective(input.tierId);
+    const price =
+      input.plan === TIER_PLANS.PACKAGE ? tier.packagePrice : tier.monthlyPrice;
+    if (!price) {
+      throw new ConflictException(
+        `O plano ${tier.name} está sem preço para ${input.plan === TIER_PLANS.PACKAGE ? 'pacote' : 'assinatura'}.`,
+      );
+    }
+    const paymentMethod = PAYMENT_METHODS.CREDIT_CARD;
+
+    let coupon: ResolvedCoupon | null = null;
+    if (input.couponCode) {
+      try {
+        coupon = await this.resolveCoupon(input.couponCode, {
+          plan: input.plan,
+          paymentMethod,
+          tier,
+        });
+      } catch (error) {
+        // O cupom foi conferido na matrícula; se esgotou ou saiu do ar até a
+        // confirmação, o plano segue sem ele em vez de travar a turma.
+        this.logger.warn(
+          `Cupom ${input.couponCode} de ${input.studentId} não aplicado na confirmação: ${(error as Error).message}`,
+        );
+      }
+    }
+
+    const subscription = this.buildTierSubscription(
+      input.studentId,
+      input.plan,
+      tier,
+      paymentMethod,
+      coupon,
+      input.startDate,
+      input.credit,
+    );
+    await this.subscriptions.save(subscription);
+    await this.syncUser(subscription);
+    return subscription;
   }
 
   /** Todos os aceites, para a página de contratos da gerente (§7.4). */
@@ -1377,6 +1541,19 @@ export class SubscriptionService {
         ...(subscription.fidelityBrokenAt
           ? { fidelityBrokenAt: subscription.fidelityBrokenAt }
           : {}),
+        // Plano de turma (spec 036): pago antes do início, o acesso só abre
+        // no início. A data envelhece sozinha, como `accessUntil`.
+        accessFrom:
+          subscription.startDate > todayInAppTimezone()
+            ? subscription.startDate
+            : null,
+        // Quem chegou pelo cadastro da loja (spec 032) e pagou um plano de
+        // tier passa a ser aluno do plano: sem isto, o guard do front o
+        // mandaria para "Meus módulos" (spec 036, matrícula pela Academy).
+        ...(subscription.tierId &&
+        subscription.status === SUBSCRIPTION_STATUS.ACTIVE
+          ? { leavesStore: true }
+          : {}),
       });
     } catch (error) {
       // O espelho é conveniência de listagem; a assinatura já está gravada.
@@ -1579,6 +1756,7 @@ export class SubscriptionService {
     paymentMethod: PaymentMethod,
     coupon: ResolvedCoupon | null,
     today: string = todayInAppTimezone(),
+    credit: number = 0,
   ): Subscription {
     const isPackage = plan === TIER_PLANS.PACKAGE;
     const price = (isPackage ? tier.packagePrice : tier.monthlyPrice) ?? 0;
@@ -1592,6 +1770,8 @@ export class SubscriptionService {
     let totalAmount: number;
     if (isPackage) {
       totalAmount = coupon ? applyDiscount(price, coupon.discount) : price;
+      // O sinal da turma (spec 036) sai do total, depois do cupom.
+      if (credit > 0) totalAmount = applyDiscount(totalAmount, credit);
       const fatia = round2(totalAmount / regime.installments);
       for (let index = 1; index <= regime.installments; index++) {
         const ultima = index === regime.installments;
@@ -1613,6 +1793,10 @@ export class SubscriptionService {
           amount: this.amountFor(price, coupon, index),
           status: CHARGE_STATUS.PENDING,
         });
+      }
+      // Na assinatura, o sinal sai da primeira mensalidade (spec 036 §5).
+      if (credit > 0) {
+        charges[0].amount = applyDiscount(charges[0].amount, credit);
       }
     }
 
@@ -1637,6 +1821,7 @@ export class SubscriptionService {
       couponCode: coupon?.code,
       couponDiscount: coupon?.discount,
       couponRemainingCharges: coupon ? coupon.remaining : undefined,
+      ...(credit > 0 ? { enrollmentCredit: credit } : {}),
       createdAt: now,
       updatedAt: now,
     });
