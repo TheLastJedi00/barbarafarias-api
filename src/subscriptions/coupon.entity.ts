@@ -67,7 +67,9 @@ export class Coupon {
     this.discountValue ??= data.discountAmount ?? 0;
     this.usedCount ??= 0;
     this.discountAmount =
-      this.discountType === DISCOUNT_TYPES.AMOUNT ? this.discountValue : undefined;
+      this.discountType === DISCOUNT_TYPES.AMOUNT
+        ? this.discountValue
+        : undefined;
   }
 }
 

@@ -51,12 +51,14 @@ export class ManagerFinanceService {
   ) {}
 
   async getMonthlyOverview(month: string): Promise<MonthlyOverview> {
-    const [revenue, teacherExpenses, infraExpenses, goals] = await Promise.all([
-      this.revenueForMonth(month),
-      this.teacherExpensesForMonth(month),
-      this.infraExpenses.getForMonth(month),
-      this.goals.getGoals(Number(month.slice(0, 4))),
-    ]);
+    const [revenue, teacherExpenses, infraExpenses, goals, cancelled] =
+      await Promise.all([
+        this.revenueForMonth(month),
+        this.teacherExpensesForMonth(month),
+        this.infraExpenses.getForMonth(month),
+        this.goals.getGoals(Number(month.slice(0, 4))),
+        this.subscriptions.findByStatus(SUBSCRIPTION_STATUS.CANCELLED),
+      ]);
 
     return {
       month,
@@ -67,6 +69,7 @@ export class ManagerFinanceService {
       infraExpenses,
       profit: round2(revenue.total - teacherExpenses - infraExpenses),
       activeStudents: revenue.activeStudents,
+      fidelityBreaks: countFidelityBreaks(cancelled, month),
       goalTarget: goals.monthlyTargets?.[month.slice(5, 7)],
     };
   }
@@ -255,6 +258,23 @@ function sumScheduledCharges(
       ),
     ),
   );
+}
+
+/**
+ * Quebras de fidelidade num mês, pela data de Brasília (spec 035): a assinatura
+ * encerrada às 22h do dia 31 é do mês que termina, não do seguinte.
+ */
+export function countFidelityBreaks(
+  subscriptions: Subscription[],
+  month: string,
+): number {
+  return subscriptions.filter(
+    (subscription) =>
+      subscription.fidelityBrokenAt &&
+      toZonedDateString(new Date(subscription.fidelityBrokenAt)).startsWith(
+        month,
+      ),
+  ).length;
 }
 
 /**

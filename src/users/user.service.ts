@@ -164,6 +164,14 @@ export class UserService {
       throw new NotFoundException('User not found');
     }
     this.assertCanReach(requester, id, foundUser);
+    if (dto.planTier !== undefined) {
+      if (requester.role !== ROLES.MANAGER) {
+        throw new ForbiddenException('Só a gestão troca o plano do aluno.');
+      }
+      if (resolveRole(foundUser) !== ROLES.STUDENT) {
+        throw new BadRequestException('O plano só se aplica a aluno.');
+      }
+    }
     // merge over the existing user and pin the id from the route param,
     // so partial updates don't wipe fields nor depend on the request body id
     const user = new User({ ...foundUser, ...dto, id });

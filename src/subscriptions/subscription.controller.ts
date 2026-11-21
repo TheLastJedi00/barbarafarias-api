@@ -24,7 +24,12 @@ import type {
   PlanConfig,
   SubscriptionPlan,
 } from './subscription.entity';
-import { buildTerms } from './plan-terms';
+import { buildTerms, buildTierTerms } from './plan-terms';
+import { PlanTierService } from '../plan-tiers/plan-tier.service';
+import { isPlanTierId } from '../plan-tiers/plan-tier.model';
+import type { PlanTierId } from '../plan-tiers/plan-tier.model';
+import { TIER_PLANS } from './subscription.entity';
+import type { TierPlan } from './subscription.entity';
 import type { PlanAcceptanceView } from './plan-acceptance.entity';
 import { Roles } from '../decorators/roles.decorator';
 import { Public } from '../decorators/public.decorator';
@@ -41,7 +46,10 @@ import { ROLES } from '../types/role';
  */
 @Controller('subscriptions')
 export class SubscriptionController {
-  constructor(private readonly service: SubscriptionService) {}
+  constructor(
+    private readonly service: SubscriptionService,
+    private readonly planTiers: PlanTierService,
+  ) {}
 
   /**
    * Catálogo dos planos: alimenta o seletor (RF2) e, desde a spec 034, a
@@ -74,6 +82,29 @@ export class SubscriptionController {
       throw new BadRequestException('Plano inválido');
     }
     return buildTerms(plan as LegacyPlan);
+  }
+
+  /**
+   * O contrato de um tier num dos dois jeitos de comprar (spec 035), com o
+   * preço que vale agora — o mesmo que a contratação vai congelar. Mesmo
+   * acesso do contrato dos planos antigos: o aluno lê antes de pagar, a
+   * gerente lê na tela de contratos.
+   */
+  @Get('tiers/:tierId/terms')
+  @Roles(ROLES.STUDENT, ROLES.MANAGER)
+  async tierTerms(
+    @Param('tierId') tierId: PlanTierId,
+    @Query('plan') plan: TierPlan,
+  ) {
+    if (!isPlanTierId(tierId) || !Object.values(TIER_PLANS).includes(plan)) {
+      throw new BadRequestException('Plano inválido');
+    }
+    const tier = await this.planTiers.getEffective(tierId);
+    try {
+      return buildTierTerms(tier, plan);
+    } catch (error) {
+      throw new BadRequestException((error as Error).message);
+    }
   }
 
   /**

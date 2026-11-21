@@ -94,7 +94,8 @@ export const DEFAULT_TIERS: Record<PlanTierId, PlanTier> = {
   [PLAN_TIER_IDS.WEEKLY_GROUP]: {
     id: PLAN_TIER_IDS.WEEKLY_GROUP,
     name: 'Conversação semanal em grupo',
-    description: 'Conversação em turma toda semana e um encontro mensal com a fundadora.',
+    description:
+      'Conversação em turma toda semana e um encontro mensal com a fundadora.',
     benefits: [
       '1 aula em grupo por semana com uma professora',
       '1 aula em grupo por mês com a fundadora',
@@ -133,7 +134,10 @@ export const DEFAULT_TIERS: Record<PlanTierId, PlanTier> = {
  * falhar: se o preço dependesse dele, a vitrine e a cobrança passariam a
  * meia-noite com o valor velho. O cron só consolida o documento.
  */
-export function effectiveTier(tier: PlanTier, now: Date = new Date()): PlanTier {
+export function effectiveTier(
+  tier: PlanTier,
+  now: Date = new Date(),
+): PlanTier {
   const pending = tier.pending;
   if (!pending || pending.effectiveAt > now.toISOString()) {
     return { ...tier, benefits: [...tier.benefits] };
@@ -149,7 +153,11 @@ export function effectiveTier(tier: PlanTier, now: Date = new Date()): PlanTier 
 
 /** Ativo e com preço do pacote. É a condição para aparecer e para vender. */
 export function isSellable(tier: PlanTier): boolean {
-  return tier.active && typeof tier.packagePrice === 'number' && tier.packagePrice > 0;
+  return (
+    tier.active &&
+    typeof tier.packagePrice === 'number' &&
+    tier.packagePrice > 0
+  );
 }
 
 /** A próxima meia-noite de Brasília estritamente depois de `now`. */

@@ -750,9 +750,11 @@ describe('MercadoPagoGateway — estorno do pagamento de um ciclo (spec 035)', (
 
   it('falha do provedor estoura com o status, em vez de passar calada', async () => {
     const { gateway } = build();
-    global.fetch = jest
-      .fn()
-      .mockResolvedValue({ ok: false, status: 400, text: async () => 'x' }) as never;
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: false,
+      status: 400,
+      text: async () => 'x',
+    }) as never;
 
     await expect(gateway.refundPayment('987', 'r')).rejects.toThrow(/400/);
   });

@@ -1,24 +1,38 @@
 import { BadRequestException, NotFoundException } from '@nestjs/common';
 import { PlanTierService } from './plan-tier.service';
-import { DEFAULT_TIERS, type PlanTier, type PlanTierId } from './plan-tier.model';
+import {
+  DEFAULT_TIERS,
+  type PlanTier,
+  type PlanTierId,
+} from './plan-tier.model';
 
 const GERENTE = { sub: 'gerente-1' } as any;
 /** 20/11/2026 15:00 em Brasília. */
 const AGORA = new Date('2026-11-20T18:00:00Z');
 const MEIA_NOITE = '2026-11-21T03:00:00.000Z';
 
-function fakeRepository(overrides: Partial<Record<PlanTierId, Partial<PlanTier>>> = {}) {
+function fakeRepository(
+  overrides: Partial<Record<PlanTierId, Partial<PlanTier>>> = {},
+) {
   const store = new Map<PlanTierId, PlanTier>();
   for (const seed of Object.values(DEFAULT_TIERS)) {
-    store.set(seed.id, { ...seed, benefits: [...seed.benefits], ...overrides[seed.id] });
+    store.set(seed.id, {
+      ...seed,
+      benefits: [...seed.benefits],
+      ...overrides[seed.id],
+    });
   }
   const history: Array<{ id: PlanTierId; entry: any }> = [];
   return {
     store,
     history,
-    listAll: jest.fn(async () => [...store.values()].map((tier) => ({ ...tier }))),
+    listAll: jest.fn(async () =>
+      [...store.values()].map((tier) => ({ ...tier })),
+    ),
     get: jest.fn(async (id: PlanTierId) => ({ ...store.get(id)! })),
-    save: jest.fn(async (tier: PlanTier) => void store.set(tier.id, { ...tier })),
+    save: jest.fn(
+      async (tier: PlanTier) => void store.set(tier.id, { ...tier }),
+    ),
     addHistory: jest.fn(async (id: PlanTierId, entry: any) => {
       history.push({ id, entry });
     }),
@@ -84,7 +98,11 @@ describe('PlanTierService — gestão', () => {
       AGORA,
     );
 
-    expect(tier).toMatchObject({ name: 'Premium', description: 'd', active: true });
+    expect(tier).toMatchObject({
+      name: 'Premium',
+      description: 'd',
+      active: true,
+    });
     expect(repo.store.get('private')!.updatedBy).toBe('gerente-1');
     expect(repo.store.get('private')!.pending).toBeNull();
   });
@@ -131,7 +149,10 @@ describe('PlanTierService — gestão', () => {
       GERENTE,
       AGORA,
     );
-    expect(tier.pending).toMatchObject({ packagePrice: 2000, monthlyPrice: 400 });
+    expect(tier.pending).toMatchObject({
+      packagePrice: 2000,
+      monthlyPrice: 400,
+    });
   });
 
   it('voltar ao preço vigente desfaz o agendado', async () => {
@@ -154,7 +175,10 @@ describe('PlanTierService — gestão', () => {
       GERENTE,
       AGORA,
     );
-    expect(tier.pending).toMatchObject({ packagePrice: 1800, monthlyPrice: null });
+    expect(tier.pending).toMatchObject({
+      packagePrice: 1800,
+      monthlyPrice: null,
+    });
   });
 
   it('id fora dos três é 404', async () => {

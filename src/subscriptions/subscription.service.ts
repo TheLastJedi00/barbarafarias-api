@@ -2,6 +2,7 @@ import {
   BadRequestException,
   ConflictException,
   ForbiddenException,
+  GoneException,
   Injectable,
   Logger,
   NotFoundException,
@@ -87,11 +88,7 @@ import {
   SubscriptionDto,
   ValidateCouponQueryDto,
 } from './dto/subscription.dto';
-import {
-  addDays,
-  toZonedDateString,
-  todayInAppTimezone,
-} from '../common/time';
+import { addDays, toZonedDateString, todayInAppTimezone } from '../common/time';
 import { randomUUID } from 'node:crypto';
 
 /** Desconto aplicado a uma parcela, já resolvido contra o cupom. */
@@ -123,7 +120,8 @@ function couponModeOf(
   plan: SubscriptionPlan,
   method: PaymentMethod,
 ): CouponPaymentMode {
-  if (plan === TIER_PLANS.SUBSCRIPTION) return COUPON_PAYMENT_MODES.SUBSCRIPTION;
+  if (plan === TIER_PLANS.SUBSCRIPTION)
+    return COUPON_PAYMENT_MODES.SUBSCRIPTION;
   return method === PAYMENT_METHODS.PIX_RECURRING
     ? COUPON_PAYMENT_MODES.PACKAGE_PIX
     : COUPON_PAYMENT_MODES.PACKAGE_CARD;
@@ -213,6 +211,19 @@ export class SubscriptionService {
       throw new NotFoundException('Aluno não encontrado');
     }
     this.assertPayableProfile(student);
+    // **Fim da venda dos planos antigos (spec 035, T27)** — atrás de uma
+    // variável, e não de um deploy, por causa da ordem de implantação da spec
+    // 025: o front novo tem de parar de mandar o plano antigo **antes** de o
+    // backend passar a recusá-lo. Liga-se depois que o front estiver no ar. O
+    // Mensal antigo segue renovando: renovação não passa por aqui.
+    if (
+      !isTierPlan(dto.plan) &&
+      this.configService.get<string>('LEGACY_PLANS_CLOSED') === 'true'
+    ) {
+      throw new GoneException(
+        'Este plano não é mais vendido. Escolha um dos planos disponíveis.',
+      );
+    }
     assertMethodAllowed(dto.plan, dto.paymentMethod);
     const tier = await this.resolveTier(dto);
 
@@ -490,7 +501,10 @@ export class SubscriptionService {
     ]);
 
     const porAluno = new Map(
-      subscriptions.map((subscription) => [subscription.studentId, subscription]),
+      subscriptions.map((subscription) => [
+        subscription.studentId,
+        subscription,
+      ]),
     );
 
     // Qual aceite de cada aluna é o vigente. A assinatura é **uma** e é
@@ -687,7 +701,9 @@ export class SubscriptionService {
 
     const charge = this.nextPendingCharge(subscription);
     if (!charge?.gatewayChargeId) {
-      throw new BadRequestException('Não há cobrança em aberto para recomeçar.');
+      throw new BadRequestException(
+        'Não há cobrança em aberto para recomeçar.',
+      );
     }
 
     const paga = await this.paidOutcomeOf(
@@ -1566,7 +1582,11 @@ export class SubscriptionService {
   ): Subscription {
     const isPackage = plan === TIER_PLANS.PACKAGE;
     const price = (isPackage ? tier.packagePrice : tier.monthlyPrice) ?? 0;
-    const regime = regimeOf({ plan, tierName: tier.name, priceSnapshot: price });
+    const regime = regimeOf({
+      plan,
+      tierName: tier.name,
+      priceSnapshot: price,
+    });
 
     const charges: Charge[] = [];
     let totalAmount: number;

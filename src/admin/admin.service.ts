@@ -17,6 +17,11 @@ export interface MigrateRolesReport {
 
 const KNOWN_ROLES: string[] = Object.values(ROLES);
 
+export interface MigratePlanTiersReport {
+  totalStudents: number;
+  updated: number;
+}
+
 @Injectable()
 export class AdminService {
   private readonly logger = new Logger(AdminService.name);
@@ -42,6 +47,32 @@ export class AdminService {
    *                            coleção legada existir (spec 016 Task 84)
    *   3. `isTeacher`         — fallback legado
    */
+  /**
+   * Spec 035 §7, decisão 2: **todo aluno de hoje é Consultoria Particular
+   * Premium.** Marca `planTier: 'private'` em quem ainda não tem tier.
+   * Idempotente — só escreve onde falta — e não mexe em cobrança nem acesso.
+   *
+   * Comprador da loja (`tier: 'modules'`, spec 032) não é assinante e fica de
+   * fora: o tier diz qual serviço o aluno comprou, e ele não comprou nenhum.
+   */
+  async migratePlanTiers(): Promise<MigratePlanTiersReport> {
+    const users = await this.adminRepository.findAll('users');
+    const students = users.filter(
+      (user) =>
+        resolveRole(user.data as Parameters<typeof resolveRole>[0]) ===
+          ROLES.STUDENT && user.data.tier !== 'modules',
+    );
+    const updates = students
+      .filter((user) => !user.data.planTier)
+      .map((user) => ({ id: user.id, data: { planTier: 'private' } }));
+
+    await this.adminRepository.mergeAll('users', updates);
+    this.logger.log(
+      `Tiers: ${updates.length} de ${students.length} alunos marcados como Premium.`,
+    );
+    return { totalStudents: students.length, updated: updates.length };
+  }
+
   async migrateRoles(): Promise<MigrateRolesReport> {
     const [users, credentials] = await Promise.all([
       this.adminRepository.findAll('users'),
@@ -55,10 +86,7 @@ export class AdminService {
     let updatedClaims = 0;
 
     for (const user of users) {
-      const desired = this.desiredRole(
-        user.data,
-        credentialById.get(user.id),
-      );
+      const desired = this.desiredRole(user.data, credentialById.get(user.id));
 
       if (user.data.role !== desired) {
         userUpdates.push({ id: user.id, data: { role: desired } });

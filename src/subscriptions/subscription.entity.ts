@@ -205,10 +205,14 @@ export function payerAmountsOf(subscription: {
   // total dele. O que sabemos e registramos é o preço à vista.
   if (isTierPlan(subscription.plan)) {
     return subscription.plan === TIER_PLANS.PACKAGE
-      ? { total: subscription.totalAmount, installment: subscription.totalAmount }
+      ? {
+          total: subscription.totalAmount,
+          installment: subscription.totalAmount,
+        }
       : {
           total: subscription.installmentAmount ?? subscription.totalAmount,
-          installment: subscription.installmentAmount ?? subscription.totalAmount,
+          installment:
+            subscription.installmentAmount ?? subscription.totalAmount,
         };
   }
 

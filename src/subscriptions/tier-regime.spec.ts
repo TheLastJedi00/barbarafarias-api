@@ -47,7 +47,11 @@ describe('regimeOf', () => {
         tierName: 'Conversação mensal em grupo',
         priceSnapshot: 150,
       }),
-    ).toMatchObject({ recurring: true, installments: 1, installmentAmount: 150 });
+    ).toMatchObject({
+      recurring: true,
+      installments: 1,
+      installmentAmount: 150,
+    });
   });
 });
 

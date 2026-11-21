@@ -47,12 +47,19 @@ describe('SubscriptionController — papéis', () => {
     expect(rolesOf('plans')).toBeUndefined();
   });
 
+  it('o contrato do tier segue o do plano: aluno e gerente, nunca público', () => {
+    expect(rolesOf('tierTerms')).toEqual(
+      expect.arrayContaining([ROLES.STUDENT, ROLES.MANAGER]),
+    );
+    expect(isPublic('tierTerms')).toBeUndefined();
+  });
+
   it('não abre o contrato do plano junto com o catálogo', () => {
     expect(isPublic('terms')).toBeUndefined();
   });
 
   it('devolve só os campos do catálogo', () => {
-    const controller = new SubscriptionController({} as never);
+    const controller = new SubscriptionController({} as never, {} as never);
     const plans = controller.plans();
     expect(plans).toHaveLength(Object.keys(PLAN_CONFIGS).length);
     for (const plan of plans) {

@@ -47,7 +47,10 @@ export class PlanTierService {
   }
 
   /** O tier com o preço que vale agora — o que a cobrança usa. */
-  async getEffective(id: PlanTierId, now: Date = new Date()): Promise<PlanTier> {
+  async getEffective(
+    id: PlanTierId,
+    now: Date = new Date(),
+  ): Promise<PlanTier> {
     if (!isPlanTierId(id)) {
       throw new BadRequestException('Plano inválido');
     }
@@ -63,7 +66,8 @@ export class PlanTierService {
     const tier = await this.require(id, now);
 
     if (dto.name !== undefined) tier.name = dto.name.trim();
-    if (dto.description !== undefined) tier.description = dto.description.trim();
+    if (dto.description !== undefined)
+      tier.description = dto.description.trim();
     if (dto.benefits !== undefined) {
       tier.benefits = dto.benefits.map((item) => item.trim()).filter(Boolean);
     }
@@ -81,12 +85,13 @@ export class PlanTierService {
       const monthlyPrice =
         dto.monthlyPrice !== undefined
           ? dto.monthlyPrice
-          : (tier.pending
-              ? tier.pending.monthlyPrice
-              : tier.monthlyPrice);
+          : tier.pending
+            ? tier.pending.monthlyPrice
+            : tier.monthlyPrice;
 
       const igualAoVigente =
-        packagePrice === tier.packagePrice && monthlyPrice === tier.monthlyPrice;
+        packagePrice === tier.packagePrice &&
+        monthlyPrice === tier.monthlyPrice;
 
       tier.pending = igualAoVigente
         ? null

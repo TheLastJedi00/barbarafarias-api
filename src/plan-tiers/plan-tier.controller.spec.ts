@@ -34,9 +34,13 @@ describe('PlanTierController — cache da vitrine', () => {
 
     expect(setHeader).toHaveBeenCalledWith(
       'Cache-Control',
-      expect.stringMatching(/^public, s-maxage=\d+, stale-while-revalidate=60$/),
+      expect.stringMatching(
+        /^public, s-maxage=\d+, stale-while-revalidate=60$/,
+      ),
     );
-    const seconds = Number(/s-maxage=(\d+)/.exec(setHeader.mock.calls[0][1])![1]);
+    const seconds = Number(
+      /s-maxage=(\d+)/.exec(setHeader.mock.calls[0][1])![1],
+    );
     expect(seconds).toBeGreaterThanOrEqual(1);
     expect(seconds).toBeLessThanOrEqual(3600);
   });
@@ -44,7 +48,9 @@ describe('PlanTierController — cache da vitrine', () => {
 
 describe('PlanPricesCronController', () => {
   function build(secret?: string) {
-    const service = { applyDuePrices: jest.fn().mockResolvedValue(['private']) };
+    const service = {
+      applyDuePrices: jest.fn().mockResolvedValue(['private']),
+    };
     const config = { get: jest.fn(() => secret) };
     return {
       service,
@@ -54,7 +60,10 @@ describe('PlanPricesCronController', () => {
 
   it('é pública para a Vercel chamar, e quem protege é o segredo', () => {
     expect(
-      Reflect.getMetadata(IS_PUBLIC_KEY, PlanPricesCronController.prototype.run),
+      Reflect.getMetadata(
+        IS_PUBLIC_KEY,
+        PlanPricesCronController.prototype.run,
+      ),
     ).toBe(true);
   });
 

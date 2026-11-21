@@ -1,7 +1,4 @@
-import {
-  BadRequestException,
-  ConflictException,
-} from '@nestjs/common';
+import { BadRequestException, ConflictException } from '@nestjs/common';
 import { SUBSCRIPTION_STATUS } from './subscription.entity';
 import {
   ASSINATURA,
@@ -44,7 +41,11 @@ function cicloPago(paymentId = 987) {
       id: `ap_${paymentId}`,
       preapproval_id: 'pre_1',
       status: 'processed',
-      payment: { id: paymentId, status: 'approved', status_detail: 'accredited' },
+      payment: {
+        id: paymentId,
+        status: 'approved',
+        status_detail: 'accredited',
+      },
     },
   } as any;
 }
@@ -68,7 +69,10 @@ describe('Assinatura do tier — cancelamento', () => {
     const dto = await service.cancelSubscription('aluno-1');
 
     expect(card.cancelSubscription).toHaveBeenCalledWith('pre_1');
-    expect(card.refundPayment).toHaveBeenCalledWith('987', 'withdraw:aluno-1:1');
+    expect(card.refundPayment).toHaveBeenCalledWith(
+      '987',
+      'withdraw:aluno-1:1',
+    );
     const saved = subscriptions.store.get('aluno-1')!;
     expect(saved.status).toBe(SUBSCRIPTION_STATUS.CANCELLED);
     expect(saved.accessUntil).toBeUndefined();
@@ -189,7 +193,9 @@ describe('Pacote do tier — desistência em 7 dias (CDC)', () => {
     await service.handleMercadoPagoEvent(orderPaga('pix_1'));
     noDia('2026-11-28T15:00:00Z');
 
-    await expect(service.withdraw('aluno-1')).rejects.toThrow(ConflictException);
+    await expect(service.withdraw('aluno-1')).rejects.toThrow(
+      ConflictException,
+    );
     expect(pix.refundOrder).not.toHaveBeenCalled();
   });
 
@@ -248,7 +254,9 @@ describe('Assinatura do tier — encerrada fora da plataforma (decisão 10)', ()
       status: 'cancelled',
     } as any);
 
-    expect(subscriptions.store.get('aluno-1')!.fidelityBrokenAt).toBeUndefined();
+    expect(
+      subscriptions.store.get('aluno-1')!.fidelityBrokenAt,
+    ).toBeUndefined();
   });
 
   it('renovação recusada continua bloqueando (PAST_DUE)', async () => {
