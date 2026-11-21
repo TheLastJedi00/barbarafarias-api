@@ -171,6 +171,17 @@ export class SubscriptionController {
     return this.service.cancelSubscription(user.sub);
   }
 
+  /**
+   * Desistência do **pacote** do tier em até 7 dias do pagamento (CDC art.
+   * 49): estorna tudo e encerra o acesso. A assinatura desiste por
+   * `me/cancel`, que já sabe a janela dela (spec 035 §4/§5).
+   */
+  @Post('me/withdraw')
+  @Roles(ROLES.STUDENT)
+  withdraw(@CurrentUser() user: AuthenticatedUser): Promise<SubscriptionDto> {
+    return this.service.withdraw(user.sub);
+  }
+
   @Get('me/charges')
   @Roles(ROLES.STUDENT)
   charges(@CurrentUser() user: AuthenticatedUser): Promise<Charge[]> {

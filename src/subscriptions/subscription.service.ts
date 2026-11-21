@@ -82,7 +82,11 @@ import {
   PlanAcceptanceDto,
   SubscriptionDto,
 } from './dto/subscription.dto';
-import { todayInAppTimezone } from '../common/time';
+import {
+  addDays,
+  toZonedDateString,
+  todayInAppTimezone,
+} from '../common/time';
 import { randomUUID } from 'node:crypto';
 
 /** Desconto aplicado a uma parcela, já resolvido contra o cupom. */
@@ -91,6 +95,14 @@ interface ResolvedCoupon {
   discount: number;
   /** Quantas parcelas recebem o abatimento. `null` = todas (vitalício). */
   remaining: number | null;
+}
+
+/** Prazo de arrependimento da compra pela internet (CDC art. 49). */
+export const WITHDRAWAL_DAYS = 7;
+
+/** 'YYYY-MM-DD' → 'DD/MM/AAAA'. */
+function br(date: string): string {
+  return date.split('-').reverse().join('/');
 }
 
 /** Mensagem única do bloqueio — a tela repete exatamente esta frase. */
@@ -794,6 +806,25 @@ export class SubscriptionService {
     }
 
     this.assertCancellable(subscription);
+
+    // **Assinatura do tier (spec 035 §5):** nos 7 dias é desistência — estorna
+    // e derruba o acesso; até o fim da fidelidade, não se cancela; depois,
+    // segue o cancelamento de sempre logo abaixo.
+    if (subscription.plan === TIER_PLANS.SUBSCRIPTION) {
+      if (this.withinWithdrawal(subscription)) {
+        return this.withdrawSubscription(subscription);
+      }
+      const ate = subscription.fidelityUntil;
+      if (ate && todayInAppTimezone() < ate) {
+        throw new ConflictException({
+          message:
+            `A assinatura tem fidelidade de 6 meses e pode ser cancelada a partir de ${br(ate)}. ` +
+            `O prazo de desistência de ${WITHDRAWAL_DAYS} dias já terminou.`,
+          cancellableFrom: ate,
+        });
+      }
+    }
+
     await this.releaseGatewaySubscription(subscription);
 
     const now = new Date().toISOString();
@@ -843,6 +874,123 @@ export class SubscriptionService {
     throw new BadRequestException(
       `O plano ${regimeOf(subscription).label} é comprado por período, não é assinatura: não há renovação a cancelar.${ate}`,
     );
+  }
+
+  /**
+   * Desistência do pacote do tier nos 7 dias do pagamento (CDC art. 49).
+   *
+   * O pacote **não se cancela** — foi comprado inteiro, e o acesso vale até o
+   * fim. O que existe é o arrependimento: estorna a order inteira (no
+   * parcelado, o emissor cancela as parcelas que faltam) e encerra o acesso.
+   * Pacote ainda não pago só se encerra; não há o que devolver.
+   */
+  async withdraw(studentId: string): Promise<SubscriptionDto> {
+    const subscription = await this.requireSubscription(studentId);
+    if (subscription.plan !== TIER_PLANS.PACKAGE) {
+      throw new BadRequestException(
+        subscription.plan === TIER_PLANS.SUBSCRIPTION
+          ? 'Para desistir da assinatura, use "Cancelar assinatura".'
+          : 'Este plano não tem desistência pelo painel. Fale com a gestão da escola.',
+      );
+    }
+    if (subscription.status === SUBSCRIPTION_STATUS.CANCELLED) {
+      return new SubscriptionDto(subscription);
+    }
+
+    const paga = subscription.charges.find(
+      (charge) => charge.status === CHARGE_STATUS.PAID,
+    );
+    if (paga) {
+      if (!this.withinWithdrawal(subscription)) {
+        throw new ConflictException(
+          `O prazo de desistência de ${WITHDRAWAL_DAYS} dias terminou em ` +
+            `${br(this.withdrawalDeadline(subscription))}. Seu acesso segue até ` +
+            `${br(subscription.accessUntil ?? subscription.startDate)}.`,
+        );
+      }
+      if (!paga.gatewayChargeId) {
+        throw this.manualRefundNeeded(subscription);
+      }
+      const gateway =
+        subscription.paymentMethod === PAYMENT_METHODS.PIX_RECURRING
+          ? this.pix
+          : this.card;
+      await gateway.refundOrder(
+        paga.gatewayChargeId,
+        `withdraw:${studentId}:${paga.index}`,
+      );
+    }
+
+    return this.finishWithdrawal(subscription);
+  }
+
+  /** Nos 7 dias: estorna cada ciclo pago, encerra o `preapproval` e o acesso. */
+  private async withdrawSubscription(
+    subscription: Subscription,
+  ): Promise<SubscriptionDto> {
+    const pagas = subscription.charges.filter(
+      (charge) => charge.status === CHARGE_STATUS.PAID,
+    );
+    // Estorna **antes** de encerrar: se o provedor recusar, nada muda aqui e
+    // a aluna tenta de novo — em vez de ficar sem acesso e sem o dinheiro.
+    for (const charge of pagas) {
+      if (!charge.gatewayPaymentId) throw this.manualRefundNeeded(subscription);
+      await this.card.refundPayment(
+        charge.gatewayPaymentId,
+        `withdraw:${subscription.studentId}:${charge.index}`,
+      );
+    }
+    await this.releaseGatewaySubscription(subscription);
+    return this.finishWithdrawal(subscription);
+  }
+
+  /** Estornado não é receita: o cronograma some, e o acesso junto. */
+  private async finishWithdrawal(
+    subscription: Subscription,
+  ): Promise<SubscriptionDto> {
+    const now = new Date().toISOString();
+    subscription.status = SUBSCRIPTION_STATUS.CANCELLED;
+    subscription.cancelledAt = now;
+    subscription.withdrawnAt = now;
+    subscription.updatedAt = now;
+    subscription.nextChargeDate = undefined;
+    subscription.accessUntil = undefined;
+    subscription.paidInstallments = 0;
+    subscription.charges = [];
+
+    await this.subscriptions.save(subscription);
+    await this.syncUser(subscription);
+    return new SubscriptionDto(subscription);
+  }
+
+  /**
+   * Pagamento confirmado sem o id que o estorno exige — só acontece com
+   * cobrança anterior a esta spec ou confirmada à mão. Recusa em vez de
+   * encerrar: encerrar sem devolver tiraria o acesso e o dinheiro.
+   */
+  private manualRefundNeeded(subscription: Subscription): BadRequestException {
+    this.logger.error(
+      `Desistência de ${subscription.studentId} sem id de pagamento para estornar.`,
+    );
+    return new BadRequestException(
+      'Não foi possível estornar automaticamente. Fale com a gestão da escola pelo e-mail barbsenglishteacher@gmail.com.',
+    );
+  }
+
+  /** A data da compra: o primeiro pagamento, ou a contratação se nada foi pago. */
+  private withdrawalDeadline(subscription: Subscription): string {
+    const pagamento = subscription.charges
+      .filter((charge) => charge.status === CHARGE_STATUS.PAID && charge.paidAt)
+      .map((charge) => charge.paidAt!)
+      .sort()[0];
+    const compra = pagamento
+      ? toZonedDateString(new Date(pagamento))
+      : subscription.startDate;
+    return addDays(compra, WITHDRAWAL_DAYS);
+  }
+
+  private withinWithdrawal(subscription: Subscription): boolean {
+    return todayInAppTimezone() <= this.withdrawalDeadline(subscription);
   }
 
   /** Parcelas ainda não pagas, da mais próxima para a mais distante (RF5). */
@@ -962,6 +1110,20 @@ export class SubscriptionService {
     if (subscription.status === SUBSCRIPTION_STATUS.CANCELLED) return;
 
     const now = new Date().toISOString();
+    // **Quebra de fidelidade (spec 035, decisão 10).** Chega aqui quando a
+    // assinatura foi encerrada fora da plataforma — pela conta do aluno no
+    // Mercado Pago — antes do fim dos 6 meses. Sem multa: o ciclo pago vale
+    // até o fim (`accessUntil` fica), e o registro é só para a gerente ver.
+    if (
+      subscription.plan === TIER_PLANS.SUBSCRIPTION &&
+      subscription.fidelityUntil &&
+      todayInAppTimezone() < subscription.fidelityUntil
+    ) {
+      subscription.fidelityBrokenAt = now;
+      this.logger.warn(
+        `Fidelidade de ${subscription.studentId} quebrada: assinatura ${preapprovalId} encerrada fora da plataforma.`,
+      );
+    }
     subscription.status = SUBSCRIPTION_STATUS.CANCELLED;
     subscription.cancelledAt = now;
     subscription.updatedAt = now;
@@ -1126,6 +1288,9 @@ export class SubscriptionService {
         // Só quem comprou por tier escreve o tier. A assinatura antiga não
         // apaga o `private` que a migração deu (spec 035 §7).
         ...(subscription.tierId ? { planTier: subscription.tierId } : {}),
+        ...(subscription.fidelityBrokenAt
+          ? { fidelityBrokenAt: subscription.fidelityBrokenAt }
+          : {}),
       });
     } catch (error) {
       // O espelho é conveniência de listagem; a assinatura já está gravada.
