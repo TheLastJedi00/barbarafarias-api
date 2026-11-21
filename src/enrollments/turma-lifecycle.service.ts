@@ -110,6 +110,7 @@ export class TurmaLifecycleService {
           status: ENROLLMENT_STATUS.CONVERTED,
           convertedAt: at,
           subscriptionStudentId: enrollment.studentId,
+          startDate: turma.startDate,
           updatedAt: at,
         };
         await this.enrollments.save(done);

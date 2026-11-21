@@ -54,6 +54,11 @@ export interface Enrollment {
   refund?: { by: EnrollmentRefundBy; at: string; reason?: string };
   /** Assinatura criada na confirmação (spec 036 §5). */
   subscriptionStudentId?: string;
+  /**
+   * Início da turma na conversão: o mês em que o sinal vira receita no
+   * Financeiro (spec 036 §5), junto com o plano.
+   */
+  startDate?: string;
 }
 
 /** Viva = ainda ocupa (ou pode ocupar) a vaga. Uma por aluno. */

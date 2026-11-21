@@ -19,6 +19,12 @@ export class EnrollmentRepository {
     return doc.exists ? toEntity(doc.id, doc.data()!) : null;
   }
 
+  /** Para o Financeiro: a coleção é pequena (uma matrícula por vaga). */
+  async findAll(): Promise<Enrollment[]> {
+    const snapshot = await this.collection().get();
+    return snapshot.docs.map((doc) => toEntity(doc.id, doc.data()));
+  }
+
   findByStudent(studentId: string): Promise<Enrollment[]> {
     return this.findBy('studentId', studentId);
   }
