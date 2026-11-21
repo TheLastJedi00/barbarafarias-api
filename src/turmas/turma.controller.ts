@@ -15,6 +15,10 @@ import { Roles } from '../decorators/roles.decorator';
 import { ROLES } from '../types/role';
 import { TurmaFormingService } from './turma-forming.service';
 import {
+  CurrentUser,
+  type AuthenticatedUser,
+} from '../decorators/current-user.decorator';
+import {
   CreateFormingTurmaDto,
   UpdateFormingTurmaDto,
 } from './dto/forming-turma.dto';
@@ -38,8 +42,11 @@ export class TurmaController {
 
   @Post('forming')
   @Roles(ROLES.MANAGER)
-  createForming(@Body() dto: CreateFormingTurmaDto) {
-    return this.forming.create(dto);
+  createForming(
+    @Body() dto: CreateFormingTurmaDto,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.forming.create(dto, user.sub);
   }
 
   @Patch('forming/:id')

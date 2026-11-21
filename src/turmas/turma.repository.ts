@@ -119,6 +119,8 @@ const FORMING_KEYS: (keyof FormingFields)[] = [
   'hour',
   'weeksOfMonth',
   'founderWeek',
+  'founderId',
+  'founderName',
   'startDate',
   'minStudents',
   'maxStudents',

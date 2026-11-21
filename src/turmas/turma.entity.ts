@@ -34,6 +34,9 @@ export interface FormingFields {
   weeksOfMonth?: number[];
   /** Só no grupo mensal: qual das duas é com a fundadora. */
   founderWeek?: number;
+  /** A fundadora que conduz a semana dela (a gerente que criou a turma). */
+  founderId?: string;
+  founderName?: string;
   /** 'YYYY-MM-DD', compatível com o calendário da turma. */
   startDate?: string;
   minStudents?: number;
@@ -67,6 +70,8 @@ export class Turma implements FormingFields {
   hour?: number;
   weeksOfMonth?: number[];
   founderWeek?: number;
+  founderId?: string;
+  founderName?: string;
   startDate?: string;
   minStudents?: number;
   maxStudents?: number;

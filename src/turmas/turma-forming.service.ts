@@ -54,7 +54,7 @@ export class TurmaFormingService {
     private readonly teachers: TeacherService,
   ) {}
 
-  async create(dto: CreateFormingTurmaDto): Promise<Turma> {
+  async create(dto: CreateFormingTurmaDto, founderId?: string): Promise<Turma> {
     const fields: FormingFields = {
       tierId: dto.tierId,
       dayOfWeek: dto.dayOfWeek,
@@ -67,12 +67,21 @@ export class TurmaFormingService {
     };
     this.assertCalendar(fields);
     const teacher = await this.resolveTeacher(dto.teacherId);
+    // No grupo mensal uma das semanas é da fundadora: a gerente que criou a
+    // turma. É ela quem aparece como responsável pela aula daquela semana.
+    const founder =
+      fields.tierId === 'monthly-group' && founderId
+        ? await this.resolveTeacher(founderId)
+        : null;
 
     return this.turmas.create(
       new Turma(dto.name?.trim() || nameOf(fields), [], [], undefined, {
         ...fields,
         teacherId: teacher.id,
         teacherName: teacher.name,
+        ...(founder
+          ? { founderId: founder.id, founderName: founder.name }
+          : {}),
         meetUrl: dto.meetUrl,
         status: TURMA_STATUS.FORMING,
         startHistory: [],
