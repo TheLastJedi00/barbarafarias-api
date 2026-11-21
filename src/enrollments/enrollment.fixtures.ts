@@ -78,7 +78,10 @@ export function buildEnrollments(
     }),
   };
   let turma = turmaDe(options.turma);
+  const extraTurmas: Turma[] = [];
   const turmas = {
+    extra: extraTurmas,
+    findAll: jest.fn(async () => [turma, ...extraTurmas]),
     findById: jest.fn(async (id: string) => (id === turma.id ? turma : null)),
     save: jest.fn(async (t: Turma) => {
       turma = t;
