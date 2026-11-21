@@ -115,7 +115,9 @@ export function buildTier(
     create: jest.fn(async (acceptance: any) => acceptance),
     findAll: jest.fn().mockResolvedValue([]),
   };
-  const config = { get: jest.fn((_key: string): string | undefined => undefined) };
+  const config = {
+    get: jest.fn((_key: string): string | undefined => undefined),
+  };
   let tier = tierDe(options.tier);
   const planTiers = {
     getEffective: jest.fn(async () => ({ ...tier })),
@@ -124,6 +126,9 @@ export function buildTier(
     },
   };
 
+  const contracts = {
+    recordSafely: jest.fn(async (input: any) => input),
+  };
   const service = new SubscriptionService(
     subscriptions as any,
     coupons as any,
@@ -133,9 +138,11 @@ export function buildTier(
     card as any,
     config as any,
     planTiers as any,
+    contracts as any,
   );
   return {
     service,
+    contracts,
     subscriptions,
     coupons,
     users,

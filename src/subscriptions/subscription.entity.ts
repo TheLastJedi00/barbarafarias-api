@@ -392,6 +392,12 @@ export class Subscription {
   /** Até quando a assinatura não pode ser cancelada (início + 6 meses). */
   fidelityUntil?: string;
   /**
+   * Sinal da matrícula numa turma em formação (spec 036), já abatido do
+   * pacote ou da primeira mensalidade. Fica registrado para o fechamento
+   * explicar o valor menor.
+   */
+  enrollmentCredit?: number;
+  /**
    * A assinatura foi encerrada **fora** da plataforma (pela conta do aluno no
    * Mercado Pago) durante a fidelidade. Sem multa (decisão 10): o acesso vai
    * até o fim do ciclo pago; isto só existe para a gerente ver.

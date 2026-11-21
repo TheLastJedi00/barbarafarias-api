@@ -33,6 +33,8 @@ import {
   todayInAppTimezone,
   zonedDateTimeToUtc,
 } from '../common/time';
+import { TURMA_STATUS, type Turma } from '../turmas/turma.entity';
+import { turmaDatesBetween, weekOfMonth } from '../turmas/turma-schedule';
 
 @Injectable()
 export class LessonService {
@@ -67,12 +69,19 @@ export class LessonService {
       return 0;
     }
 
-    const slots = await this.agendaService.getGrid(teacherId);
-    if (slots.length === 0) {
-      return 0;
-    }
+    const [slots, turmas] = await Promise.all([
+      this.agendaService.getGrid(teacherId),
+      this.turmaRepository.findAll(),
+    ]);
+    // Turma com calendário próprio (spec 036) não sai da grade semanal: o
+    // grupo mensal nem cabe nela, e a semanal só existe depois do início.
+    const ownCalendar = new Set(
+      turmas.filter((turma) => !!turma.tierId).map((turma) => turma.id),
+    );
 
-    const candidates: Lesson[] = [];
+    const candidates: Lesson[] = [
+      ...this.turmaLessons(turmas, start, to, teacherId),
+    ];
     for (const date of datesBetween(start, to)) {
       const dayOfWeek = dayOfWeekOf(date);
       // Um bloco de 1 hora ocupa DOIS documentos de agenda (spec 011 RF5), mas
@@ -86,6 +95,7 @@ export class LessonService {
         if (!slot.teacherId || !occupantId) {
           continue; // slot legado ou incompleto: ignorado até a migração
         }
+        if (slot.turmaId && ownCalendar.has(slot.turmaId)) continue;
         candidates.push(
           new Lesson({
             id: lessonDocId(slot.teacherId, occupantId, date, slot.hour),
@@ -112,6 +122,68 @@ export class LessonService {
     return created;
   }
 
+  /**
+   * Aulas das turmas com calendário próprio (spec 036 §4): só confirmadas, no
+   * dia e horário da turma, a partir do início. No grupo mensal, a semana da
+   * fundadora sai com ela como responsável. O id é o mesmo formato da grade,
+   * então a materialização continua idempotente.
+   */
+  private turmaLessons(
+    turmas: Turma[],
+    from: string,
+    to: string,
+    teacherId?: string,
+  ): Lesson[] {
+    const lessons: Lesson[] = [];
+    for (const turma of turmas) {
+      if (
+        !turma.tierId ||
+        turma.status !== TURMA_STATUS.CONFIRMED ||
+        !turma.startDate ||
+        !turma.teacherId ||
+        turma.dayOfWeek === undefined ||
+        turma.hour === undefined
+      ) {
+        continue;
+      }
+      const dates = turmaDatesBetween(
+        {
+          tierId: turma.tierId,
+          dayOfWeek: turma.dayOfWeek,
+          weeksOfMonth: turma.weeksOfMonth,
+          startDate: turma.startDate,
+        },
+        from,
+        to,
+      );
+      for (const date of dates) {
+        const founderLesson =
+          turma.tierId === 'monthly-group' &&
+          !!turma.founderId &&
+          weekOfMonth(date) === turma.founderWeek;
+        const responsible = founderLesson
+          ? { id: turma.founderId!, name: turma.founderName }
+          : { id: turma.teacherId, name: turma.teacherName };
+        if (teacherId && responsible.id !== teacherId) continue;
+        lessons.push(
+          new Lesson({
+            id: lessonDocId(responsible.id, turma.id!, date, turma.hour),
+            teacherId: responsible.id,
+            teacherName: responsible.name,
+            turmaId: turma.id,
+            turmaName: turma.name,
+            date,
+            hour: turma.hour,
+            startAt: zonedDateTimeToUtc(date, turma.hour).toISOString(),
+            origin: LESSON_ORIGIN.REGULAR,
+            status: LESSON_STATUS.SCHEDULED,
+          }),
+        );
+      }
+    }
+    return lessons;
+  }
+
   /** Aulas do período, já materializadas, ordenadas cronologicamente. */
   async findRange(
     user: AuthenticatedUser,
@@ -121,7 +193,11 @@ export class LessonService {
   ): Promise<Lesson[]> {
     const teacherId = this.agendaService.resolveScope(user, requestedTeacherId);
     await this.ensureLessons(from, to, teacherId);
-    const lessons = await this.lessonRepository.findByRange(from, to, teacherId);
+    const lessons = await this.lessonRepository.findByRange(
+      from,
+      to,
+      teacherId,
+    );
     return this.sorted(await this.autoCloseOverdue(lessons));
   }
 
@@ -201,7 +277,8 @@ export class LessonService {
         state,
         startAt: lesson.startAt,
         status: lesson.status,
-        meetUrl: state === 'open' ? await this.resolveMeetUrl(lesson) : undefined,
+        meetUrl:
+          state === 'open' ? await this.resolveMeetUrl(lesson) : undefined,
       };
     }
 

@@ -154,6 +154,7 @@ describe('Tiers — visão pública', () => {
       benefits: expect.any(Array),
       packagePrice: 1800,
       monthlyPrice: 320,
+      enrollmentFee: null,
       packageMonths: 6,
       fidelityMonths: 6,
     });

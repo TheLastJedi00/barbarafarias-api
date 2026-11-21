@@ -19,6 +19,7 @@ const ALREADY_EXISTS = 6;
 export interface PriceHistoryEntry {
   packagePrice: number | null;
   monthlyPrice: number | null;
+  enrollmentFee?: number | null;
   effectiveAt: string;
   requestedBy: string;
   appliedAt: string;
@@ -90,6 +91,7 @@ function toTier(id: PlanTierId, data: Record<string, any>): PlanTier {
     benefits: Array.isArray(data.benefits) ? data.benefits : [...seed.benefits],
     packagePrice: data.packagePrice ?? null,
     monthlyPrice: data.monthlyPrice ?? null,
+    enrollmentFee: data.enrollmentFee ?? null,
     active: data.active ?? false,
     pending: data.pending ?? null,
     updatedAt: data.updatedAt ?? '',

@@ -172,6 +172,118 @@ export class NotificationService {
     }
   }
 
+  // ------------------------------------------------ turmas (spec 036)
+
+  async enrollmentPaid(
+    studentId: string,
+    turma: { name: string; startDate?: string },
+    missing: number,
+  ): Promise<void> {
+    const student = await this.safeFind(studentId);
+    if (!student?.email || !turma.startDate) return;
+    await this.safeSend(() =>
+      Promise.resolve({
+        to: [student.email],
+        ...templates.enrollmentPaid(
+          student.fullName ?? '',
+          turma.name,
+          turma.startDate!,
+          missing,
+        ),
+      }),
+    );
+  }
+
+  async enrollmentRefunded(
+    studentId: string,
+    turma: { name: string },
+    reason: 'student' | 'manager' | 'turma-cancelled' | 'overbooked',
+  ): Promise<void> {
+    const student = await this.safeFind(studentId);
+    if (!student?.email) return;
+    await this.safeSend(() =>
+      Promise.resolve({
+        to: [student.email],
+        ...(reason === 'turma-cancelled'
+          ? templates.turmaCancelled(student.fullName ?? '', turma.name)
+          : templates.enrollmentRefunded(
+              student.fullName ?? '',
+              turma.name,
+              reason,
+            )),
+      }),
+    );
+  }
+
+  async turmaMinimumReached(
+    turma: { name: string; startDate?: string; minStudents?: number },
+    paid: number,
+  ): Promise<void> {
+    await this.safeSend(async () => ({
+      to: await this.managerEmails(),
+      ...templates.turmaMinimumReached(
+        turma.name,
+        paid,
+        turma.minStudents ?? 0,
+        turma.startDate ?? '',
+      ),
+    }));
+  }
+
+  async turmaStartReminder(
+    turma: { name: string; startDate?: string; minStudents?: number },
+    paid: number,
+  ): Promise<void> {
+    await this.safeSend(async () => ({
+      to: await this.managerEmails(),
+      ...templates.turmaStartReminder(
+        turma.name,
+        paid,
+        turma.minStudents ?? 0,
+        turma.startDate ?? '',
+      ),
+    }));
+  }
+
+  async turmaConfirmed(
+    studentId: string,
+    turma: { name: string; startDate?: string },
+  ): Promise<void> {
+    const student = await this.safeFind(studentId);
+    if (!student?.email || !turma.startDate) return;
+    await this.safeSend(() =>
+      Promise.resolve({
+        to: [student.email],
+        ...templates.turmaConfirmed(
+          student.fullName ?? '',
+          turma.name,
+          turma.startDate!,
+        ),
+      }),
+    );
+  }
+
+  async turmaPostponed(
+    studentId: string,
+    turma: { name: string },
+    from: string,
+    to: string,
+  ): Promise<void> {
+    const student = await this.safeFind(studentId);
+    if (!student?.email) return;
+    await this.safeSend(() =>
+      Promise.resolve({
+        to: [student.email],
+        ...templates.turmaPostponed(
+          student.fullName ?? '',
+          turma.name,
+          from,
+          to,
+        ),
+      }),
+    );
+  }
+
   private async safeFind(id: string) {
     try {
       return await this.userRepository.findById(id);

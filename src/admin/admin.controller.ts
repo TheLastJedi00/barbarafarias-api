@@ -12,6 +12,10 @@ import {
 } from './auth-migration.service';
 import { Roles } from '../decorators/roles.decorator';
 import { ROLES } from '../types/role';
+import {
+  ContractBackfillService,
+  type BackfillReport,
+} from '../contracts/contract-backfill.service';
 
 class CleanupCredentialsDto {
   @IsOptional()
@@ -25,6 +29,7 @@ export class AdminController {
   constructor(
     private readonly service: AdminService,
     private readonly migration: AuthMigrationService,
+    private readonly contractBackfill: ContractBackfillService,
   ) {}
 
   /** Ação "Corrigir papéis dos usuários" do painel da gerente. */
@@ -40,6 +45,15 @@ export class AdminController {
   @Post('migrate-plan-tiers')
   migratePlanTiers(): Promise<MigratePlanTiersReport> {
     return this.service.migratePlanTiers();
+  }
+
+  /**
+   * Contratos em PDF dos aceites anteriores à spec 036 (§6), só os de texto
+   * reconstruível com exatidão. Idempotente; devolve o que ficou de fora.
+   */
+  @Post('backfill-contracts')
+  backfillContracts(): Promise<BackfillReport> {
+    return this.contractBackfill.run();
   }
 
   /**
