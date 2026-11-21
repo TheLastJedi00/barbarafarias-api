@@ -98,6 +98,9 @@ export class UserRepository {
       subscriptionStatus?: string;
       isPaying: boolean;
       accessUntil?: string;
+      /** Ausente = não mexe (a assinatura antiga não apaga o tier). */
+      planTier?: string;
+      fidelityBrokenAt?: string;
     },
   ): Promise<void> {
     await this.db
@@ -109,6 +112,10 @@ export class UserRepository {
           subscriptionStatus: state.subscriptionStatus ?? null,
           isPaying: state.isPaying,
           accessUntil: state.accessUntil ?? null,
+          ...(state.planTier ? { planTier: state.planTier } : {}),
+          ...(state.fidelityBrokenAt
+            ? { fidelityBrokenAt: state.fidelityBrokenAt }
+            : {}),
         },
         { merge: true },
       );
