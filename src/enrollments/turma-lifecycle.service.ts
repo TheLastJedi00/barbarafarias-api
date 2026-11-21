@@ -32,6 +32,13 @@ export interface ConfirmReport {
   failed: FailedStudent[];
 }
 
+/** Uma linha da Gestão › Turmas: a turma e a contagem das matrículas. */
+export interface TurmaOverview {
+  turma: Turma;
+  paid: number;
+  pending: number;
+}
+
 export interface CancelReport {
   turma: Turma;
   refunded: number;
@@ -289,6 +296,27 @@ export class TurmaLifecycleService {
       sent.push(turma.id!);
     }
     return sent;
+  }
+
+  /**
+   * As turmas com calendário próprio e a contagem das matrículas, numa ida
+   * só: a lista da gerente mostra "pagos/mínimo" em cada linha.
+   */
+  async overview(): Promise<TurmaOverview[]> {
+    const turmas = (await this.turmas.findAll())
+      .filter((turma) => !!turma.tierId)
+      .sort((a, b) => (a.startDate ?? '').localeCompare(b.startDate ?? ''));
+    return Promise.all(
+      turmas.map(async (turma) => {
+        const all = await this.enrollments.findByTurma(turma.id!);
+        return {
+          turma,
+          paid: all.filter(countsForSeat).length,
+          pending: all.filter((e) => e.status === ENROLLMENT_STATUS.PENDING)
+            .length,
+        };
+      }),
+    );
   }
 
   /** As matrículas de uma turma, para a Gestão › Turmas. */

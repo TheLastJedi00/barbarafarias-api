@@ -32,6 +32,13 @@ export class PostponeTurmaDto {
 export class TurmaLifecycleController {
   constructor(private readonly lifecycle: TurmaLifecycleService) {}
 
+  /** Lista da Gestão › Turmas, com pagos e pendentes por turma. */
+  @Get('overview')
+  @Roles(ROLES.MANAGER)
+  overview() {
+    return this.lifecycle.overview();
+  }
+
   @Get(':id/enrollments')
   @Roles(ROLES.MANAGER)
   enrollments(@Param('id') id: string) {
