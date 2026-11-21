@@ -95,6 +95,13 @@ export class SubscriptionRepository {
       paidAt: charge.paidAt ?? null,
       gatewayChargeId: charge.gatewayChargeId ?? null,
       gatewayProvider: charge.gatewayProvider ?? null,
+      gatewayPaymentId: charge.gatewayPaymentId ?? null,
+      // A trava anticobrança-dupla confere estas orders antes de emitir outra
+      // (spec 023 P2). Sem gravar, o "Recomeçar" esquecia a antiga no
+      // primeiro `save` — e ela, ainda viva no provedor, podia ser paga depois.
+      ...(charge.abandonedChargeIds?.length
+        ? { abandonedChargeIds: [...charge.abandonedChargeIds] }
+        : {}),
     }));
     return plain;
   }
@@ -117,7 +124,17 @@ export class SubscriptionRepository {
         gatewayChargeId:
           charge.gatewayChargeId ?? charge.abacatePayId ?? undefined,
         gatewayProvider: charge.gatewayProvider ?? undefined,
+        gatewayPaymentId: charge.gatewayPaymentId ?? undefined,
+        abandonedChargeIds: abandonedOf(charge),
       })),
     });
   }
+}
+
+/** Lista de orders abandonadas da parcela lida, sem confiar no formato gravado. */
+function abandonedOf(charge: Record<string, unknown>): string[] | undefined {
+  const ids = charge.abandonedChargeIds;
+  if (!Array.isArray(ids)) return undefined;
+  const valid = ids.filter((id): id is string => typeof id === 'string');
+  return valid.length ? valid : undefined;
 }

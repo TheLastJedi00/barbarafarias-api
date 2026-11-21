@@ -1,6 +1,10 @@
 import { Body, Controller, Post } from '@nestjs/common';
 import { IsOptional, IsString } from 'class-validator';
-import { AdminService, MigrateRolesReport } from './admin.service';
+import {
+  AdminService,
+  MigratePlanTiersReport,
+  MigrateRolesReport,
+} from './admin.service';
 import {
   AuthMigrationService,
   CleanupCredentialsReport,
@@ -27,6 +31,15 @@ export class AdminController {
   @Post('migrate-roles')
   migrateRoles(): Promise<MigrateRolesReport> {
     return this.service.migrateRoles();
+  }
+
+  /**
+   * Marca todo aluno sem tier como Consultoria Particular Premium (spec 035
+   * §7). Idempotente: rodar de novo só pega quem faltou.
+   */
+  @Post('migrate-plan-tiers')
+  migratePlanTiers(): Promise<MigratePlanTiersReport> {
+    return this.service.migratePlanTiers();
   }
 
   /**

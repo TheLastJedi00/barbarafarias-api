@@ -97,6 +97,58 @@ function build(
   return { service, billingSummary, subscriptionRepository, infra, goals };
 }
 
+describe('ManagerFinanceService — tiers (spec 035)', () => {
+  it('o pacote pesa a sexta parte em cada um dos 6 meses, como o Semestral', async () => {
+    const pacote = new Subscription({
+      id: 'a1',
+      studentId: 'a1',
+      plan: 'PACKAGE',
+      tierId: 'private',
+      priceSnapshot: 1800,
+      status: SUBSCRIPTION_STATUS.ACTIVE,
+      charges: charges('2026-08', 6, 300).map((charge) => ({
+        ...charge,
+        status: 'paid' as const,
+      })),
+    } as any);
+    const { service } = build({ subscriptions: [pacote] });
+
+    for (const month of ['2026-08', '2027-01']) {
+      expect((await service.getMonthlyOverview(month)).revenue).toBe(
+        netOfGatewayFee(300),
+      );
+    }
+    expect((await service.getMonthlyOverview('2027-02')).revenue).toBe(0);
+  });
+
+  it('conta as quebras de fidelidade do mês', async () => {
+    const quebrada = (id: string, at: string) =>
+      new Subscription({
+        id,
+        studentId: id,
+        plan: 'SUBSCRIPTION',
+        status: SUBSCRIPTION_STATUS.CANCELLED,
+        fidelityBrokenAt: at,
+        charges: [],
+      } as any);
+    const { service, subscriptionRepository } = build();
+    subscriptionRepository.findByStatus.mockImplementation(async (status) =>
+      status === SUBSCRIPTION_STATUS.CANCELLED
+        ? [
+            quebrada('a1', '2026-08-10T12:00:00.000Z'),
+            quebrada('a2', '2026-09-01T12:00:00.000Z'),
+            // 31/08 22h em Brasília já é 01/09 em UTC: conta em agosto.
+            quebrada('a3', '2026-09-01T01:00:00.000Z'),
+          ]
+        : [],
+    );
+
+    expect((await service.getMonthlyOverview('2026-08')).fidelityBreaks).toBe(
+      2,
+    );
+  });
+});
+
 describe('ManagerFinanceService — visão mensal', () => {
   it('projeta a receita somando as parcelas que vencem no mês (§5)', async () => {
     const { service } = build({

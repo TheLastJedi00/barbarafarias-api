@@ -64,6 +64,7 @@ function build(acceptances: PlanAcceptance[], subscriptions: Subscription[]) {
     {} as any,
     {} as any,
     {} as any,
+    {} as any,
   );
 }
 

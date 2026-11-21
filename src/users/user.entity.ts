@@ -1,4 +1,5 @@
 import { Role } from '../types/role';
+import type { PlanTierId } from '../plan-tiers/plan-tier.model';
 import type {
   SubscriptionPlan,
   SubscriptionStatus,
@@ -98,6 +99,14 @@ export class User {
    */
   subscriptionPlan?: SubscriptionPlan;
   subscriptionStatus?: SubscriptionStatus;
+  /**
+   * Tier vigente do aluno (spec 035): espelho escrito pelo `syncUser` e pela
+   * troca manual da gerente. Não confundir com `tier: 'modules'` (spec 032),
+   * que diz que tipo de conta é — este diz qual serviço o assinante comprou.
+   */
+  planTier?: PlanTierId;
+  /** A assinatura do tier foi encerrada fora da plataforma na fidelidade. */
+  fidelityBrokenAt?: string;
   teacherId?: string;
   teacherName?: string;
   pendingTeacher?: boolean; // professora responsável foi desativada
