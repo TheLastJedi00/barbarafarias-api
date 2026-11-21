@@ -120,4 +120,24 @@ describe('SubscriptionService — plano da turma (spec 036)', () => {
       }),
     ).rejects.toBeInstanceOf(ConflictException);
   });
+
+  it('pago o plano, quem veio pelo cadastro da loja deixa de ser só da loja', async () => {
+    const t = buildTier({ tier: grupo });
+    const sub = await t.service.createFromEnrollment({
+      studentId: 'aluno-1',
+      tierId: 'weekly-group',
+      plan: 'PACKAGE',
+      credit: 150,
+      startDate: '2026-12-01',
+    });
+    expect(
+      t.users.updateSubscriptionState.mock.calls.at(-1)![1],
+    ).not.toHaveProperty('leavesStore');
+
+    sub.status = 'ACTIVE';
+    await (t.service as any).syncUser(sub);
+    expect(t.users.updateSubscriptionState.mock.calls.at(-1)![1]).toMatchObject(
+      { leavesStore: true },
+    );
+  });
 });
