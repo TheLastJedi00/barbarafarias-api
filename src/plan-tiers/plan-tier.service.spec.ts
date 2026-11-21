@@ -121,6 +121,7 @@ describe('PlanTierService — gestão', () => {
     expect(tier.pending).toEqual({
       packagePrice: 2000,
       monthlyPrice: 320,
+      enrollmentFee: null,
       effectiveAt: MEIA_NOITE,
       requestedBy: 'gerente-1',
       requestedAt: AGORA.toISOString(),

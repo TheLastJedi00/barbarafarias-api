@@ -58,4 +58,17 @@ export class UpdatePlanTierDto {
   @IsPositive({ message: 'A mensalidade precisa ser maior que zero' })
   @Max(MAX_PRICE)
   monthlyPrice?: number | null;
+
+  /**
+   * Sinal da matrícula nos tiers de grupo (spec 036). Ausente = não mexe;
+   * `null` = fecha a matrícula. Agendado para a meia-noite, como os preços.
+   */
+  @ValidateIf(
+    (dto: UpdatePlanTierDto) =>
+      dto.enrollmentFee !== undefined && dto.enrollmentFee !== null,
+  )
+  @IsNumber({ maxDecimalPlaces: 2 }, { message: 'Sinal inválido' })
+  @IsPositive({ message: 'O sinal precisa ser maior que zero' })
+  @Max(MAX_PRICE)
+  enrollmentFee?: number | null;
 }
