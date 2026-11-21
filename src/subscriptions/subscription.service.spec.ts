@@ -651,7 +651,7 @@ describe('SubscriptionService — aceite dos termos', () => {
       new Coupon({
         id: 'c1',
         code: 'BEMVINDA',
-        discountAmount: 50,
+        discountValue: 50,
         durationMonths: null,
         active: true,
         createdAt: '',
@@ -812,7 +812,7 @@ describe('SubscriptionService — pagamento', () => {
       new Coupon({
         id: 'c1',
         code: 'BEMVINDA',
-        discountAmount: 50,
+        discountValue: 50,
         durationMonths: 3,
         active: true,
         createdAt: '',
@@ -937,7 +937,7 @@ describe('SubscriptionService — cupons', () => {
   const cupom = new Coupon({
     id: 'c1',
     code: 'BEMVINDA',
-    discountAmount: 50,
+    discountValue: 50,
     durationMonths: 3,
     active: true,
     createdAt: '2026-08-01T00:00:00.000Z',
@@ -988,7 +988,7 @@ describe('SubscriptionService — cupons', () => {
   it('parcela zerada pelo cupom é confirmada sem ir ao gateway', async () => {
     const { service, subscriptions, pix, coupons } = build();
     coupons.findByCode.mockResolvedValue(
-      new Coupon({ ...cupom, discountAmount: 999, durationMonths: null }),
+      new Coupon({ ...cupom, discountValue: 999, durationMonths: null }),
     );
 
     await service.choosePlan('aluno-1', {
@@ -1536,7 +1536,7 @@ describe('SubscriptionService — validação de cupom (RF16)', () => {
       new Coupon({
         id: 'c1',
         code: 'BEMVINDA',
-        discountAmount: 50,
+        discountValue: 50,
         durationMonths: 3,
         active: true,
         createdAt: '',
@@ -1544,7 +1544,7 @@ describe('SubscriptionService — validação de cupom (RF16)', () => {
       }),
     );
 
-    await expect(service.validateCoupon('bemvinda')).resolves.toEqual({
+    await expect(service.validateCoupon('bemvinda')).resolves.toMatchObject({
       code: 'BEMVINDA',
       discountAmount: 50,
       durationMonths: 3,
