@@ -60,11 +60,15 @@ import type {
 import { PlanTierService } from '../plan-tiers/plan-tier.service';
 import { isSellable, type PlanTier } from '../plan-tiers/plan-tier.model';
 import {
+  COUPON_PAYMENT_MODES,
   Coupon,
+  DISCOUNT_TYPES,
   applyDiscount,
+  discountFor,
   normalizeCouponCode,
   round2,
 } from './coupon.entity';
+import type { CouponPaymentMode } from './coupon.entity';
 import {
   PURCHASE_OUTCOMES,
   PlanAcceptance,
@@ -81,6 +85,7 @@ import {
   CreateCouponDto,
   PlanAcceptanceDto,
   SubscriptionDto,
+  ValidateCouponQueryDto,
 } from './dto/subscription.dto';
 import {
   addDays,
@@ -103,6 +108,25 @@ export const WITHDRAWAL_DAYS = 7;
 /** 'YYYY-MM-DD' → 'DD/MM/AAAA'. */
 function br(date: string): string {
   return date.split('-').reverse().join('/');
+}
+
+/** O que a validação do cupom precisa saber da compra (spec 035 §6). */
+interface CouponContext {
+  plan: SubscriptionPlan;
+  paymentMethod: PaymentMethod;
+  /** O tier com o preço vigente; `null` nos planos antigos. */
+  tier: PlanTier | null;
+}
+
+/** Em qual das formas de pagamento do cupom esta compra cai. */
+function couponModeOf(
+  plan: SubscriptionPlan,
+  method: PaymentMethod,
+): CouponPaymentMode {
+  if (plan === TIER_PLANS.SUBSCRIPTION) return COUPON_PAYMENT_MODES.SUBSCRIPTION;
+  return method === PAYMENT_METHODS.PIX_RECURRING
+    ? COUPON_PAYMENT_MODES.PACKAGE_PIX
+    : COUPON_PAYMENT_MODES.PACKAGE_CARD;
 }
 
 /** Mensagem única do bloqueio — a tela repete exatamente esta frase. */
@@ -221,7 +245,11 @@ export class SubscriptionService {
     }
 
     const coupon = dto.couponCode
-      ? await this.resolveCoupon(dto.couponCode)
+      ? await this.resolveCoupon(dto.couponCode, {
+          plan: dto.plan,
+          paymentMethod: dto.paymentMethod,
+          tier,
+        })
       : null;
 
     const subscription = tier
@@ -756,6 +784,7 @@ export class SubscriptionService {
         paymentMethod: subscription.paymentMethod,
       };
     }
+    await this.assertCouponModeKept(subscription, dto.paymentMethod);
 
     subscription.paymentMethod = dto.paymentMethod;
     subscription.updatedAt = new Date().toISOString();
@@ -1225,21 +1254,57 @@ export class SubscriptionService {
    * A rota é autenticada e exige o código exato: quem chama já digitou o cupom,
    * então não há tabela de descontos sendo exposta.
    */
-  async validateCoupon(code: string): Promise<{
+  async validateCoupon(
+    code: string,
+    context: ValidateCouponQueryDto = {},
+  ): Promise<{
     code: string;
     discountAmount: number;
     durationMonths: number | null;
+    discountType: string;
+    discountValue: number;
+    tierId?: string;
+    paymentModes?: CouponPaymentMode[];
   }> {
-    const resolved = await this.resolveCoupon(code);
+    // Com o contexto da tela (spec 035), a mesma régua da contratação: tier,
+    // forma de pagamento, limite — e o desconto já em reais sobre o preço que
+    // vale agora. Sem ele, o formato de antes.
+    const comContexto = !!(context.plan && context.paymentMethod);
+    const tier =
+      comContexto && context.plan && isTierPlan(context.plan) && context.tierId
+        ? await this.planTiers.getEffective(context.tierId)
+        : null;
+    const { resolved, coupon } = await this.resolveCouponWithEntity(
+      code,
+      comContexto
+        ? { plan: context.plan!, paymentMethod: context.paymentMethod!, tier }
+        : undefined,
+    );
     return {
       code: resolved.code,
       discountAmount: resolved.discount,
       durationMonths: resolved.remaining,
+      discountType: coupon.discountType,
+      discountValue: coupon.discountValue,
+      tierId: coupon.tierId,
+      paymentModes: coupon.paymentModes,
     };
   }
 
   async createCoupon(dto: CreateCouponDto, userId: string): Promise<Coupon> {
     const code = normalizeCouponCode(dto.code);
+    const value = dto.discountValue ?? dto.discountAmount;
+    if (!value) {
+      throw new BadRequestException('Informe o desconto do cupom');
+    }
+    const type = dto.discountType ?? DISCOUNT_TYPES.AMOUNT;
+    if (type === DISCOUNT_TYPES.PERCENT && (value > 100 || !dto.tierId)) {
+      throw new BadRequestException(
+        value > 100
+          ? 'O desconto percentual vai até 100%.'
+          : 'Escolha o plano do cupom percentual.',
+      );
+    }
     if (await this.coupons.findByCode(code)) {
       throw new BadRequestException('Já existe um cupom com esse código');
     }
@@ -1247,8 +1312,13 @@ export class SubscriptionService {
       new Coupon({
         id: randomUUID(),
         code,
-        discountAmount: round2(dto.discountAmount),
+        tierId: dto.tierId,
+        discountType: type,
+        discountValue: round2(value),
         durationMonths: dto.durationMonths ?? null,
+        paymentModes: dto.paymentModes,
+        maxUses: dto.maxUses ?? null,
+        usedCount: 0,
         active: true,
         createdAt: new Date().toISOString(),
         createdBy: userId,
@@ -1309,16 +1379,117 @@ export class SubscriptionService {
     return subscription;
   }
 
-  private async resolveCoupon(code: string): Promise<ResolvedCoupon> {
+  private async resolveCoupon(
+    code: string,
+    context?: CouponContext,
+  ): Promise<ResolvedCoupon> {
+    return (await this.resolveCouponWithEntity(code, context)).resolved;
+  }
+
+  /**
+   * Confere o cupom contra **esta** compra e diz quanto ele abate em reais.
+   *
+   * Sem contexto (a validação da tela antiga) só confere se existe e está
+   * ativo. Com contexto, a régua inteira da spec 035 §6, com o motivo da
+   * recusa — "cupom inválido" para tudo deixava a aluna sem saber o que fazer.
+   */
+  private async resolveCouponWithEntity(
+    code: string,
+    context?: CouponContext,
+  ): Promise<{ resolved: ResolvedCoupon; coupon: Coupon }> {
     const coupon = await this.coupons.findByCode(code);
     if (!coupon || !coupon.active) {
       throw new BadRequestException('Cupom inválido ou expirado');
     }
+
+    if (!context) {
+      return {
+        coupon,
+        resolved: {
+          code: coupon.code,
+          discount: coupon.discountValue,
+          remaining: coupon.durationMonths,
+        },
+      };
+    }
+
+    const doTier = isTierPlan(context.plan);
+    // Cupom de tier só vale no tier dele; cupom antigo (sem tier), só nos
+    // planos antigos.
+    if (doTier ? coupon.tierId !== context.tier?.id : !!coupon.tierId) {
+      throw new BadRequestException('Este cupom não vale para este plano.');
+    }
+
+    if (doTier) {
+      const mode = couponModeOf(context.plan, context.paymentMethod);
+      if (coupon.paymentModes?.length && !coupon.paymentModes.includes(mode)) {
+        throw new BadRequestException(
+          'Este cupom não vale para esta forma de pagamento.',
+        );
+      }
+    }
+
+    if (coupon.maxUses && coupon.usedCount >= coupon.maxUses) {
+      throw new BadRequestException('Cupom esgotado.');
+    }
+
+    let discount: number;
+    if (context.plan === TIER_PLANS.PACKAGE) {
+      discount = discountFor(coupon, context.tier?.packagePrice ?? 0);
+    } else if (context.plan === TIER_PLANS.SUBSCRIPTION) {
+      discount = discountFor(coupon, context.tier?.monthlyPrice ?? 0);
+    } else {
+      discount = coupon.discountValue;
+    }
+
     return {
-      code: coupon.code,
-      discount: coupon.discountAmount,
-      remaining: coupon.durationMonths,
+      coupon,
+      resolved: {
+        code: coupon.code,
+        discount,
+        // No pacote o desconto é uma vez, sobre o valor inteiro.
+        remaining:
+          context.plan === TIER_PLANS.PACKAGE ? null : coupon.durationMonths,
+      },
     };
+  }
+
+  /**
+   * Trocar de PIX para cartão (ou o contrário) no pacote não pode furar a
+   * restrição de forma de pagamento do cupom aplicado.
+   */
+  private async assertCouponModeKept(
+    subscription: Subscription,
+    method: PaymentMethod,
+  ): Promise<void> {
+    if (subscription.plan !== TIER_PLANS.PACKAGE || !subscription.couponCode) {
+      return;
+    }
+    const coupon = await this.coupons.findByCode(subscription.couponCode);
+    const mode = couponModeOf(subscription.plan, method);
+    if (coupon?.paymentModes?.length && !coupon.paymentModes.includes(mode)) {
+      throw new BadRequestException(
+        `O cupom ${subscription.couponCode} não vale para esta forma de pagamento.`,
+      );
+    }
+  }
+
+  /**
+   * Conta o uso do cupom **uma vez**, no primeiro pagamento confirmado.
+   * Falhar aqui não desfaz a confirmação: o dinheiro entrou, e um uso a menos
+   * no contador é problema menor que um webhook que nunca responde 200.
+   */
+  private async countCouponUse(subscription: Subscription): Promise<void> {
+    if (!subscription.couponCode || subscription.couponCounted) return;
+    subscription.couponCounted = true;
+    await this.subscriptions.save(subscription);
+    try {
+      await this.coupons.incrementUsage(subscription.couponCode);
+    } catch (error) {
+      this.logger.error(
+        `Uso do cupom ${subscription.couponCode} não contado para ${subscription.studentId}: ${String(error)}`,
+      );
+    }
   }
 
   /**
@@ -1764,6 +1935,7 @@ export class SubscriptionService {
 
     await this.subscriptions.save(subscription);
     await this.syncUser(subscription);
+    await this.countCouponUse(subscription);
   }
 
   /**

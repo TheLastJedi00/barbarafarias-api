@@ -1,4 +1,7 @@
 import {
+  ArrayMinSize,
+  ArrayUnique,
+  IsArray,
   Equals,
   IsBoolean,
   IsIn,
@@ -33,6 +36,11 @@ import type {
   SubscriptionPlan,
 } from '../subscription.entity';
 import type { ChargeOutcome } from '../payment.gateway';
+import {
+  COUPON_PAYMENT_MODES,
+  DISCOUNT_TYPES,
+} from '../coupon.entity';
+import type { CouponPaymentMode, DiscountType } from '../coupon.entity';
 
 /**
  * O aceite dos termos, **dentro** da contratação (spec 023 §7.2).
@@ -147,15 +155,74 @@ export class CreateCouponDto {
   @MaxLength(40)
   code!: string;
 
+  /**
+   * Tier em que o cupom vale (spec 035). O front novo sempre manda. Ausente =
+   * cupom dos planos antigos — o formato de antes, aceito até o front novo
+   * entrar no ar (com `forbidNonWhitelisted`, recusá-lo derrubaria a tela).
+   */
+  @IsOptional()
+  @IsIn(PLAN_TIER_ID_LIST, { message: 'Plano inválido' })
+  tierId?: PlanTierId;
+
+  @IsOptional()
+  @IsIn(Object.values(DISCOUNT_TYPES), { message: 'Tipo de desconto inválido' })
+  discountType?: DiscountType;
+
+  /** Em R$ ou em %, conforme `discountType`. */
+  @IsOptional()
+  @IsNumber({ maxDecimalPlaces: 2 })
+  @IsPositive({ message: 'O desconto deve ser maior que zero' })
+  discountValue?: number;
+
+  /** **Obsoleto** (front de antes da spec 035): o mesmo que `discountValue` em R$. */
+  @IsOptional()
   @IsNumber()
   @IsPositive({ message: 'O desconto deve ser maior que zero' })
-  discountAmount!: number;
+  discountAmount?: number;
 
   /** Ausente ou `null` = cupom vitalício, vale por toda a assinatura (RF15). */
   @IsInt()
   @Min(1)
   @IsOptional()
   durationMonths?: number | null;
+
+  /** Ausente = vale em todas as formas de pagamento. */
+  @IsOptional()
+  @IsArray()
+  @ArrayMinSize(1)
+  @ArrayUnique()
+  @IsIn(Object.values(COUPON_PAYMENT_MODES), {
+    each: true,
+    message: 'Forma de pagamento inválida',
+  })
+  paymentModes?: CouponPaymentMode[];
+
+  /** Ausente ou `null` = ilimitado. */
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  maxUses?: number | null;
+}
+
+/**
+ * Contexto de `GET /subscriptions/coupons/:code` (spec 035). Com ele a
+ * validação confere tier e forma de pagamento e devolve o desconto em reais;
+ * sem ele, responde como antes.
+ */
+export class ValidateCouponQueryDto {
+  @IsOptional()
+  @IsIn(PLAN_TIER_ID_LIST, { message: 'Plano inválido' })
+  tierId?: PlanTierId;
+
+  @IsOptional()
+  @IsIn(Object.values(SUBSCRIPTION_PLANS), { message: 'Plano inválido' })
+  plan?: SubscriptionPlan;
+
+  @IsOptional()
+  @IsIn(Object.values(PAYMENT_METHODS), {
+    message: 'Forma de pagamento inválida',
+  })
+  paymentMethod?: PaymentMethod;
 }
 
 export class ToggleCouponDto {

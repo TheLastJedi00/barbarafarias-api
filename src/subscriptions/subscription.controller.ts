@@ -6,6 +6,7 @@ import {
   Param,
   Patch,
   Post,
+  Query,
 } from '@nestjs/common';
 import { SubscriptionService } from './subscription.service';
 import {
@@ -15,6 +16,7 @@ import {
   ChoosePlanDto,
   ChoosePlanResponseDto,
   SubscriptionDto,
+  ValidateCouponQueryDto,
 } from './dto/subscription.dto';
 import { Charge, PLAN_CONFIGS } from './subscription.entity';
 import type {
@@ -91,8 +93,11 @@ export class SubscriptionController {
    */
   @Get('coupons/:code')
   @Roles(ROLES.STUDENT)
-  validateCoupon(@Param('code') code: string) {
-    return this.service.validateCoupon(code);
+  validateCoupon(
+    @Param('code') code: string,
+    @Query() query: ValidateCouponQueryDto,
+  ) {
+    return this.service.validateCoupon(code, query);
   }
 
   @Get('me')
