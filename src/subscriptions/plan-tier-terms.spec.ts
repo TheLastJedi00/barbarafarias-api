@@ -13,9 +13,10 @@ const PREMIUM = {
 };
 
 function texto(terms: ReturnType<typeof buildTierTerms>): string {
-  return [terms.summary, ...terms.clauses.map((c) => `${c.title} ${c.body}`)].join(
-    '\n',
-  );
+  return [
+    terms.summary,
+    ...terms.clauses.map((c) => `${c.title} ${c.body}`),
+  ].join('\n');
 }
 
 describe('buildTierTerms', () => {
@@ -24,7 +25,9 @@ describe('buildTierTerms', () => {
     const corpo = texto(terms);
 
     expect(terms.version).toBe(TIER_TERMS_VERSION);
-    expect(terms.planLabel).toBe('Consultoria Particular Premium — pacote de 6 meses');
+    expect(terms.planLabel).toBe(
+      'Consultoria Particular Premium — pacote de 6 meses',
+    );
     expect(corpo).toMatch(/R\$\s?1\.800,00/);
     expect(corpo).toMatch(/6 meses/);
     expect(corpo).toMatch(/12 vezes/);

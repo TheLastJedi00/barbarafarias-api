@@ -1,5 +1,11 @@
-import { PlanConfig, planConfig } from './subscription.entity';
-import type { LegacyPlan } from './subscription.entity';
+import { PlanConfig, planConfig, regimeOf } from './subscription.entity';
+import type { LegacyPlan, TierPlan } from './subscription.entity';
+import {
+  FIDELITY_MONTHS,
+  PACKAGE_MONTHS,
+  type PlanTier,
+} from '../plan-tiers/plan-tier.model';
+import { PACKAGE_MAX_INSTALLMENTS } from './subscription.entity';
 
 /**
  * Versão do texto aceito.
@@ -124,6 +130,97 @@ function recurringClauses(config: PlanConfig): TermsClause[] {
         `seguintes; o mês já pago não é reembolsado.`,
     },
   ];
+}
+
+/**
+ * Versão do contrato dos **tiers** (spec 035). Separada da dos planos antigos
+ * porque o texto é outro: um aceite antigo continua apontando para a redação
+ * dele, e o de tier para esta.
+ */
+export const TIER_TERMS_VERSION = '2026-11-1';
+
+/**
+ * O contrato de um tier, num dos dois jeitos de comprar (spec 035 §4, §5, §9).
+ *
+ * Os números saem do tier **com o preço vigente** — o mesmo que a contratação
+ * congela no `priceSnapshot` —, e as regras são as que o serviço aplica:
+ * pacote sem cancelamento, fidelidade de 6 meses, desistência em 7 dias.
+ *
+ * ⚠️ **Minuta**, como a dos planos antigos: a dona revisa e publica.
+ */
+export function buildTierTerms(
+  tier: PlanTier,
+  plan: TierPlan,
+): {
+  version: string;
+  planLabel: string;
+  summary: string;
+  clauses: TermsClause[];
+} {
+  const price = plan === 'PACKAGE' ? tier.packagePrice : tier.monthlyPrice;
+  if (!price) {
+    throw new Error(
+      `O plano ${tier.name} não vende ${plan === 'PACKAGE' ? 'pacote' : 'assinatura'}.`,
+    );
+  }
+  const regime = regimeOf({ plan, tierName: tier.name, priceSnapshot: price });
+
+  const inclui: TermsClause = {
+    title: 'O que o plano inclui',
+    body: `${tier.name}: ${tier.benefits.join('; ')}.`,
+  };
+
+  const clauses: TermsClause[] =
+    plan === 'PACKAGE'
+      ? [
+          inclui,
+          {
+            title: 'Compra de 6 meses, à vista ou parcelada com juros',
+            body:
+              `O pacote custa ${money(price)} à vista, no PIX ou no cartão. No cartão, ` +
+              `pode ser parcelado em até ${PACKAGE_MAX_INSTALLMENTS} vezes, com os juros do ` +
+              `parcelamento cobrados pelo Mercado Pago e mostrados antes da confirmação. ` +
+              `A compra é uma só: o limite do cartão é comprometido pelo valor total desde já.`,
+          },
+          {
+            title: 'Duração do acesso',
+            body:
+              `O acesso vale por ${PACKAGE_MONTHS} meses, contados a partir da confirmação do ` +
+              `pagamento. O pacote não pode ser cancelado depois do prazo de desistência: ` +
+              `o acesso segue até o fim dos ${PACKAGE_MONTHS} meses.`,
+          },
+        ]
+      : [
+          inclui,
+          {
+            title: 'Cobrança mensal automática',
+            body:
+              `${money(price)} são cobrados do seu cartão de crédito a cada mês, ` +
+              `automaticamente. A primeira cobrança pode levar até uma hora para aparecer. ` +
+              `Ao cadastrar o cartão, pode aparecer e desaparecer no extrato uma cobrança de ` +
+              `valor mínimo: é a verificação do cartão, e ela é estornada.`,
+          },
+          {
+            title: `Fidelidade de ${FIDELITY_MONTHS} meses`,
+            body:
+              `A assinatura tem fidelidade de ${FIDELITY_MONTHS} meses a partir da contratação: ` +
+              `passado o prazo de desistência, ela só pode ser cancelada pelo painel depois ` +
+              `desse período. Depois da fidelidade, segue renovando todo mês até ser cancelada, ` +
+              `e o mês já pago vale até o fim. Se a assinatura for encerrada por fora do painel ` +
+              `durante a fidelidade, é sem multa: o acesso vale até o fim do mês pago e é ` +
+              `bloqueado quando a próxima cobrança não acontecer.`,
+          },
+        ];
+
+  return {
+    version: TIER_TERMS_VERSION,
+    planLabel: regime.label,
+    summary:
+      plan === 'PACKAGE'
+        ? `${regime.label}: ${money(price)} à vista, ou em até ${PACKAGE_MAX_INSTALLMENTS}x no cartão com juros do parcelamento.`
+        : `${regime.label}: ${money(price)} por mês, com fidelidade de ${FIDELITY_MONTHS} meses.`,
+    clauses: [...clauses, ...FIXED_CLAUSES],
+  };
 }
 
 /** O que vale para qualquer plano. */
