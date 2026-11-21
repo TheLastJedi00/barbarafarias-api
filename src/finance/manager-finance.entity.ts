@@ -20,6 +20,11 @@ export interface MonthlyOverview {
   profit: number;
   /** Assinaturas ativas que sustentam a projeção. */
   activeStudents: number;
+  /**
+   * Assinaturas de tier encerradas fora da plataforma durante a fidelidade,
+   * neste mês (spec 035, decisão 10). Sem multa; é só para a gerente ver.
+   */
+  fidelityBreaks: number;
   /** Meta do mês, quando a gerente definiu uma (RF8). */
   goalTarget?: number;
 }

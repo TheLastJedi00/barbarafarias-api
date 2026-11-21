@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { PlanTierModule } from '../plan-tiers/plan-tier.module';
 import { ConfigModule } from '@nestjs/config';
 import { SubscriptionController } from './subscription.controller';
 import { SubscriptionService } from './subscription.service';
@@ -25,7 +26,13 @@ import { StoreModule } from '../store/store.module';
   // `StoreModule`: o webhook entrega à loja as orders que são dela (spec 032).
   // A loja não importa este módulo — só o `MercadoPagoModule` —, e é isso que
   // mantém a dependência numa direção só.
-  imports: [ConfigModule, MercadoPagoModule, StoreModule, UserModule],
+  imports: [
+    ConfigModule,
+    MercadoPagoModule,
+    StoreModule,
+    UserModule,
+    PlanTierModule,
+  ],
   controllers: [SubscriptionController, MercadoPagoWebhookController],
   providers: [
     SubscriptionService,

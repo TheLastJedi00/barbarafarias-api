@@ -1,5 +1,7 @@
 import { SubscriptionController } from './subscription.controller';
 import { ROLES_KEY } from '../decorators/roles.decorator';
+import { IS_PUBLIC_KEY } from '../decorators/public.decorator';
+import { PLAN_CONFIGS } from './subscription.entity';
 import { ROLES } from '../types/role';
 
 /**
@@ -17,6 +19,11 @@ import { ROLES } from '../types/role';
 describe('SubscriptionController — papéis', () => {
   const rolesOf = (method: keyof SubscriptionController): unknown =>
     Reflect.getMetadata(ROLES_KEY, SubscriptionController.prototype[method]);
+  const isPublic = (method: keyof SubscriptionController): unknown =>
+    Reflect.getMetadata(
+      IS_PUBLIC_KEY,
+      SubscriptionController.prototype[method],
+    );
 
   it('deixa a gerente ler o contrato de um plano, não só o aluno', () => {
     expect(rolesOf('terms')).toEqual(
@@ -28,5 +35,47 @@ describe('SubscriptionController — papéis', () => {
     // O texto do plano é catálogo e pode ser lido por quem contrata; a lista de
     // quem aceitou é de pessoas, e não sai do lado da gerente.
     expect(rolesOf('acceptances')).toEqual([ROLES.MANAGER]);
+  });
+
+  /*
+   * Spec 034: a landing da Academy mostra os preços antes do login. O
+   * catálogo é o mesmo texto de qualquer página de preços — e só isso pode
+   * sair por esta rota sem token.
+   */
+  it('deixa o catálogo dos planos aberto a quem não está logado', () => {
+    expect(isPublic('plans')).toBe(true);
+    expect(rolesOf('plans')).toBeUndefined();
+  });
+
+  it('o contrato do tier segue o do plano: aluno e gerente, nunca público', () => {
+    expect(rolesOf('tierTerms')).toEqual(
+      expect.arrayContaining([ROLES.STUDENT, ROLES.MANAGER]),
+    );
+    expect(isPublic('tierTerms')).toBeUndefined();
+  });
+
+  it('não abre o contrato do plano junto com o catálogo', () => {
+    expect(isPublic('terms')).toBeUndefined();
+  });
+
+  it('devolve só os campos do catálogo', () => {
+    const controller = new SubscriptionController({} as never, {} as never);
+    const plans = controller.plans();
+    expect(plans).toHaveLength(Object.keys(PLAN_CONFIGS).length);
+    for (const plan of plans) {
+      expect(Object.keys(plan).sort()).toEqual(
+        [
+          'plan',
+          'label',
+          'totalAmount',
+          'installments',
+          'installmentAmount',
+          'payerTotal',
+          'payerInstallment',
+          'recurring',
+          'description',
+        ].sort(),
+      );
+    }
   });
 });

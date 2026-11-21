@@ -241,6 +241,15 @@ export abstract class CardGateway extends PaymentGateway {
    * desafio, em vez de esperar a notificação.
    */
   abstract fetchChargeOutcome(chargeId: string): Promise<CheckoutResult>;
+  /**
+   * Estorna **inteiro** o pagamento de um ciclo de assinatura (spec 035 §5).
+   *
+   * Existe porque o ciclo não é order: o `preapproval` cobra por pagamentos
+   * avulsos, e é cada um deles que se devolve quando o aluno desiste nos 7
+   * dias do CDC. `reference` gera a chave de idempotência: dois cliques são
+   * um estorno só.
+   */
+  abstract refundPayment(paymentId: string, reference: string): Promise<void>;
 }
 
 /** R$ → centavos, usado nas chaves de reconciliação. */

@@ -340,6 +340,42 @@ describe('UserService', () => {
       expect(userRepository.update).not.toHaveBeenCalled();
     });
 
+    describe('tier do aluno (spec 035, decisão 7)', () => {
+      it('a gerente troca o tier à mão', async () => {
+        userRepository.findById.mockResolvedValue(
+          new User({ id: 'a1', fullName: 'Léo', role: 'student' } as any),
+        );
+
+        const result = await service.updateUser(manager, 'a1', {
+          planTier: 'weekly-group',
+        } as any);
+
+        expect(result.planTier).toBe('weekly-group');
+        expect(userRepository.update).toHaveBeenCalledTimes(1);
+      });
+
+      it('a professora não troca o tier, nem do próprio aluno', async () => {
+        userRepository.findById.mockResolvedValue(
+          new User({ id: 'a1', teacherId: 't1', role: 'student' } as any),
+        );
+
+        await expect(
+          service.updateUser(teacher, 'a1', { planTier: 'private' } as any),
+        ).rejects.toBeInstanceOf(ForbiddenException);
+        expect(userRepository.update).not.toHaveBeenCalled();
+      });
+
+      it('tier só se aplica a aluno', async () => {
+        userRepository.findById.mockResolvedValue(
+          new User({ id: 't9', role: 'teacher' } as any),
+        );
+
+        await expect(
+          service.updateUser(manager, 't9', { planTier: 'private' } as any),
+        ).rejects.toThrow(/aluno/);
+      });
+    });
+
     it('professora edita aluno vinculado a ela', async () => {
       userRepository.findById.mockResolvedValue(
         new User({

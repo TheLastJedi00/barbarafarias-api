@@ -22,6 +22,7 @@ import { RecruitmentModule } from './recruitment/recruitment.module';
 import { LegalModule } from './legal/legal.module';
 import { BrandStudioModule } from './brand-studio/brand-studio.module';
 import { StoreModule } from './store/store.module';
+import { PlanTierModule } from './plan-tiers/plan-tier.module';
 import { AuthGuard } from './guards/auth.guard';
 import { RolesGuard } from './guards/roles.guard';
 import { ActivePlanGuard } from './guards/active-plan.guard';
@@ -46,6 +47,7 @@ import { FirebaseAuthModule } from './firestore/firebase-auth.module';
     LessonModule,
     RescheduleModule,
     BillingModule,
+    PlanTierModule,
     SubscriptionModule,
     ManagerFinanceModule,
     FeedbackModule,

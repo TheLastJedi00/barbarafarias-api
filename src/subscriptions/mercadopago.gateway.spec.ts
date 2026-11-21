@@ -721,6 +721,45 @@ describe('MercadoPagoGateway — reembolso (spec 032)', () => {
   });
 });
 
+describe('MercadoPagoGateway — estorno do pagamento de um ciclo (spec 035)', () => {
+  const realFetch = global.fetch;
+  afterEach(() => {
+    global.fetch = realFetch;
+  });
+
+  it('estorna o pagamento inteiro com o token de Assinaturas e chave estável', async () => {
+    const { gateway } = build();
+    const fetchMock = jest
+      .fn()
+      .mockResolvedValue({ ok: true, json: async () => ({ id: 1 }) });
+    global.fetch = fetchMock as never;
+
+    await gateway.refundPayment('987', 'cancel:aluno-1:1');
+
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe('https://api.mercadopago.com/v1/payments/987/refunds');
+    expect(init.method).toBe('POST');
+    expect(init.headers.Authorization).toBe('Bearer TEST-token');
+    // Dois cliques no "cancelar" produzem a mesma chave: um estorno só.
+    expect(init.headers['X-Idempotency-Key']).toBe(
+      idempotencyKeyFor('refund|cancel:aluno-1:1'),
+    );
+    // Corpo vazio é estorno **total**.
+    expect(init.body).toBe('{}');
+  });
+
+  it('falha do provedor estoura com o status, em vez de passar calada', async () => {
+    const { gateway } = build();
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: false,
+      status: 400,
+      text: async () => 'x',
+    }) as never;
+
+    await expect(gateway.refundPayment('987', 'r')).rejects.toThrow(/400/);
+  });
+});
+
 describe('MercadoPagoGateway — assinatura do webhook', () => {
   /** O manifesto exatamente como a doc o define, para gerar o vetor. */
   function assinar(dataId: string, requestId: string, ts: string) {

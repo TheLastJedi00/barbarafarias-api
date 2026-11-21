@@ -1,6 +1,8 @@
 import {
   BadRequestException,
+  ConflictException,
   ForbiddenException,
+  GoneException,
   Injectable,
   Logger,
   NotFoundException,
@@ -37,21 +39,37 @@ import {
   Charge,
   PAYMENT_METHODS,
   RECURRING_SCHEDULE_MONTHS,
+  PACKAGE_MAX_INSTALLMENTS,
   SUBSCRIPTION_STATUS,
+  planConfig,
   Subscription,
+  TIER_PLANS,
   addMonths,
+  fidelityUntilOf,
   grantsAccess,
+  isTierPlan,
   paidAccessUntil,
   payerAmountsOf,
-  planConfig,
+  regimeOf,
 } from './subscription.entity';
-import type { PaymentMethod, SubscriptionPlan } from './subscription.entity';
+import type {
+  LegacyPlan,
+  PaymentMethod,
+  SubscriptionPlan,
+  TierPlan,
+} from './subscription.entity';
+import { PlanTierService } from '../plan-tiers/plan-tier.service';
+import { isSellable, type PlanTier } from '../plan-tiers/plan-tier.model';
 import {
+  COUPON_PAYMENT_MODES,
   Coupon,
+  DISCOUNT_TYPES,
   applyDiscount,
+  discountFor,
   normalizeCouponCode,
   round2,
 } from './coupon.entity';
+import type { CouponPaymentMode } from './coupon.entity';
 import {
   PURCHASE_OUTCOMES,
   PlanAcceptance,
@@ -68,8 +86,9 @@ import {
   CreateCouponDto,
   PlanAcceptanceDto,
   SubscriptionDto,
+  ValidateCouponQueryDto,
 } from './dto/subscription.dto';
-import { todayInAppTimezone } from '../common/time';
+import { addDays, toZonedDateString, todayInAppTimezone } from '../common/time';
 import { randomUUID } from 'node:crypto';
 
 /** Desconto aplicado a uma parcela, já resolvido contra o cupom. */
@@ -78,6 +97,34 @@ interface ResolvedCoupon {
   discount: number;
   /** Quantas parcelas recebem o abatimento. `null` = todas (vitalício). */
   remaining: number | null;
+}
+
+/** Prazo de arrependimento da compra pela internet (CDC art. 49). */
+export const WITHDRAWAL_DAYS = 7;
+
+/** 'YYYY-MM-DD' → 'DD/MM/AAAA'. */
+function br(date: string): string {
+  return date.split('-').reverse().join('/');
+}
+
+/** O que a validação do cupom precisa saber da compra (spec 035 §6). */
+interface CouponContext {
+  plan: SubscriptionPlan;
+  paymentMethod: PaymentMethod;
+  /** O tier com o preço vigente; `null` nos planos antigos. */
+  tier: PlanTier | null;
+}
+
+/** Em qual das formas de pagamento do cupom esta compra cai. */
+function couponModeOf(
+  plan: SubscriptionPlan,
+  method: PaymentMethod,
+): CouponPaymentMode {
+  if (plan === TIER_PLANS.SUBSCRIPTION)
+    return COUPON_PAYMENT_MODES.SUBSCRIPTION;
+  return method === PAYMENT_METHODS.PIX_RECURRING
+    ? COUPON_PAYMENT_MODES.PACKAGE_PIX
+    : COUPON_PAYMENT_MODES.PACKAGE_CARD;
 }
 
 /** Mensagem única do bloqueio — a tela repete exatamente esta frase. */
@@ -114,13 +161,24 @@ export function assertMethodAllowed(
   plan: SubscriptionPlan,
   method: PaymentMethod,
 ): void {
-  if (
-    method === PAYMENT_METHODS.PIX_RECURRING &&
-    planConfig(plan).installments > 1
-  ) {
+  if (method !== PAYMENT_METHODS.PIX_RECURRING) return;
+
+  // **Tier (spec 035):** o pacote é uma compra à vista e aceita PIX — o QR é
+  // do valor inteiro, não de uma parcela. A assinatura é só cartão: não existe
+  // PIX recorrente que o gateway cobre sozinho.
+  if (plan === TIER_PLANS.PACKAGE) return;
+  if (plan === TIER_PLANS.SUBSCRIPTION) {
+    throw new BadRequestException(SUBSCRIPTION_CARD_ONLY);
+  }
+
+  if (regimeOf({ plan }).installments > 1) {
     throw new BadRequestException(PIX_INSTALLMENT_BLOCKED);
   }
 }
+
+/** A assinatura do tier cobra sozinha todo mês, e isso só o cartão faz. */
+export const SUBSCRIPTION_CARD_ONLY =
+  'A assinatura é cobrada no cartão de crédito. Para pagar no PIX, escolha o pacote de 6 meses.';
 
 @Injectable()
 export class SubscriptionService {
@@ -134,6 +192,7 @@ export class SubscriptionService {
     private readonly pix: PixGateway,
     private readonly card: CardGateway,
     private readonly configService: ConfigService,
+    private readonly planTiers: PlanTierService,
   ) {}
 
   // ---------------------------------------------------------------- aluno
@@ -152,7 +211,21 @@ export class SubscriptionService {
       throw new NotFoundException('Aluno não encontrado');
     }
     this.assertPayableProfile(student);
+    // **Fim da venda dos planos antigos (spec 035, T27)** — atrás de uma
+    // variável, e não de um deploy, por causa da ordem de implantação da spec
+    // 025: o front novo tem de parar de mandar o plano antigo **antes** de o
+    // backend passar a recusá-lo. Liga-se depois que o front estiver no ar. O
+    // Mensal antigo segue renovando: renovação não passa por aqui.
+    if (
+      !isTierPlan(dto.plan) &&
+      this.configService.get<string>('LEGACY_PLANS_CLOSED') === 'true'
+    ) {
+      throw new GoneException(
+        'Este plano não é mais vendido. Escolha um dos planos disponíveis.',
+      );
+    }
     assertMethodAllowed(dto.plan, dto.paymentMethod);
+    const tier = await this.resolveTier(dto);
 
     const existing = await this.subscriptions.findByStudent(studentId);
     if (existing) {
@@ -162,12 +235,12 @@ export class SubscriptionService {
       // pagar de novo meses que já foram pagos. O status nem entra na conta:
       // o que importa é haver acesso comprado de pé.
       if (
-        !planConfig(existing.plan).recurring &&
+        !regimeOf(existing).recurring &&
         existing.accessUntil &&
         this.hoje() <= existing.accessUntil
       ) {
         throw new BadRequestException(
-          `Você já tem o plano ${planConfig(existing.plan).label} contratado até ${existing.accessUntil.split('-').reverse().join('/')}. Contrate um plano novo quando este período terminar.`,
+          `Você já tem o plano ${regimeOf(existing).label} contratado até ${existing.accessUntil.split('-').reverse().join('/')}. Contrate um plano novo quando este período terminar.`,
         );
       }
 
@@ -183,15 +256,22 @@ export class SubscriptionService {
     }
 
     const coupon = dto.couponCode
-      ? await this.resolveCoupon(dto.couponCode)
+      ? await this.resolveCoupon(dto.couponCode, {
+          plan: dto.plan,
+          paymentMethod: dto.paymentMethod,
+          tier,
+        })
       : null;
 
-    const subscription = this.buildSubscription(
-      studentId,
-      dto.plan,
-      dto.paymentMethod,
-      coupon,
-    );
+    const subscription = tier
+      ? this.buildTierSubscription(
+          studentId,
+          dto.plan as TierPlan,
+          tier,
+          dto.paymentMethod,
+          coupon,
+        )
+      : this.buildSubscription(studentId, dto.plan, dto.paymentMethod, coupon);
     // **O aceite vem antes da cobrança**, na mesma operação que cria a
     // assinatura. Gravá-lo depois abriria a janela em que o aluno já foi
     // debitado e ainda não há registro de que concordou — e é justamente na
@@ -248,7 +328,8 @@ export class SubscriptionService {
     }
     this.assertPayableProfile(student);
 
-    const config = planConfig(subscription.plan);
+    const config = regimeOf(subscription);
+    const installments = this.cardInstallmentsFor(subscription, dto);
 
     // **Antes de cobrar, ver se já não foi cobrado.**
     //
@@ -281,7 +362,7 @@ export class SubscriptionService {
         studentId,
         chargeIndex: charge.index,
         recurring: { cycles: config.recurring ? null : config.installments },
-        installments: config.installments,
+        installments,
         card: { token: dto.token, paymentMethodId: dto.paymentMethodId },
         couponCode: subscription.couponCode,
       });
@@ -338,6 +419,9 @@ export class SubscriptionService {
 
     charge.gatewayChargeId = checkout.id;
     charge.gatewayProvider = checkout.provider;
+    if (subscription.plan === TIER_PLANS.PACKAGE) {
+      subscription.cardInstallments = installments;
+    }
     if (checkout.subscriptionId) {
       subscription.gatewaySubscriptionId = checkout.subscriptionId;
     }
@@ -380,7 +464,7 @@ export class SubscriptionService {
     subscription: Subscription,
     acceptance: PlanAcceptanceDto,
   ): Promise<void> {
-    const config = planConfig(subscription.plan);
+    const config = regimeOf(subscription);
     const acordado = payerAmountsOf(subscription);
     await this.acceptances.create(
       new PlanAcceptance({
@@ -395,7 +479,12 @@ export class SubscriptionService {
         // parcelado que leu na tela — não com a base que cobramos do provedor,
         // que é conta nossa e nunca apareceu para ela.
         totalAmount: acordado.total,
-        installments: subscription.installments,
+        // No tier o que se acorda é o preço à vista (o pacote) ou a
+        // mensalidade: o parcelamento do pacote é escolhido depois, no cartão,
+        // com os juros que o Mercado Pago mostra ali.
+        installments: isTierPlan(subscription.plan)
+          ? 1
+          : subscription.installments,
         installmentAmount: acordado.installment,
         termsVersion: acceptance.termsVersion,
         acceptedAt: new Date().toISOString(),
@@ -412,7 +501,10 @@ export class SubscriptionService {
     ]);
 
     const porAluno = new Map(
-      subscriptions.map((subscription) => [subscription.studentId, subscription]),
+      subscriptions.map((subscription) => [
+        subscription.studentId,
+        subscription,
+      ]),
     );
 
     // Qual aceite de cada aluna é o vigente. A assinatura é **uma** e é
@@ -477,7 +569,7 @@ export class SubscriptionService {
     // No mensal o que existe lá fora é uma **assinatura**, não uma order: criar
     // outra colocaria o aluno em dois `preapproval` cobrando todo mês, para
     // sempre. Nem se pergunta ao gateway — a existência do id já responde.
-    if (planConfig(subscription.plan).recurring) {
+    if (regimeOf(subscription).recurring) {
       if (!subscription.gatewaySubscriptionId) return null;
       this.logger.warn(
         `Assinatura de ${subscription.studentId} já existe (${subscription.gatewaySubscriptionId}); nova cobrança recusada.`,
@@ -609,7 +701,9 @@ export class SubscriptionService {
 
     const charge = this.nextPendingCharge(subscription);
     if (!charge?.gatewayChargeId) {
-      throw new BadRequestException('Não há cobrança em aberto para recomeçar.');
+      throw new BadRequestException(
+        'Não há cobrança em aberto para recomeçar.',
+      );
     }
 
     const paga = await this.paidOutcomeOf(
@@ -664,7 +758,7 @@ export class SubscriptionService {
     // **No mensal não há order para reler.** O que existe lá fora é um
     // `preapproval`, e a primeira cobrança dele sai em até ~1h — quem confirma
     // é o webhook. Reler o id da assinatura como se fosse order daria 404.
-    if (planConfig(subscription.plan).recurring) return semNovidade();
+    if (regimeOf(subscription).recurring) return semNovidade();
 
     const result = await this.card.fetchChargeOutcome(charge.gatewayChargeId);
     if (result.outcome === CHARGE_OUTCOMES.PAID) {
@@ -706,6 +800,7 @@ export class SubscriptionService {
         paymentMethod: subscription.paymentMethod,
       };
     }
+    await this.assertCouponModeKept(subscription, dto.paymentMethod);
 
     subscription.paymentMethod = dto.paymentMethod;
     subscription.updatedAt = new Date().toISOString();
@@ -756,6 +851,25 @@ export class SubscriptionService {
     }
 
     this.assertCancellable(subscription);
+
+    // **Assinatura do tier (spec 035 §5):** nos 7 dias é desistência — estorna
+    // e derruba o acesso; até o fim da fidelidade, não se cancela; depois,
+    // segue o cancelamento de sempre logo abaixo.
+    if (subscription.plan === TIER_PLANS.SUBSCRIPTION) {
+      if (this.withinWithdrawal(subscription)) {
+        return this.withdrawSubscription(subscription);
+      }
+      const ate = subscription.fidelityUntil;
+      if (ate && todayInAppTimezone() < ate) {
+        throw new ConflictException({
+          message:
+            `A assinatura tem fidelidade de 6 meses e pode ser cancelada a partir de ${br(ate)}. ` +
+            `O prazo de desistência de ${WITHDRAWAL_DAYS} dias já terminou.`,
+          cancellableFrom: ate,
+        });
+      }
+    }
+
     await this.releaseGatewaySubscription(subscription);
 
     const now = new Date().toISOString();
@@ -797,14 +911,131 @@ export class SubscriptionService {
   }
 
   private assertCancellable(subscription: Subscription): void {
-    if (planConfig(subscription.plan).recurring) return;
+    if (regimeOf(subscription).recurring) return;
 
     const ate = subscription.accessUntil
       ? ` Seu acesso segue até ${subscription.accessUntil.split('-').reverse().join('/')}.`
       : '';
     throw new BadRequestException(
-      `O plano ${planConfig(subscription.plan).label} é comprado por período, não é assinatura: não há renovação a cancelar.${ate}`,
+      `O plano ${regimeOf(subscription).label} é comprado por período, não é assinatura: não há renovação a cancelar.${ate}`,
     );
+  }
+
+  /**
+   * Desistência do pacote do tier nos 7 dias do pagamento (CDC art. 49).
+   *
+   * O pacote **não se cancela** — foi comprado inteiro, e o acesso vale até o
+   * fim. O que existe é o arrependimento: estorna a order inteira (no
+   * parcelado, o emissor cancela as parcelas que faltam) e encerra o acesso.
+   * Pacote ainda não pago só se encerra; não há o que devolver.
+   */
+  async withdraw(studentId: string): Promise<SubscriptionDto> {
+    const subscription = await this.requireSubscription(studentId);
+    if (subscription.plan !== TIER_PLANS.PACKAGE) {
+      throw new BadRequestException(
+        subscription.plan === TIER_PLANS.SUBSCRIPTION
+          ? 'Para desistir da assinatura, use "Cancelar assinatura".'
+          : 'Este plano não tem desistência pelo painel. Fale com a gestão da escola.',
+      );
+    }
+    if (subscription.status === SUBSCRIPTION_STATUS.CANCELLED) {
+      return new SubscriptionDto(subscription);
+    }
+
+    const paga = subscription.charges.find(
+      (charge) => charge.status === CHARGE_STATUS.PAID,
+    );
+    if (paga) {
+      if (!this.withinWithdrawal(subscription)) {
+        throw new ConflictException(
+          `O prazo de desistência de ${WITHDRAWAL_DAYS} dias terminou em ` +
+            `${br(this.withdrawalDeadline(subscription))}. Seu acesso segue até ` +
+            `${br(subscription.accessUntil ?? subscription.startDate)}.`,
+        );
+      }
+      if (!paga.gatewayChargeId) {
+        throw this.manualRefundNeeded(subscription);
+      }
+      const gateway =
+        subscription.paymentMethod === PAYMENT_METHODS.PIX_RECURRING
+          ? this.pix
+          : this.card;
+      await gateway.refundOrder(
+        paga.gatewayChargeId,
+        `withdraw:${studentId}:${paga.index}`,
+      );
+    }
+
+    return this.finishWithdrawal(subscription);
+  }
+
+  /** Nos 7 dias: estorna cada ciclo pago, encerra o `preapproval` e o acesso. */
+  private async withdrawSubscription(
+    subscription: Subscription,
+  ): Promise<SubscriptionDto> {
+    const pagas = subscription.charges.filter(
+      (charge) => charge.status === CHARGE_STATUS.PAID,
+    );
+    // Estorna **antes** de encerrar: se o provedor recusar, nada muda aqui e
+    // a aluna tenta de novo — em vez de ficar sem acesso e sem o dinheiro.
+    for (const charge of pagas) {
+      if (!charge.gatewayPaymentId) throw this.manualRefundNeeded(subscription);
+      await this.card.refundPayment(
+        charge.gatewayPaymentId,
+        `withdraw:${subscription.studentId}:${charge.index}`,
+      );
+    }
+    await this.releaseGatewaySubscription(subscription);
+    return this.finishWithdrawal(subscription);
+  }
+
+  /** Estornado não é receita: o cronograma some, e o acesso junto. */
+  private async finishWithdrawal(
+    subscription: Subscription,
+  ): Promise<SubscriptionDto> {
+    const now = new Date().toISOString();
+    subscription.status = SUBSCRIPTION_STATUS.CANCELLED;
+    subscription.cancelledAt = now;
+    subscription.withdrawnAt = now;
+    subscription.updatedAt = now;
+    subscription.nextChargeDate = undefined;
+    subscription.accessUntil = undefined;
+    subscription.paidInstallments = 0;
+    subscription.charges = [];
+
+    await this.subscriptions.save(subscription);
+    await this.syncUser(subscription);
+    return new SubscriptionDto(subscription);
+  }
+
+  /**
+   * Pagamento confirmado sem o id que o estorno exige — só acontece com
+   * cobrança anterior a esta spec ou confirmada à mão. Recusa em vez de
+   * encerrar: encerrar sem devolver tiraria o acesso e o dinheiro.
+   */
+  private manualRefundNeeded(subscription: Subscription): BadRequestException {
+    this.logger.error(
+      `Desistência de ${subscription.studentId} sem id de pagamento para estornar.`,
+    );
+    return new BadRequestException(
+      'Não foi possível estornar automaticamente. Fale com a gestão da escola pelo e-mail barbsenglishteacher@gmail.com.',
+    );
+  }
+
+  /** A data da compra: o primeiro pagamento, ou a contratação se nada foi pago. */
+  private withdrawalDeadline(subscription: Subscription): string {
+    const pagamento = subscription.charges
+      .filter((charge) => charge.status === CHARGE_STATUS.PAID && charge.paidAt)
+      .map((charge) => charge.paidAt!)
+      .sort()[0];
+    const compra = pagamento
+      ? toZonedDateString(new Date(pagamento))
+      : subscription.startDate;
+    return addDays(compra, WITHDRAWAL_DAYS);
+  }
+
+  private withinWithdrawal(subscription: Subscription): boolean {
+    return todayInAppTimezone() <= this.withdrawalDeadline(subscription);
   }
 
   /** Parcelas ainda não pagas, da mais próxima para a mais distante (RF5). */
@@ -898,6 +1129,11 @@ export class SubscriptionService {
 
     const pending = this.nextPendingCharge(subscription);
     if (!pending) return;
+    // O id do **pagamento** do ciclo é o que se estorna na desistência dos 7
+    // dias (spec 035 §5): o `preapproval` não tem estorno próprio.
+    if (cycle.payment?.id !== undefined) {
+      pending.gatewayPaymentId = String(cycle.payment.id);
+    }
     await this.confirmCharge(subscription, undefined, pending.index);
     await this.syncRecurringAmount(subscription);
   }
@@ -919,6 +1155,20 @@ export class SubscriptionService {
     if (subscription.status === SUBSCRIPTION_STATUS.CANCELLED) return;
 
     const now = new Date().toISOString();
+    // **Quebra de fidelidade (spec 035, decisão 10).** Chega aqui quando a
+    // assinatura foi encerrada fora da plataforma — pela conta do aluno no
+    // Mercado Pago — antes do fim dos 6 meses. Sem multa: o ciclo pago vale
+    // até o fim (`accessUntil` fica), e o registro é só para a gerente ver.
+    if (
+      subscription.plan === TIER_PLANS.SUBSCRIPTION &&
+      subscription.fidelityUntil &&
+      todayInAppTimezone() < subscription.fidelityUntil
+    ) {
+      subscription.fidelityBrokenAt = now;
+      this.logger.warn(
+        `Fidelidade de ${subscription.studentId} quebrada: assinatura ${preapprovalId} encerrada fora da plataforma.`,
+      );
+    }
     subscription.status = SUBSCRIPTION_STATUS.CANCELLED;
     subscription.cancelledAt = now;
     subscription.updatedAt = now;
@@ -1020,21 +1270,57 @@ export class SubscriptionService {
    * A rota é autenticada e exige o código exato: quem chama já digitou o cupom,
    * então não há tabela de descontos sendo exposta.
    */
-  async validateCoupon(code: string): Promise<{
+  async validateCoupon(
+    code: string,
+    context: ValidateCouponQueryDto = {},
+  ): Promise<{
     code: string;
     discountAmount: number;
     durationMonths: number | null;
+    discountType: string;
+    discountValue: number;
+    tierId?: string;
+    paymentModes?: CouponPaymentMode[];
   }> {
-    const resolved = await this.resolveCoupon(code);
+    // Com o contexto da tela (spec 035), a mesma régua da contratação: tier,
+    // forma de pagamento, limite — e o desconto já em reais sobre o preço que
+    // vale agora. Sem ele, o formato de antes.
+    const comContexto = !!(context.plan && context.paymentMethod);
+    const tier =
+      comContexto && context.plan && isTierPlan(context.plan) && context.tierId
+        ? await this.planTiers.getEffective(context.tierId)
+        : null;
+    const { resolved, coupon } = await this.resolveCouponWithEntity(
+      code,
+      comContexto
+        ? { plan: context.plan!, paymentMethod: context.paymentMethod!, tier }
+        : undefined,
+    );
     return {
       code: resolved.code,
       discountAmount: resolved.discount,
       durationMonths: resolved.remaining,
+      discountType: coupon.discountType,
+      discountValue: coupon.discountValue,
+      tierId: coupon.tierId,
+      paymentModes: coupon.paymentModes,
     };
   }
 
   async createCoupon(dto: CreateCouponDto, userId: string): Promise<Coupon> {
     const code = normalizeCouponCode(dto.code);
+    const value = dto.discountValue ?? dto.discountAmount;
+    if (!value) {
+      throw new BadRequestException('Informe o desconto do cupom');
+    }
+    const type = dto.discountType ?? DISCOUNT_TYPES.AMOUNT;
+    if (type === DISCOUNT_TYPES.PERCENT && (value > 100 || !dto.tierId)) {
+      throw new BadRequestException(
+        value > 100
+          ? 'O desconto percentual vai até 100%.'
+          : 'Escolha o plano do cupom percentual.',
+      );
+    }
     if (await this.coupons.findByCode(code)) {
       throw new BadRequestException('Já existe um cupom com esse código');
     }
@@ -1042,8 +1328,13 @@ export class SubscriptionService {
       new Coupon({
         id: randomUUID(),
         code,
-        discountAmount: round2(dto.discountAmount),
+        tierId: dto.tierId,
+        discountType: type,
+        discountValue: round2(value),
         durationMonths: dto.durationMonths ?? null,
+        paymentModes: dto.paymentModes,
+        maxUses: dto.maxUses ?? null,
+        usedCount: 0,
         active: true,
         createdAt: new Date().toISOString(),
         createdBy: userId,
@@ -1080,6 +1371,12 @@ export class SubscriptionService {
         // Vai junto porque, cancelada, a assinatura ainda pode dar acesso — e
         // quem decide isso lê o aluno, não a assinatura.
         accessUntil: subscription.accessUntil,
+        // Só quem comprou por tier escreve o tier. A assinatura antiga não
+        // apaga o `private` que a migração deu (spec 035 §7).
+        ...(subscription.tierId ? { planTier: subscription.tierId } : {}),
+        ...(subscription.fidelityBrokenAt
+          ? { fidelityBrokenAt: subscription.fidelityBrokenAt }
+          : {}),
       });
     } catch (error) {
       // O espelho é conveniência de listagem; a assinatura já está gravada.
@@ -1098,16 +1395,251 @@ export class SubscriptionService {
     return subscription;
   }
 
-  private async resolveCoupon(code: string): Promise<ResolvedCoupon> {
+  private async resolveCoupon(
+    code: string,
+    context?: CouponContext,
+  ): Promise<ResolvedCoupon> {
+    return (await this.resolveCouponWithEntity(code, context)).resolved;
+  }
+
+  /**
+   * Confere o cupom contra **esta** compra e diz quanto ele abate em reais.
+   *
+   * Sem contexto (a validação da tela antiga) só confere se existe e está
+   * ativo. Com contexto, a régua inteira da spec 035 §6, com o motivo da
+   * recusa — "cupom inválido" para tudo deixava a aluna sem saber o que fazer.
+   */
+  private async resolveCouponWithEntity(
+    code: string,
+    context?: CouponContext,
+  ): Promise<{ resolved: ResolvedCoupon; coupon: Coupon }> {
     const coupon = await this.coupons.findByCode(code);
     if (!coupon || !coupon.active) {
       throw new BadRequestException('Cupom inválido ou expirado');
     }
+
+    if (!context) {
+      return {
+        coupon,
+        resolved: {
+          code: coupon.code,
+          discount: coupon.discountValue,
+          remaining: coupon.durationMonths,
+        },
+      };
+    }
+
+    const doTier = isTierPlan(context.plan);
+    // Cupom de tier só vale no tier dele; cupom antigo (sem tier), só nos
+    // planos antigos.
+    if (doTier ? coupon.tierId !== context.tier?.id : !!coupon.tierId) {
+      throw new BadRequestException('Este cupom não vale para este plano.');
+    }
+
+    if (doTier) {
+      const mode = couponModeOf(context.plan, context.paymentMethod);
+      if (coupon.paymentModes?.length && !coupon.paymentModes.includes(mode)) {
+        throw new BadRequestException(
+          'Este cupom não vale para esta forma de pagamento.',
+        );
+      }
+    }
+
+    if (coupon.maxUses && coupon.usedCount >= coupon.maxUses) {
+      throw new BadRequestException('Cupom esgotado.');
+    }
+
+    let discount: number;
+    if (context.plan === TIER_PLANS.PACKAGE) {
+      discount = discountFor(coupon, context.tier?.packagePrice ?? 0);
+    } else if (context.plan === TIER_PLANS.SUBSCRIPTION) {
+      discount = discountFor(coupon, context.tier?.monthlyPrice ?? 0);
+    } else {
+      discount = coupon.discountValue;
+    }
+
     return {
-      code: coupon.code,
-      discount: coupon.discountAmount,
-      remaining: coupon.durationMonths,
+      coupon,
+      resolved: {
+        code: coupon.code,
+        discount,
+        // No pacote o desconto é uma vez, sobre o valor inteiro.
+        remaining:
+          context.plan === TIER_PLANS.PACKAGE ? null : coupon.durationMonths,
+      },
     };
+  }
+
+  /**
+   * Trocar de PIX para cartão (ou o contrário) no pacote não pode furar a
+   * restrição de forma de pagamento do cupom aplicado.
+   */
+  private async assertCouponModeKept(
+    subscription: Subscription,
+    method: PaymentMethod,
+  ): Promise<void> {
+    if (subscription.plan !== TIER_PLANS.PACKAGE || !subscription.couponCode) {
+      return;
+    }
+    const coupon = await this.coupons.findByCode(subscription.couponCode);
+    const mode = couponModeOf(subscription.plan, method);
+    if (coupon?.paymentModes?.length && !coupon.paymentModes.includes(mode)) {
+      throw new BadRequestException(
+        `O cupom ${subscription.couponCode} não vale para esta forma de pagamento.`,
+      );
+    }
+  }
+
+  /**
+   * Conta o uso do cupom **uma vez**, no primeiro pagamento confirmado.
+   * Falhar aqui não desfaz a confirmação: o dinheiro entrou, e um uso a menos
+   * no contador é problema menor que um webhook que nunca responde 200.
+   */
+  private async countCouponUse(subscription: Subscription): Promise<void> {
+    if (!subscription.couponCode || subscription.couponCounted) return;
+    subscription.couponCounted = true;
+    await this.subscriptions.save(subscription);
+    try {
+      await this.coupons.incrementUsage(subscription.couponCode);
+    } catch (error) {
+      this.logger.error(
+        `Uso do cupom ${subscription.couponCode} não contado para ${subscription.studentId}: ${String(error)}`,
+      );
+    }
+  }
+
+  /**
+   * O tier que esta contratação compra, já com o preço que vale agora.
+   *
+   * `null` no catálogo antigo. Pacote e assinatura **exigem** tier; e o tier
+   * precisa estar à venda — ativo e com preço — no instante da compra, não no
+   * da vitrine que o aluno abriu horas antes.
+   */
+  private async resolveTier(dto: ChoosePlanDto): Promise<PlanTier | null> {
+    if (!isTierPlan(dto.plan)) {
+      if (dto.tierId) {
+        throw new BadRequestException('Este plano não é vendido por tier.');
+      }
+      return null;
+    }
+    if (!dto.tierId) {
+      throw new BadRequestException('Escolha o plano.');
+    }
+
+    const tier = await this.planTiers.getEffective(dto.tierId);
+    if (!isSellable(tier)) {
+      throw new ConflictException('Este plano não está disponível no momento.');
+    }
+    if (dto.plan === TIER_PLANS.SUBSCRIPTION && !tier.monthlyPrice) {
+      throw new BadRequestException(
+        'Este plano não tem assinatura mensal. Escolha o pacote de 6 meses.',
+      );
+    }
+    return tier;
+  }
+
+  /**
+   * Em quantas vezes o cartão é dividido. No pacote do tier é escolha do
+   * comprador, **com teto aqui**: a trava do formulário é conveniência. Nos
+   * outros regimes sai do regime, e o que o cliente mandou não é lido.
+   */
+  private cardInstallmentsFor(
+    subscription: Subscription,
+    dto: CardPaymentDto,
+  ): number {
+    if (subscription.plan !== TIER_PLANS.PACKAGE) {
+      return regimeOf(subscription).installments;
+    }
+    const chosen = dto.installments ?? 1;
+    if (
+      !Number.isInteger(chosen) ||
+      chosen < 1 ||
+      chosen > PACKAGE_MAX_INSTALLMENTS
+    ) {
+      throw new BadRequestException(
+        `O pacote pode ser parcelado em até ${PACKAGE_MAX_INSTALLMENTS}x.`,
+      );
+    }
+    return chosen;
+  }
+
+  /**
+   * Monta a assinatura de um tier (spec 035).
+   *
+   * - **Pacote:** o preço é dividido em 6 competências mensais da base, para a
+   *   receita seguir por competência; o cupom desconta do valor inteiro, uma
+   *   vez, e a diferença de centavos fica na última.
+   * - **Assinatura:** a mensalidade, projetada como a do Mensal antigo, com o
+   *   cupom valendo pelas `durationMonths` primeiras.
+   */
+  private buildTierSubscription(
+    studentId: string,
+    plan: TierPlan,
+    tier: PlanTier,
+    paymentMethod: PaymentMethod,
+    coupon: ResolvedCoupon | null,
+    today: string = todayInAppTimezone(),
+  ): Subscription {
+    const isPackage = plan === TIER_PLANS.PACKAGE;
+    const price = (isPackage ? tier.packagePrice : tier.monthlyPrice) ?? 0;
+    const regime = regimeOf({
+      plan,
+      tierName: tier.name,
+      priceSnapshot: price,
+    });
+
+    const charges: Charge[] = [];
+    let totalAmount: number;
+    if (isPackage) {
+      totalAmount = coupon ? applyDiscount(price, coupon.discount) : price;
+      const fatia = round2(totalAmount / regime.installments);
+      for (let index = 1; index <= regime.installments; index++) {
+        const ultima = index === regime.installments;
+        charges.push({
+          index,
+          dueDate: addMonths(today, index - 1),
+          amount: ultima
+            ? round2(totalAmount - fatia * (regime.installments - 1))
+            : fatia,
+          status: CHARGE_STATUS.PENDING,
+        });
+      }
+    } else {
+      totalAmount = price;
+      for (let index = 1; index <= RECURRING_SCHEDULE_MONTHS; index++) {
+        charges.push({
+          index,
+          dueDate: addMonths(today, index - 1),
+          amount: this.amountFor(price, coupon, index),
+          status: CHARGE_STATUS.PENDING,
+        });
+      }
+    }
+
+    const now = new Date().toISOString();
+    return new Subscription({
+      id: studentId,
+      studentId,
+      plan,
+      status: SUBSCRIPTION_STATUS.PENDING,
+      paymentMethod,
+      totalAmount,
+      installments: regime.installments,
+      installmentAmount: charges[0].amount,
+      paidInstallments: 0,
+      charges,
+      startDate: today,
+      nextChargeDate: charges[0].dueDate,
+      tierId: tier.id,
+      tierName: tier.name,
+      priceSnapshot: price,
+      fidelityUntil: isPackage ? undefined : fidelityUntilOf(today),
+      couponCode: coupon?.code,
+      couponDiscount: coupon?.discount,
+      couponRemainingCharges: coupon ? coupon.remaining : undefined,
+      createdAt: now,
+      updatedAt: now,
+    });
   }
 
   /**
@@ -1122,7 +1654,7 @@ export class SubscriptionService {
     coupon: ResolvedCoupon | null,
     today: string = todayInAppTimezone(),
   ): Subscription {
-    const config = planConfig(plan);
+    const config = planConfig(plan as LegacyPlan);
     const scheduled = config.recurring
       ? RECURRING_SCHEDULE_MONTHS
       : config.installments;
@@ -1233,10 +1765,28 @@ export class SubscriptionService {
     // delegava o formulário ao provedor. Sem redirecionamento e com tokenização
     // no cliente, a ordem se inverte.
     if (!isPix) {
-      const config = planConfig(subscription.plan);
+      const config = regimeOf(subscription);
+      // **Pacote do tier: parcelas livres até 12x**, com os juros do
+      // comprador (spec 035 §4). O formulário mostra de 1x a 12x com o total
+      // que o Mercado Pago calcula; quem trava o teto é `cardInstallmentsFor`.
+      if (subscription.plan === TIER_PLANS.PACKAGE) {
+        return {
+          card: {
+            amount: subscription.totalAmount,
+            installments: PACKAGE_MAX_INSTALLMENTS,
+            chargeIndex: charge.index,
+            installmentsFree: true,
+          },
+        };
+      }
       return {
         card: {
-          amount: subscription.totalAmount,
+          // A assinatura do tier cobra o ciclo. Os planos antigos seguem
+          // como sempre: o total (o Mensal antigo tem total = mensalidade).
+          amount:
+            subscription.plan === TIER_PLANS.SUBSCRIPTION
+              ? charge.amount
+              : subscription.totalAmount,
           // Do catálogo, nunca do cliente: é o mesmo valor que o backend vai
           // exigir na cobrança, e mandá-lo daqui é o que permite ao formulário
           // travar o seletor de parcelas na opção certa.
@@ -1286,11 +1836,17 @@ export class SubscriptionService {
     email: string,
     customer: { name?: string; cellphone?: string; taxId?: string },
   ) {
-    const config = planConfig(subscription.plan);
+    const config = regimeOf(subscription);
+    // O pacote do tier é uma compra à vista: o PIX dele é do valor inteiro,
+    // e é a mesma order que quita as 6 competências (spec 035 §4).
+    const amount =
+      subscription.plan === TIER_PLANS.PACKAGE
+        ? subscription.totalAmount
+        : charge.amount;
     return {
-      amount: charge.amount,
+      amount,
       description: `${config.label} — parcela ${charge.index}`,
-      externalId: `${subscription.studentId}-${charge.index}-${toCents(charge.amount)}`,
+      externalId: `${subscription.studentId}-${charge.index}-${toCents(amount)}`,
       customer: { email, ...customer },
       product: { key: subscription.plan, label: `Plano ${config.label}` },
     };
@@ -1368,7 +1924,7 @@ export class SubscriptionService {
     // O `dueDate` de cada uma **não** muda: a receita continua distribuída por
     // competência mensal, que é como ela de fato ocorre. O que muda é só a
     // verdade sobre o que já foi pago.
-    const quitadas = planConfig(subscription.plan).recurring
+    const quitadas = regimeOf(subscription).recurring
       ? [charge]
       : subscription.charges;
 
@@ -1399,6 +1955,7 @@ export class SubscriptionService {
 
     await this.subscriptions.save(subscription);
     await this.syncUser(subscription);
+    await this.countCouponUse(subscription);
   }
 
   /**
@@ -1406,7 +1963,8 @@ export class SubscriptionService {
    * uma no fim da fila para a janela de meses à frente continuar cheia.
    */
   private extendRecurringSchedule(subscription: Subscription): void {
-    if (!planConfig(subscription.plan).recurring) return;
+    const regime = regimeOf(subscription);
+    if (!regime.recurring) return;
 
     const pending = subscription.charges.filter(
       (charge) => charge.status !== CHARGE_STATUS.PAID,
@@ -1428,11 +1986,7 @@ export class SubscriptionService {
       subscription.charges.push({
         index,
         dueDate: addMonths(last.dueDate, index - last.index),
-        amount: this.amountFor(
-          planConfig(subscription.plan).installmentAmount,
-          coupon,
-          index,
-        ),
+        amount: this.amountFor(regime.installmentAmount, coupon, index),
         status: CHARGE_STATUS.PENDING,
       });
     }
