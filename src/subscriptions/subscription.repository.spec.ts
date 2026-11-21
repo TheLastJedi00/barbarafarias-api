@@ -168,3 +168,36 @@ describe('SubscriptionRepository — id de cobrança neutro', () => {
     await expect(repository.findByChargeId('nao_existe')).resolves.toBeNull();
   });
 });
+
+/**
+ * As tentativas abandonadas no "Recomeçar o pagamento" (spec 023 P2) precisam
+ * sobreviver ao `save`: é contra elas que a trava anticobrança-dupla confere
+ * antes de emitir outra order. O mapeamento da parcela é escrito à mão, e o
+ * campo tinha ficado de fora — gravado na memória, perdido no Firestore.
+ */
+describe('SubscriptionRepository — tentativas abandonadas', () => {
+  it('grava e relê os ids das orders abandonadas da parcela', async () => {
+    const { db, repository } = build();
+    await repository.save(
+      subscriptionWith({
+        gatewayChargeId: 'ORD02NOVA',
+        abandonedChargeIds: ['ORD01ANTIGA'],
+      }),
+    );
+
+    expect(
+      db.store.get('subscriptions/aluno-1')!.charges[0].abandonedChargeIds,
+    ).toEqual(['ORD01ANTIGA']);
+    const lida = await repository.findByStudent('aluno-1');
+    expect(lida!.charges[0].abandonedChargeIds).toEqual(['ORD01ANTIGA']);
+  });
+
+  it('parcela sem abandonadas não ganha o campo no documento', async () => {
+    const { db, repository } = build();
+    await repository.save(subscriptionWith({ gatewayChargeId: 'ORD01' }));
+
+    expect(
+      db.store.get('subscriptions/aluno-1')!.charges[0],
+    ).not.toHaveProperty('abandonedChargeIds');
+  });
+});
