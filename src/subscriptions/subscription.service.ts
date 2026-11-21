@@ -1547,6 +1547,13 @@ export class SubscriptionService {
           subscription.startDate > todayInAppTimezone()
             ? subscription.startDate
             : null,
+        // Quem chegou pelo cadastro da loja (spec 032) e pagou um plano de
+        // tier passa a ser aluno do plano: sem isto, o guard do front o
+        // mandaria para "Meus módulos" (spec 036, matrícula pela Academy).
+        ...(subscription.tierId &&
+        subscription.status === SUBSCRIPTION_STATUS.ACTIVE
+          ? { leavesStore: true }
+          : {}),
       });
     } catch (error) {
       // O espelho é conveniência de listagem; a assinatura já está gravada.
