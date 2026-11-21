@@ -1,3 +1,8 @@
+import { TurmaLifecycleService } from '../enrollments/turma-lifecycle.service';
+import {
+  TurmaLifecycleController,
+  TurmaRemindersCronController,
+} from '../enrollments/turma-lifecycle.controller';
 import { EnrollmentService } from '../enrollments/enrollment.service';
 import { EnrollmentRepository } from '../enrollments/enrollment.repository';
 import { EnrollmentController } from '../enrollments/enrollment.controller';
@@ -49,11 +54,14 @@ import { StoreModule } from '../store/store.module';
     // vira assinatura na confirmação, e um módulo próprio criaria um ciclo
     // com este (o webhook daqui também a atende).
     EnrollmentController,
+    TurmaLifecycleController,
+    TurmaRemindersCronController,
   ],
   providers: [
     SubscriptionService,
     EnrollmentService,
     EnrollmentRepository,
+    TurmaLifecycleService,
     SubscriptionRepository,
     CouponRepository,
     PlanAcceptanceRepository,

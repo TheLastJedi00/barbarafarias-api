@@ -1,13 +1,7 @@
-import {
-  Controller,
-  Get,
-  Headers,
-  ServiceUnavailableException,
-  UnauthorizedException,
-} from '@nestjs/common';
+import { Controller, Get, Headers } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { timingSafeEqual } from 'node:crypto';
 import { Public } from '../decorators/public.decorator';
+import { assertCronSecret } from '../common/cron-secret';
 import { PlanTierService } from './plan-tier.service';
 
 /**
@@ -33,20 +27,7 @@ export class PlanPricesCronController {
   @Public()
   @Get('plan-prices')
   async run(@Headers('authorization') authorization: string | undefined) {
-    const secret = this.config.get<string>('CRON_SECRET');
-    if (!secret) {
-      throw new ServiceUnavailableException('CRON_SECRET não configurado');
-    }
-    if (!matches(authorization, `Bearer ${secret}`)) {
-      throw new UnauthorizedException();
-    }
+    assertCronSecret(this.config, authorization);
     return { applied: await this.service.applyDuePrices() };
   }
-}
-
-function matches(received: string | undefined, expected: string): boolean {
-  if (!received) return false;
-  const a = Buffer.from(received);
-  const b = Buffer.from(expected);
-  return a.length === b.length && timingSafeEqual(a, b);
 }

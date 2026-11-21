@@ -19,6 +19,10 @@
     {
       "path": "/internal/cron/plan-prices",
       "schedule": "0 3 * * *"
+    },
+    {
+      "path": "/internal/cron/turmas",
+      "schedule": "0 11 * * *"
     }
   ]
 }
