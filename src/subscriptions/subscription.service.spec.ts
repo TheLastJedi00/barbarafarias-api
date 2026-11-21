@@ -7,6 +7,7 @@ import {
 import { GatewayRejectedError } from './mercadopago.gateway';
 import {
   CHARGE_STATUS,
+  LEGACY_PLANS,
   PAYMENT_METHODS,
   SUBSCRIPTION_PLANS,
   SUBSCRIPTION_STATUS,
@@ -102,6 +103,7 @@ function build(overrides: Record<string, any> = {}) {
     pix as any,
     card as any,
     config as any,
+    {} as any,
   );
   return {
     service,
@@ -1588,8 +1590,9 @@ describe('PIX em plano parcelado (spec 018)', () => {
     ).resolves.toBeDefined();
   });
 
-  it('aceita cartão em qualquer plano', async () => {
-    for (const plan of Object.values(SUBSCRIPTION_PLANS)) {
+  it('aceita cartão em qualquer plano antigo', async () => {
+    // Os do tier (spec 035) exigem `tierId` e têm suíte própria.
+    for (const plan of Object.values(LEGACY_PLANS)) {
       await expect(
         contratar(plan, PAYMENT_METHODS.CREDIT_CARD),
       ).resolves.toBeDefined();
