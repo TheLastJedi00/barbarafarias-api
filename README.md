@@ -2081,6 +2081,39 @@ pagamento. PIX ou cartão em **até 12x, com juros do comprador**. Desistência 
 - **Currículo:** `PUT /curriculum/levels/:level` recusa (409) remover módulo com produto na loja
   (publicado ou rascunho) ou com compra valendo.
 
+#### Material personalizado da loja (Spec 033)
+
+Depois de pagar um módulo, o comprador responde três perguntas de marcar e o sistema gera, na hora
+e sem revisão, um material só daquele módulo, pelo mesmo Gemini e pelo mesmo currículo da spec 020.
+
+| Método | Rota | Auth | Descrição |
+|---|---|---|---|
+| `PUT` | `/store/onboarding` | `student` | `{ workArea, careerStage, englishContact }`, só chaves da lista (`users/career-profile.ts`). Grava em `users.careerProfile`; também editável pelo `PATCH /users/me` |
+| `GET` | `/store/purchases/:id/material` | `student` (dono) | Material vigente (`Module`), geração em andamento por etapa e `chances` (`used`, `max`, `canGenerate`, `nextAvailableAt`) |
+| `POST` | `/store/purchases/:id/generation/start` | `student` (dono) | Abre uma geração (gasta uma chance) ou devolve a que está aberta. 409 sem questionário ou sem chance |
+| `POST` | `/store/purchases/:id/generation/step` | `student` (dono) | `{ stepId }` (`intro` ou id do tópico). Idempotente; 502 na falha (com `attemptsLeft`), 429 depois de 3 tentativas |
+| `POST` | `/store/purchases/:id/generation/finish` | `student` (dono) | Monta o módulo e troca o vigente de uma vez; 409 com `missing` se falta etapa |
+| `GET` | `/store/admin/expired-supplies` | **gerente** | Material de quem perdeu o acesso: motivo, fim e `deletableAt` (fim + 30 dias), liberados primeiro |
+| `DELETE` | `/store/admin/expired-supplies/:id` | **gerente** | Apaga cabeçalho e gerações. 409 antes dos 30 dias ou se a pessoa renovou |
+| `POST` | `/store/admin/expired-supplies/purge-eligible` | **gerente** | Apaga todos os liberados, cada um passando pela mesma trava |
+
+- **Chances:** 3 gerações por compra, cada uma liberada 6 h depois do **início** da anterior. As
+  chances guardam o `purchaseId`: uma compra nova do mesmo produto (renovação) começa do zero, sem
+  gancho no pagamento.
+- **O servidor guarda cada etapa.** Diferente da geração do plano, em que o navegador da professora
+  monta o material, aqui o cliente só pede etapa por etapa; o que vai para a tela saiu do Gemini.
+  A tentativa é contada numa transação **antes** da chamada (teto de 3 por etapa e por geração),
+  e refazer uma etapa não gasta geração. Geração travada (etapa sem tentativa) é a única que um
+  novo `start` troca por outra.
+- **Material da pessoa e do produto, não da compra** (`{userId}_{productId}`): a renovação o
+  reencontra. O anterior continua visível até a geração nova terminar.
+- **Prompt:** o `[Dados do Aluno]` traz área de trabalho, etapa na carreira e contato com o inglês
+  (rótulos) no lugar de objetivo e prognóstico; o resto da composição não muda.
+- **Vencimento:** o material segue a regra de acesso da compra (403 vencida, reembolsada ou
+  contestada) e **não é apagado sozinho**. A gerente apaga em "Acessos vencidos", a partir de 30
+  dias do fim. O fim é calculado das compras (o `accessUntil`, a data do estorno ou a última
+  atualização na contestação), nunca gravado.
+
 #### Vídeo aulas para o comprador (Spec 032)
 
 | Método | Rota | Descrição |
@@ -2680,6 +2713,47 @@ Compras da loja (spec 032). Consultas por um campo só (`userId`, `productId`, `
 
 > **Só `PAID` com `accessUntil` no futuro dá acesso**, e isso é calculado a cada leitura.
 > `users.tier: 'modules'` marca quem entrou pela loja; ausente é aluno do plano (sem migração).
+> `users.careerProfile` (spec 033) guarda `{ workArea, careerStage, englishContact, answeredAt }`,
+> as **chaves** das opções do questionário.
+
+### 20. `storeSupplies`
+Cabeçalho do material personalizado da loja (spec 033). Lido inteiro só em "Acessos vencidos".
+- **Doc ID:** `{userId}_{productId}`
+```json
+{
+  "userId": "string",
+  "productId": "string",
+  "level": "string",
+  "moduleId": "string",
+  "chances": { "purchaseId": "string", "used": "number (0..3)", "lastStartedAt": "string ISO" },
+  "lastGeneration": "number — numera os docs de conteúdo",
+  "current": { "generation": "number", "finishedAt": "string ISO" },
+  "pending": {
+    "number": "number",
+    "purchaseId": "string",
+    "startedAt": "string ISO",
+    "moduleTitle": "string",
+    "careerProfile": "cópia das respostas usadas",
+    "order": ["intro", "<id do tópico>"],
+    "steps": { "<id>": { "title": "string", "status": "'pending' | 'done' | 'failed'", "attempts": "number" } }
+  },
+  "createdAt": "string ISO",
+  "updatedAt": "string ISO"
+}
+```
+
+### 21. `storeSupplyModules`
+Conteúdo de uma geração (spec 033). Um doc por geração, para respeitar o teto de 1 MiB e trocar o
+vigente num lote só; o `finish` apaga o da geração anterior.
+- **Doc ID:** `{userId}_{productId}_{geração}`
+```json
+{
+  "supplyId": "string",
+  "generation": "number",
+  "steps": { "intro": "string", "<id do tópico>": "Topic" },
+  "module": "Module — montado no fim, na ordem do currículo"
+}
+```
 
 ### 20. `planTiers`
 Os três tiers (spec 035). Semeados na primeira leitura, **inativos e sem preço**.

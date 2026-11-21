@@ -12,6 +12,8 @@ import { pickDefined } from '../common/patch';
 import { ResponseUserDto } from './dto/ResponseUser.dto';
 import { UserRepository } from './user.repository';
 import { onboardingCompletedAt } from './onboarding';
+import type { CareerProfile } from './career-profile';
+import type { CareerProfileDto } from './dto/CareerProfile.dto';
 import { extendGrant } from './access-grant';
 import { AuthService } from '../auth/auth.service';
 import { ROLES, Role, resolveRole } from '../types/role';
@@ -385,7 +387,18 @@ export class UserService {
     if (!foundUser) {
       throw new NotFoundException('User not found');
     }
-    const patch = pickDefined(dto);
+    const { careerProfile, ...rest } = dto;
+    const patch: Partial<User> = pickDefined(rest);
+    if (careerProfile) {
+      // Objeto plano: a instância do DTO não passaria pelo `instanceToPlain`
+      // com o carimbo da data.
+      patch.careerProfile = {
+        workArea: careerProfile.workArea,
+        careerStage: careerProfile.careerStage,
+        englishContact: careerProfile.englishContact,
+        answeredAt: new Date().toISOString(),
+      };
+    }
     const user = new User({ ...foundUser, ...patch, id });
     const concluido = onboardingCompletedAt(user);
     if (concluido) {
@@ -393,6 +406,30 @@ export class UserService {
     }
     await this.userRepository.update(user);
     return user;
+  }
+
+  /**
+   * Respostas do questionário da loja (spec 033). Ficam no usuário, e não na
+   * compra, porque valem para as próximas compras e são editáveis no perfil.
+   */
+  async setCareerProfile(
+    id: string,
+    dto: CareerProfileDto,
+  ): Promise<CareerProfile> {
+    const foundUser = await this.userRepository.findById(id);
+    if (!foundUser) {
+      throw new NotFoundException('User not found');
+    }
+    const careerProfile: CareerProfile = {
+      workArea: dto.workArea,
+      careerStage: dto.careerStage,
+      englishContact: dto.englishContact,
+      answeredAt: new Date().toISOString(),
+    };
+    await this.userRepository.update(
+      new User({ ...foundUser, careerProfile, id }),
+    );
+    return careerProfile;
   }
 
   async findById(id: string): Promise<User> {
