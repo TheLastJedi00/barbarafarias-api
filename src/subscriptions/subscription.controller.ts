@@ -37,7 +37,13 @@ import { ROLES } from '../types/role';
 export class SubscriptionController {
   constructor(private readonly service: SubscriptionService) {}
 
-  /** Catálogo dos planos. Aberto a qualquer logado: alimenta o seletor (RF2). */
+  /**
+   * Catálogo dos planos: alimenta o seletor (RF2) e, desde a spec 034, a
+   * landing da Academy, que mostra os preços antes do login. Por isso é
+   * público — é o mesmo texto de qualquer página de preços, sem dado de
+   * ninguém. O contrato (`plans/:plan/terms`) continua fechado.
+   */
+  @Public()
   @Get('plans')
   plans(): PlanConfig[] {
     return Object.values(PLAN_CONFIGS);
