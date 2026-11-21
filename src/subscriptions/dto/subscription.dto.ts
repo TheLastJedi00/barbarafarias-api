@@ -10,6 +10,7 @@ import {
   IsPositive,
   IsString,
   Matches,
+  Max,
   MaxLength,
   Min,
   ValidateNested,
@@ -21,8 +22,11 @@ import {
   Subscription,
   CHARGE_STATUS,
   payerAmountsOf,
-  planConfig,
+  regimeOf,
+  PACKAGE_MAX_INSTALLMENTS,
 } from '../subscription.entity';
+import { PLAN_TIER_ID_LIST } from '../../plan-tiers/plan-tier.model';
+import type { PlanTierId } from '../../plan-tiers/plan-tier.model';
 import type {
   Charge,
   PaymentMethod,
@@ -53,8 +57,17 @@ export class PlanAcceptanceDto {
 }
 
 export class ChoosePlanDto {
+  /**
+   * `PACKAGE` e `SUBSCRIPTION` compram um tier (spec 035); os três antigos
+   * seguem aceitos até o front parar de mandá-los (ordem da spec 025).
+   */
   @IsIn(Object.values(SUBSCRIPTION_PLANS), { message: 'Plano inválido' })
   plan!: SubscriptionPlan;
+
+  /** Obrigatório no pacote e na assinatura; recusado nos planos antigos. */
+  @IsOptional()
+  @IsIn(PLAN_TIER_ID_LIST, { message: 'Plano inválido' })
+  tierId?: PlanTierId;
 
   @IsIn(Object.values(PAYMENT_METHODS), {
     message: 'Forma de pagamento inválida',
@@ -97,6 +110,18 @@ export class CardPaymentDto {
   @IsNotEmpty({ message: 'A bandeira do cartão é obrigatória' })
   @MaxLength(40)
   paymentMethodId!: string;
+
+  /**
+   * Só o **pacote do tier** lê isto (spec 035 §4): ali o parcelamento é
+   * escolha do comprador, com os juros dele. O teto de 12x é conferido de novo
+   * no serviço. Nos outros regimes o campo é ignorado — as parcelas saem do
+   * regime, como antes.
+   */
+  @IsOptional()
+  @IsInt({ message: 'Parcelas inválidas' })
+  @Min(1)
+  @Max(PACKAGE_MAX_INSTALLMENTS)
+  installments?: number;
 }
 
 /** O que a tela precisa saber depois de mandar o cartão. */
@@ -161,7 +186,16 @@ export class ChoosePlanResponseDto {
   pixQrCodeUrl?: string;
   pixCopyPaste?: string;
   /** Parâmetros do formulário de cartão. Ver `CardPaymentDto`. */
-  card?: { amount: number; installments: number; chargeIndex: number };
+  card?: {
+    amount: number;
+    installments: number;
+    chargeIndex: number;
+    /**
+     * `true` só no pacote do tier: `installments` é o **teto**, e o comprador
+     * escolhe de 1x até ele. Ausente = parcelas travadas em `installments`.
+     */
+    installmentsFree?: boolean;
+  };
   /** Explica por que não veio cobrança (ex.: gateway sem chave configurada). */
   warning?: string;
 }
@@ -214,11 +248,18 @@ export class SubscriptionDto {
   couponCode?: string;
   couponDiscount?: number;
   couponRemainingCharges?: number | null;
+  /** Tier comprado (spec 035). Ausentes nas assinaturas antigas. */
+  tierId?: PlanTierId;
+  tierName?: string;
+  priceSnapshot?: number;
+  cardInstallments?: number;
+  fidelityUntil?: string;
+  fidelityBrokenAt?: string;
   createdAt!: string;
   updatedAt!: string;
 
   constructor(subscription: Subscription) {
-    const config = planConfig(subscription.plan);
+    const config = regimeOf(subscription);
     Object.assign(this, subscription);
     this.planLabel = config.label;
     this.recurring = config.recurring;

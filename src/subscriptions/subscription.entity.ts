@@ -5,16 +5,51 @@
  */
 
 import type { GatewayProvider } from './payment.gateway';
+import {
+  FIDELITY_MONTHS,
+  PACKAGE_MONTHS,
+  type PlanTierId,
+} from '../plan-tiers/plan-tier.model';
 
-/** Os três planos vendidos. Não há plano avulso. */
-export const SUBSCRIPTION_PLANS = {
+/**
+ * Os planos de **antes** da spec 035: um serviço só, em três prazos, com preço
+ * fixo no código. Não se vendem mais por tier, mas as assinaturas deles
+ * continuam vivas no Firestore e o Mensal antigo renova como foi contratado.
+ */
+export const LEGACY_PLANS = {
   MONTHLY: 'MONTHLY',
   SEMIANNUAL: 'SEMIANNUAL',
   ANNUAL: 'ANNUAL',
 } as const;
 
-export type SubscriptionPlan =
-  (typeof SUBSCRIPTION_PLANS)[keyof typeof SUBSCRIPTION_PLANS];
+export type LegacyPlan = (typeof LEGACY_PLANS)[keyof typeof LEGACY_PLANS];
+
+/**
+ * Os dois jeitos de comprar um tier (spec 035). É o `mode` da spec — gravado
+ * no próprio `plan`, porque é ele que já decide o regime da assinatura inteira
+ * (recorrente ou fechado, quantas competências, o que se cancela).
+ *
+ * - `PACKAGE`: 6 meses pagos de uma vez — PIX à vista ou cartão em até 12x,
+ *   com os juros do parcelamento por conta do comprador.
+ * - `SUBSCRIPTION`: mensalidade no cartão, com fidelidade de 6 meses.
+ */
+export const TIER_PLANS = {
+  PACKAGE: 'PACKAGE',
+  SUBSCRIPTION: 'SUBSCRIPTION',
+} as const;
+
+export type TierPlan = (typeof TIER_PLANS)[keyof typeof TIER_PLANS];
+
+export const SUBSCRIPTION_PLANS = { ...LEGACY_PLANS, ...TIER_PLANS } as const;
+
+export type SubscriptionPlan = LegacyPlan | TierPlan;
+
+export function isTierPlan(plan: SubscriptionPlan): plan is TierPlan {
+  return plan === TIER_PLANS.PACKAGE || plan === TIER_PLANS.SUBSCRIPTION;
+}
+
+/** Em quantas vezes, no máximo, o pacote pode ser parcelado no cartão. */
+export const PACKAGE_MAX_INSTALLMENTS = 12;
 
 export const SUBSCRIPTION_STATUS = {
   /** Plano escolhido, primeira cobrança ainda não confirmada. */
@@ -50,7 +85,7 @@ export type ChargeStatus = (typeof CHARGE_STATUS)[keyof typeof CHARGE_STATUS];
  * centavos acontece só na fronteira com o gateway.
  */
 export interface PlanConfig {
-  plan: SubscriptionPlan;
+  plan: LegacyPlan;
   label: string;
   /**
    * O que **cobramos** — é este valor que vai ao gateway em `total_amount`.
@@ -90,9 +125,9 @@ export interface PlanConfig {
 /** Quantas renovações do plano mensal o cronograma projeta à frente (§2). */
 export const RECURRING_SCHEDULE_MONTHS = 6;
 
-export const PLAN_CONFIGS: Record<SubscriptionPlan, PlanConfig> = {
-  [SUBSCRIPTION_PLANS.MONTHLY]: {
-    plan: SUBSCRIPTION_PLANS.MONTHLY,
+export const PLAN_CONFIGS: Record<LegacyPlan, PlanConfig> = {
+  [LEGACY_PLANS.MONTHLY]: {
+    plan: LEGACY_PLANS.MONTHLY,
     label: 'Mensal',
     totalAmount: 240,
     installments: 1,
@@ -103,8 +138,8 @@ export const PLAN_CONFIGS: Record<SubscriptionPlan, PlanConfig> = {
     recurring: true,
     description: 'Renova todo mês. Cancele quando quiser.',
   },
-  [SUBSCRIPTION_PLANS.SEMIANNUAL]: {
-    plan: SUBSCRIPTION_PLANS.SEMIANNUAL,
+  [LEGACY_PLANS.SEMIANNUAL]: {
+    plan: LEGACY_PLANS.SEMIANNUAL,
     label: 'Semestral',
     totalAmount: 1200,
     installments: 6,
@@ -116,8 +151,8 @@ export const PLAN_CONFIGS: Record<SubscriptionPlan, PlanConfig> = {
     // seguinte e vira propaganda falsa. Quem calcula a vantagem é a tela.
     description: 'Seis meses garantidos, com parcela menor que a mensalidade.',
   },
-  [SUBSCRIPTION_PLANS.ANNUAL]: {
-    plan: SUBSCRIPTION_PLANS.ANNUAL,
+  [LEGACY_PLANS.ANNUAL]: {
+    plan: LEGACY_PLANS.ANNUAL,
     label: 'Anual',
     totalAmount: 2160,
     installments: 12,
@@ -163,7 +198,20 @@ export function payerAmountsOf(subscription: {
   plan: SubscriptionPlan;
   totalAmount: number;
   installments: number;
+  installmentAmount?: number;
 }): { total: number; installment: number } {
+  // **Tier não tem tabela de juros** (spec 035). Com preço livre, quem calcula
+  // o parcelamento é o Mercado Pago, no formulário de cartão — a tela mostra o
+  // total dele. O que sabemos e registramos é o preço à vista.
+  if (isTierPlan(subscription.plan)) {
+    return subscription.plan === TIER_PLANS.PACKAGE
+      ? { total: subscription.totalAmount, installment: subscription.totalAmount }
+      : {
+          total: subscription.installmentAmount ?? subscription.totalAmount,
+          installment: subscription.installmentAmount ?? subscription.totalAmount,
+        };
+  }
+
   const config = PLAN_CONFIGS[subscription.plan];
   const fator = config.payerTotal / config.totalAmount;
   const total = Math.round(subscription.totalAmount * fator * 100) / 100;
@@ -174,8 +222,66 @@ export function payerAmountsOf(subscription: {
   };
 }
 
-export function planConfig(plan: SubscriptionPlan): PlanConfig {
+export function planConfig(plan: LegacyPlan): PlanConfig {
   return PLAN_CONFIGS[plan];
+}
+
+/**
+ * O regime de uma assinatura, do catálogo antigo **ou** do tier comprado.
+ *
+ * Tudo o que decide cronograma, cobrança e acesso pergunta aqui, e não ao
+ * `PLAN_CONFIGS`: o tier não está no código, o preço dele foi congelado na
+ * própria assinatura (`priceSnapshot`) no momento da compra.
+ */
+export interface PlanRegime {
+  label: string;
+  recurring: boolean;
+  /** Competências do cronograma (o pacote tem 6; a mensalidade, 1 por ciclo). */
+  installments: number;
+  /** A fatia mensal da base, antes do cupom. */
+  installmentAmount: number;
+  /** Meses que o regime compra de uma vez (só nos fechados). */
+  months: number;
+}
+
+export function regimeOf(subscription: {
+  plan: SubscriptionPlan;
+  tierName?: string;
+  priceSnapshot?: number;
+}): PlanRegime {
+  if (!isTierPlan(subscription.plan)) {
+    const config = PLAN_CONFIGS[subscription.plan];
+    return {
+      label: config.label,
+      recurring: config.recurring,
+      installments: config.installments,
+      installmentAmount: config.installmentAmount,
+      months: config.installments,
+    };
+  }
+
+  const price = subscription.priceSnapshot ?? 0;
+  const nome = subscription.tierName ?? 'Plano';
+  return subscription.plan === TIER_PLANS.PACKAGE
+    ? {
+        label: `${nome} — pacote de ${PACKAGE_MONTHS} meses`,
+        recurring: false,
+        installments: PACKAGE_MONTHS,
+        installmentAmount: Math.round((price / PACKAGE_MONTHS) * 100) / 100,
+        months: PACKAGE_MONTHS,
+      }
+    : {
+        label: `${nome} — assinatura mensal`,
+        recurring: true,
+        installments: 1,
+        installmentAmount: price,
+        months: 1,
+      };
+}
+
+/** Fim da fidelidade de uma assinatura de tier que começa em `startDate`. */
+export function fidelityUntilOf(startDate: string): string {
+  return addMonths(startDate, FIDELITY_MONTHS);
 }
 
 /** Uma cobrança do cronograma. `index` é 1-based para casar com "parcela 3/6". */
@@ -212,6 +318,11 @@ export interface Charge {
    * Guardando aqui, a trava confere **todas** antes de emitir outra.
    */
   abandonedChargeIds?: string[];
+  /**
+   * Id do **pagamento** de um ciclo de assinatura (spec 035 §5). O ciclo não
+   * tem order; é este id que se estorna quando o aluno desiste nos 7 dias.
+   */
+  gatewayPaymentId?: string;
 }
 
 export class Subscription {
@@ -261,6 +372,28 @@ export class Subscription {
    */
   gatewaySubscriptionId?: string;
 
+  // --- tier comprado (spec 035) ---
+  /** Ausente nas assinaturas do catálogo antigo. */
+  tierId?: PlanTierId;
+  /** Nome do tier na compra, para a tela e o contrato não dependerem dele vivo. */
+  tierName?: string;
+  /**
+   * O preço do tier no momento da compra: o pacote, no `PACKAGE`; a
+   * mensalidade, no `SUBSCRIPTION`. Reajuste da gerente não mexe em quem já
+   * comprou — e a assinatura mensal existente **não** é reajustada.
+   */
+  priceSnapshot?: number;
+  /** Em quantas vezes o comprador dividiu o pacote no cartão (1–12). */
+  cardInstallments?: number;
+  /** Até quando a assinatura não pode ser cancelada (início + 6 meses). */
+  fidelityUntil?: string;
+  /**
+   * A assinatura foi encerrada **fora** da plataforma (pela conta do aluno no
+   * Mercado Pago) durante a fidelidade. Sem multa (decisão 10): o acesso vai
+   * até o fim do ciclo pago; isto só existe para a gerente ver.
+   */
+  fidelityBrokenAt?: string;
+
   // --- cupom aplicado (RF15/RF16) ---
   couponCode?: string;
   /** Desconto em R$ por parcela, já validado contra o valor da parcela. */
@@ -299,13 +432,15 @@ export function grantsAccess(status: SubscriptionStatus): boolean {
  */
 export function paidAccessUntil(subscription: {
   plan: SubscriptionPlan;
+  tierName?: string;
+  priceSnapshot?: number;
   startDate: string;
   installments: number;
   paidInstallments: number;
 }): string | undefined {
   if (!subscription.paidInstallments) return undefined;
 
-  const meses = PLAN_CONFIGS[subscription.plan].recurring
+  const meses = regimeOf(subscription).recurring
     ? subscription.paidInstallments
     : subscription.installments;
 

@@ -17,7 +17,11 @@ import {
   SubscriptionDto,
 } from './dto/subscription.dto';
 import { Charge, PLAN_CONFIGS } from './subscription.entity';
-import type { PlanConfig, SubscriptionPlan } from './subscription.entity';
+import type {
+  LegacyPlan,
+  PlanConfig,
+  SubscriptionPlan,
+} from './subscription.entity';
 import { buildTerms } from './plan-terms';
 import type { PlanAcceptanceView } from './plan-acceptance.entity';
 import { Roles } from '../decorators/roles.decorator';
@@ -64,10 +68,10 @@ export class SubscriptionController {
   @Get('plans/:plan/terms')
   @Roles(ROLES.STUDENT, ROLES.MANAGER)
   terms(@Param('plan') plan: SubscriptionPlan) {
-    if (!PLAN_CONFIGS[plan]) {
+    if (!(plan in PLAN_CONFIGS)) {
       throw new BadRequestException('Plano inválido');
     }
-    return buildTerms(plan);
+    return buildTerms(plan as LegacyPlan);
   }
 
   /**
