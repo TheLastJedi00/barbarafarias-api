@@ -115,7 +115,7 @@ export function buildTier(
     create: jest.fn(async (acceptance: any) => acceptance),
     findAll: jest.fn().mockResolvedValue([]),
   };
-  const config = { get: jest.fn(() => undefined) };
+  const config = { get: jest.fn((_key: string): string | undefined => undefined) };
   let tier = tierDe(options.tier);
   const planTiers = {
     getEffective: jest.fn(async () => ({ ...tier })),
@@ -143,6 +143,7 @@ export function buildTier(
     pix,
     card,
     planTiers,
+    config,
   };
 }
 

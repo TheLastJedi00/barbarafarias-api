@@ -268,3 +268,35 @@ describe('Tier — o que não se vende', () => {
     ).rejects.toThrow(BadRequestException);
   });
 });
+
+describe('Planos antigos — venda encerrada (spec 035, T27)', () => {
+  const ANUAL = {
+    plan: 'ANNUAL' as const,
+    paymentMethod: PAYMENT_METHODS.CREDIT_CARD,
+    acceptance: { termsVersion: '2026-10-1', accepted: true },
+  };
+
+  it('com LEGACY_PLANS_CLOSED=true, contratar plano antigo é 410', async () => {
+    const { service, config } = buildTier();
+    config.get.mockImplementation((key: string) =>
+      key === 'LEGACY_PLANS_CLOSED' ? 'true' : undefined,
+    );
+
+    await expect(service.choosePlan('aluno-1', ANUAL)).rejects.toThrow(
+      GoneException,
+    );
+  });
+
+  it('sem a variável, segue vendendo: o front antigo não pode quebrar antes do novo entrar', async () => {
+    const { service } = buildTier();
+    await expect(service.choosePlan('aluno-1', ANUAL)).resolves.toBeDefined();
+  });
+
+  it('a venda encerrada não afeta os tiers', async () => {
+    const { service, config } = buildTier();
+    config.get.mockImplementation((key: string) =>
+      key === 'LEGACY_PLANS_CLOSED' ? 'true' : undefined,
+    );
+    await expect(service.choosePlan('aluno-1', PACOTE_PIX)).resolves.toBeDefined();
+  });
+});
