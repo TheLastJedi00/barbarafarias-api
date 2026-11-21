@@ -71,6 +71,8 @@ npm run start:prod
 | `MUX_WEBHOOK_SECRET` | Assinatura do webhook `POST /webhooks/mux`. **Ausente = webhook recusado** |
 | `DEV_MODE` | `true` libera `POST /subscriptions/dev/mock-pay` (simulação de PIX). **Nunca em produção** |
 | `APP_BASE_URL` | Base do frontend, usada nas URLs de retorno do checkout de cartão |
+| `CRON_SECRET` | Segredo do cron da Vercel (spec 035). A Vercel manda `Authorization: Bearer <CRON_SECRET>` em `/internal/cron/plan-prices`. **Ausente = 503** — o cron nunca roda aberto |
+| `LEGACY_PLANS_CLOSED` | `true` fecha a venda dos planos antigos (`MONTHLY`/`SEMIANNUAL`/`ANNUAL`) com 410; quem já tem segue como contratou (spec 035). Ligar só depois do front da 035 no ar |
 
 > **`.env.example`** na raiz lista todas as variáveis obrigatórias — copie para `.env` e preencha.
 >
@@ -1541,6 +1543,49 @@ cliente.
 
 ---
 
+### 🏷️ Planos por serviço — `/plan-tiers` (Spec 035)
+
+Três **tiers** de id fixo, com nome, benefícios e preço definidos pela gerente:
+
+| Id | Nome | Conversação |
+|---|---|---|
+| `private` | Consultoria Particular Premium | 1 aula particular por semana, com professora dedicada (`users.teacherId`) |
+| `weekly-group` | Conversação semanal em grupo | 1 aula em grupo por semana + 1 por mês com a fundadora |
+| `monthly-group` | Conversação mensal em grupo | 1 aula em grupo por mês + 1 por mês com a fundadora |
+
+Todos dão acesso às vídeo aulas e aos materiais. Cada tier vende de dois jeitos:
+
+- **Pacote de 6 meses** (`plan: 'PACKAGE'`): PIX à vista ou cartão em até 12x, juros do
+  gateway pagos pelo comprador. Desistência em 7 dias com estorno; depois disso não cancela.
+- **Assinatura mensal** (`plan: 'SUBSCRIPTION'`): só cartão, fidelidade de 6 meses. Cancela
+  nos 7 dias do CDC (estorno) ou depois da fidelidade; no meio, 409 com `cancellableFrom`.
+  Cancelada fora da plataforma na fidelidade: sem multa, acesso bloqueia na falha da
+  cobrança seguinte e `fidelityBrokenAt` vai para o aluno e o fechamento.
+
+**Preço só vale às 00:00 de Brasília do dia seguinte.** Salvar um preço grava `pending`
+com `effectiveAt`; toda leitura já decide o preço vigente (`effectiveTier`), e o cron da
+Vercel (`0 3 * * *`, `vercel.json`) só consolida o documento e registra o histórico. A
+vitrine pública vai com `Cache-Control: public, s-maxage=<segundos até a meia-noite, máx.
+3600>, stale-while-revalidate=60`. Troca de tier do aluno é **manual** (`PATCH /users/:id`
+com `planTier`, só a gerente), para ninguém comprar vaga sem horário. O sistema não conta
+saldo de aulas.
+
+| Método | Rota | Auth | Descrição |
+|---|---|---|---|
+| `GET` | `/plan-tiers` | 🔓 pública | Vitrine: só tiers ativos e com preço vigente, sem dados internos |
+| `GET` | `/plan-tiers/all` | `manager` | Todos os tiers, com `pending` |
+| `PATCH` | `/plan-tiers/:id` | `manager` | Texto e `active` valem na hora; `packagePrice`/`monthlyPrice` agendam para a meia-noite |
+| `DELETE` | `/plan-tiers/:id/pending` | `manager` | Desfaz o agendamento (400 se já entrou em vigor) |
+| `GET` | `/internal/cron/plan-prices` | `CRON_SECRET` | Cron da Vercel — consolida os preços vencidos |
+| `GET` | `/subscriptions/tiers/:tierId/terms?plan=` | `student`, `manager` | Contrato do tier na modalidade (`PACKAGE` ou `SUBSCRIPTION`) |
+| `POST` | `/subscriptions/me/withdraw` | `student` | Desistência do pacote em 7 dias, com estorno |
+
+Na compra, `POST /subscriptions/me` recebe `{ plan: 'PACKAGE' | 'SUBSCRIPTION', tierId,
+paymentMethod, couponCode? }` e `POST /subscriptions/me/card` aceita `installments` (1–12)
+no pacote. O cupom é validado por `GET /subscriptions/coupons/:code?tierId=&plan=&paymentMethod=`.
+
+---
+
 ### 💳 Subscriptions — `/subscriptions` (Spec 012)
 
 Assinatura do aluno. **Três planos fixos**, sem contratação avulsa:
@@ -1847,6 +1892,7 @@ responsável e para a gerente — **não** para o aluno.
 | `POST` | `/admin/migrate-roles` | `manager` | Grava `role` em `users`, sincroniza a **Custom Claim** de cada conta e migra os docIds antigos da agenda para a gerente. Idempotente |
 | `POST` | `/admin/migrate-auth` | `manager` | Cria no Firebase Auth quem já existe no Firestore (spec 016). Idempotente |
 | `POST` | `/admin/cleanup-credentials` | `manager` | Sem corpo: **relata**. Com `{ "confirmar": "apagar-credentials" }`: apaga a coleção legada |
+| `POST` | `/admin/migrate-plan-tiers` | `manager` | Grava `planTier: 'private'` em todo aluno sem tier (spec 035), menos quem é da loja (`tier: 'modules'`). Idempotente; devolve `{ totalStudents, updated }` |
 
 Precedência do papel: `users.role` → `credentials.role` → `isTeacher` (legado). A ordem
 respeita o ajuste manual da gerente em `credentials` e nunca rebaixa `manager` → `teacher`.
@@ -2173,7 +2219,9 @@ Armazena os dados pessoais e de perfil dos usuários (alunos e professores).
   "bio": "string? — apresentação da professora, ≤600 chars (spec 011)",
 
   "subscriptionPlan": "string? — espelho do plano contratado (spec 012)",
-  "subscriptionStatus": "string? — espelho do status da assinatura (spec 012)"
+  "subscriptionStatus": "string? — espelho do status da assinatura (spec 012)",
+  "planTier": "string? — 'private' | 'weekly-group' | 'monthly-group' (spec 035); só a gerente muda",
+  "fidelityBrokenAt": "string ISO? — assinatura cancelada fora da plataforma na fidelidade (spec 035)"
 }
 ```
 
@@ -2384,6 +2432,13 @@ Assinatura do aluno (spec 012). **Uma por aluno** — não há histórico de pla
 }
 ```
 
+> **Spec 035:** `plan` ganhou `'PACKAGE'` e `'SUBSCRIPTION'` (a modalidade do tier mora
+> no próprio `plan`), e o documento passou a ter `tierId`, `tierName`, `priceSnapshot`
+> (preço vigente na compra), `cardInstallments` (1–12, pacote no cartão), `fidelityUntil`,
+> `fidelityBrokenAt`, `withdrawnAt` e `couponCounted`. Cada parcela guarda
+> `gatewayPaymentId`, o pagamento que o estorno da desistência usa. Os planos antigos
+> continuam lidos como sempre.
+>
 > `gatewayChargeId` é o caminho de volta do webhook: ele chega com o id da cobrança e nada
 > nosso. A busca varre a coleção em memória — é uma linha por aluno, e `array-contains`
 > não procura dentro de objetos. Renovações do cartão não têm cobrança emitida por nós: a
@@ -2408,6 +2463,12 @@ Cupons de desconto criados pela gerente (spec 012 RF15).
   "code": "string — sempre em MAIÚSCULAS, único",
   "discountAmount": "number — abatimento em R$ por parcela",
   "durationMonths": "number | null — por quantas parcelas vale; null = vitalício",
+  "tierId": "string? — tier do cupom (spec 035); ausente = só planos antigos",
+  "discountType": "'amount' | 'percent' (spec 035)",
+  "discountValue": "number — R$ ou % (≤ 100); substitui discountAmount, que segue lido",
+  "paymentModes": "string[]? — 'PACKAGE_PIX' | 'PACKAGE_CARD' | 'SUBSCRIPTION'; ausente = todas",
+  "maxUses": "number? — limite de usos; ausente = sem limite",
+  "usedCount": "number — conta só pagamento confirmado",
   "active": "boolean",
   "createdAt": "string ISO",
   "createdBy": "string — uid da gerente"
@@ -2619,6 +2680,27 @@ Compras da loja (spec 032). Consultas por um campo só (`userId`, `productId`, `
 
 > **Só `PAID` com `accessUntil` no futuro dá acesso**, e isso é calculado a cada leitura.
 > `users.tier: 'modules'` marca quem entrou pela loja; ausente é aluno do plano (sem migração).
+
+### 20. `planTiers`
+Os três tiers (spec 035). Semeados na primeira leitura, **inativos e sem preço**.
+- **Doc ID:** `private` | `weekly-group` | `monthly-group`
+```json
+{
+  "name": "string",
+  "description": "string",
+  "benefits": ["string"],
+  "packagePrice": "number | null — pacote de 6 meses, à vista",
+  "monthlyPrice": "number | null — null = não vende assinatura",
+  "active": "boolean",
+  "pending": "{ packagePrice, monthlyPrice, effectiveAt, requestedBy, requestedAt } | null",
+  "updatedAt": "string ISO",
+  "updatedBy": "string — uid da gerente"
+}
+```
+
+> Subcoleção `planTiers/{id}/priceHistory`: um registro por preço que entrou em vigor.
+> `pending` com `effectiveAt` no passado **já é o preço** — a leitura decide, o cron só
+> arruma o documento. Assim um cron atrasado nunca vende pelo preço velho.
 
 ---
 
