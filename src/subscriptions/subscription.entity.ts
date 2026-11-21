@@ -409,6 +409,12 @@ export class Subscription {
    * há cupom. É o que decide o valor das renovações projetadas depois.
    */
   couponRemainingCharges?: number | null;
+  /**
+   * O uso do cupom já foi contado (spec 035 §6). A assinatura confirma um
+   * ciclo por mês e o webhook é reentregue: sem isto cada renovação gastaria
+   * um uso.
+   */
+  couponCounted?: boolean;
 
   createdAt!: string;
   updatedAt!: string;
