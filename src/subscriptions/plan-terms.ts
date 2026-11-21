@@ -1,5 +1,5 @@
 import { PlanConfig, planConfig } from './subscription.entity';
-import type { SubscriptionPlan } from './subscription.entity';
+import type { LegacyPlan } from './subscription.entity';
 
 /**
  * Versão do texto aceito.
@@ -42,7 +42,7 @@ export interface TermsClause {
  * para a dona revisar antes de entrar no ar. O que o código garante é que os
  * valores batem com o catálogo e que a versão fica registrada.
  */
-export function buildTerms(plan: SubscriptionPlan): {
+export function buildTerms(plan: LegacyPlan): {
   version: string;
   planLabel: string;
   summary: string;

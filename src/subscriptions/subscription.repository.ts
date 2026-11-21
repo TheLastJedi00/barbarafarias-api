@@ -95,6 +95,7 @@ export class SubscriptionRepository {
       paidAt: charge.paidAt ?? null,
       gatewayChargeId: charge.gatewayChargeId ?? null,
       gatewayProvider: charge.gatewayProvider ?? null,
+      gatewayPaymentId: charge.gatewayPaymentId ?? null,
     }));
     return plain;
   }
@@ -117,6 +118,7 @@ export class SubscriptionRepository {
         gatewayChargeId:
           charge.gatewayChargeId ?? charge.abacatePayId ?? undefined,
         gatewayProvider: charge.gatewayProvider ?? undefined,
+        gatewayPaymentId: charge.gatewayPaymentId ?? undefined,
       })),
     });
   }

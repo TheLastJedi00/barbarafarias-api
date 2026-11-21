@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ConflictException,
   ForbiddenException,
   Injectable,
   Logger,
@@ -37,15 +38,27 @@ import {
   Charge,
   PAYMENT_METHODS,
   RECURRING_SCHEDULE_MONTHS,
+  PACKAGE_MAX_INSTALLMENTS,
   SUBSCRIPTION_STATUS,
+  planConfig,
   Subscription,
+  TIER_PLANS,
   addMonths,
+  fidelityUntilOf,
   grantsAccess,
+  isTierPlan,
   paidAccessUntil,
   payerAmountsOf,
-  planConfig,
+  regimeOf,
 } from './subscription.entity';
-import type { PaymentMethod, SubscriptionPlan } from './subscription.entity';
+import type {
+  LegacyPlan,
+  PaymentMethod,
+  SubscriptionPlan,
+  TierPlan,
+} from './subscription.entity';
+import { PlanTierService } from '../plan-tiers/plan-tier.service';
+import { isSellable, type PlanTier } from '../plan-tiers/plan-tier.model';
 import {
   Coupon,
   applyDiscount,
@@ -114,13 +127,24 @@ export function assertMethodAllowed(
   plan: SubscriptionPlan,
   method: PaymentMethod,
 ): void {
-  if (
-    method === PAYMENT_METHODS.PIX_RECURRING &&
-    planConfig(plan).installments > 1
-  ) {
+  if (method !== PAYMENT_METHODS.PIX_RECURRING) return;
+
+  // **Tier (spec 035):** o pacote é uma compra à vista e aceita PIX — o QR é
+  // do valor inteiro, não de uma parcela. A assinatura é só cartão: não existe
+  // PIX recorrente que o gateway cobre sozinho.
+  if (plan === TIER_PLANS.PACKAGE) return;
+  if (plan === TIER_PLANS.SUBSCRIPTION) {
+    throw new BadRequestException(SUBSCRIPTION_CARD_ONLY);
+  }
+
+  if (regimeOf({ plan }).installments > 1) {
     throw new BadRequestException(PIX_INSTALLMENT_BLOCKED);
   }
 }
+
+/** A assinatura do tier cobra sozinha todo mês, e isso só o cartão faz. */
+export const SUBSCRIPTION_CARD_ONLY =
+  'A assinatura é cobrada no cartão de crédito. Para pagar no PIX, escolha o pacote de 6 meses.';
 
 @Injectable()
 export class SubscriptionService {
@@ -134,6 +158,7 @@ export class SubscriptionService {
     private readonly pix: PixGateway,
     private readonly card: CardGateway,
     private readonly configService: ConfigService,
+    private readonly planTiers: PlanTierService,
   ) {}
 
   // ---------------------------------------------------------------- aluno
@@ -153,6 +178,7 @@ export class SubscriptionService {
     }
     this.assertPayableProfile(student);
     assertMethodAllowed(dto.plan, dto.paymentMethod);
+    const tier = await this.resolveTier(dto);
 
     const existing = await this.subscriptions.findByStudent(studentId);
     if (existing) {
@@ -162,12 +188,12 @@ export class SubscriptionService {
       // pagar de novo meses que já foram pagos. O status nem entra na conta:
       // o que importa é haver acesso comprado de pé.
       if (
-        !planConfig(existing.plan).recurring &&
+        !regimeOf(existing).recurring &&
         existing.accessUntil &&
         this.hoje() <= existing.accessUntil
       ) {
         throw new BadRequestException(
-          `Você já tem o plano ${planConfig(existing.plan).label} contratado até ${existing.accessUntil.split('-').reverse().join('/')}. Contrate um plano novo quando este período terminar.`,
+          `Você já tem o plano ${regimeOf(existing).label} contratado até ${existing.accessUntil.split('-').reverse().join('/')}. Contrate um plano novo quando este período terminar.`,
         );
       }
 
@@ -186,12 +212,15 @@ export class SubscriptionService {
       ? await this.resolveCoupon(dto.couponCode)
       : null;
 
-    const subscription = this.buildSubscription(
-      studentId,
-      dto.plan,
-      dto.paymentMethod,
-      coupon,
-    );
+    const subscription = tier
+      ? this.buildTierSubscription(
+          studentId,
+          dto.plan as TierPlan,
+          tier,
+          dto.paymentMethod,
+          coupon,
+        )
+      : this.buildSubscription(studentId, dto.plan, dto.paymentMethod, coupon);
     // **O aceite vem antes da cobrança**, na mesma operação que cria a
     // assinatura. Gravá-lo depois abriria a janela em que o aluno já foi
     // debitado e ainda não há registro de que concordou — e é justamente na
@@ -248,7 +277,8 @@ export class SubscriptionService {
     }
     this.assertPayableProfile(student);
 
-    const config = planConfig(subscription.plan);
+    const config = regimeOf(subscription);
+    const installments = this.cardInstallmentsFor(subscription, dto);
 
     // **Antes de cobrar, ver se já não foi cobrado.**
     //
@@ -281,7 +311,7 @@ export class SubscriptionService {
         studentId,
         chargeIndex: charge.index,
         recurring: { cycles: config.recurring ? null : config.installments },
-        installments: config.installments,
+        installments,
         card: { token: dto.token, paymentMethodId: dto.paymentMethodId },
         couponCode: subscription.couponCode,
       });
@@ -338,6 +368,9 @@ export class SubscriptionService {
 
     charge.gatewayChargeId = checkout.id;
     charge.gatewayProvider = checkout.provider;
+    if (subscription.plan === TIER_PLANS.PACKAGE) {
+      subscription.cardInstallments = installments;
+    }
     if (checkout.subscriptionId) {
       subscription.gatewaySubscriptionId = checkout.subscriptionId;
     }
@@ -380,7 +413,7 @@ export class SubscriptionService {
     subscription: Subscription,
     acceptance: PlanAcceptanceDto,
   ): Promise<void> {
-    const config = planConfig(subscription.plan);
+    const config = regimeOf(subscription);
     const acordado = payerAmountsOf(subscription);
     await this.acceptances.create(
       new PlanAcceptance({
@@ -395,7 +428,12 @@ export class SubscriptionService {
         // parcelado que leu na tela — não com a base que cobramos do provedor,
         // que é conta nossa e nunca apareceu para ela.
         totalAmount: acordado.total,
-        installments: subscription.installments,
+        // No tier o que se acorda é o preço à vista (o pacote) ou a
+        // mensalidade: o parcelamento do pacote é escolhido depois, no cartão,
+        // com os juros que o Mercado Pago mostra ali.
+        installments: isTierPlan(subscription.plan)
+          ? 1
+          : subscription.installments,
         installmentAmount: acordado.installment,
         termsVersion: acceptance.termsVersion,
         acceptedAt: new Date().toISOString(),
@@ -477,7 +515,7 @@ export class SubscriptionService {
     // No mensal o que existe lá fora é uma **assinatura**, não uma order: criar
     // outra colocaria o aluno em dois `preapproval` cobrando todo mês, para
     // sempre. Nem se pergunta ao gateway — a existência do id já responde.
-    if (planConfig(subscription.plan).recurring) {
+    if (regimeOf(subscription).recurring) {
       if (!subscription.gatewaySubscriptionId) return null;
       this.logger.warn(
         `Assinatura de ${subscription.studentId} já existe (${subscription.gatewaySubscriptionId}); nova cobrança recusada.`,
@@ -664,7 +702,7 @@ export class SubscriptionService {
     // **No mensal não há order para reler.** O que existe lá fora é um
     // `preapproval`, e a primeira cobrança dele sai em até ~1h — quem confirma
     // é o webhook. Reler o id da assinatura como se fosse order daria 404.
-    if (planConfig(subscription.plan).recurring) return semNovidade();
+    if (regimeOf(subscription).recurring) return semNovidade();
 
     const result = await this.card.fetchChargeOutcome(charge.gatewayChargeId);
     if (result.outcome === CHARGE_OUTCOMES.PAID) {
@@ -797,13 +835,13 @@ export class SubscriptionService {
   }
 
   private assertCancellable(subscription: Subscription): void {
-    if (planConfig(subscription.plan).recurring) return;
+    if (regimeOf(subscription).recurring) return;
 
     const ate = subscription.accessUntil
       ? ` Seu acesso segue até ${subscription.accessUntil.split('-').reverse().join('/')}.`
       : '';
     throw new BadRequestException(
-      `O plano ${planConfig(subscription.plan).label} é comprado por período, não é assinatura: não há renovação a cancelar.${ate}`,
+      `O plano ${regimeOf(subscription).label} é comprado por período, não é assinatura: não há renovação a cancelar.${ate}`,
     );
   }
 
@@ -898,6 +936,11 @@ export class SubscriptionService {
 
     const pending = this.nextPendingCharge(subscription);
     if (!pending) return;
+    // O id do **pagamento** do ciclo é o que se estorna na desistência dos 7
+    // dias (spec 035 §5): o `preapproval` não tem estorno próprio.
+    if (cycle.payment?.id !== undefined) {
+      pending.gatewayPaymentId = String(cycle.payment.id);
+    }
     await this.confirmCharge(subscription, undefined, pending.index);
     await this.syncRecurringAmount(subscription);
   }
@@ -1080,6 +1123,9 @@ export class SubscriptionService {
         // Vai junto porque, cancelada, a assinatura ainda pode dar acesso — e
         // quem decide isso lê o aluno, não a assinatura.
         accessUntil: subscription.accessUntil,
+        // Só quem comprou por tier escreve o tier. A assinatura antiga não
+        // apaga o `private` que a migração deu (spec 035 §7).
+        ...(subscription.tierId ? { planTier: subscription.tierId } : {}),
       });
     } catch (error) {
       // O espelho é conveniência de listagem; a assinatura já está gravada.
@@ -1111,6 +1157,136 @@ export class SubscriptionService {
   }
 
   /**
+   * O tier que esta contratação compra, já com o preço que vale agora.
+   *
+   * `null` no catálogo antigo. Pacote e assinatura **exigem** tier; e o tier
+   * precisa estar à venda — ativo e com preço — no instante da compra, não no
+   * da vitrine que o aluno abriu horas antes.
+   */
+  private async resolveTier(dto: ChoosePlanDto): Promise<PlanTier | null> {
+    if (!isTierPlan(dto.plan)) {
+      if (dto.tierId) {
+        throw new BadRequestException('Este plano não é vendido por tier.');
+      }
+      return null;
+    }
+    if (!dto.tierId) {
+      throw new BadRequestException('Escolha o plano.');
+    }
+
+    const tier = await this.planTiers.getEffective(dto.tierId);
+    if (!isSellable(tier)) {
+      throw new ConflictException('Este plano não está disponível no momento.');
+    }
+    if (dto.plan === TIER_PLANS.SUBSCRIPTION && !tier.monthlyPrice) {
+      throw new BadRequestException(
+        'Este plano não tem assinatura mensal. Escolha o pacote de 6 meses.',
+      );
+    }
+    return tier;
+  }
+
+  /**
+   * Em quantas vezes o cartão é dividido. No pacote do tier é escolha do
+   * comprador, **com teto aqui**: a trava do formulário é conveniência. Nos
+   * outros regimes sai do regime, e o que o cliente mandou não é lido.
+   */
+  private cardInstallmentsFor(
+    subscription: Subscription,
+    dto: CardPaymentDto,
+  ): number {
+    if (subscription.plan !== TIER_PLANS.PACKAGE) {
+      return regimeOf(subscription).installments;
+    }
+    const chosen = dto.installments ?? 1;
+    if (
+      !Number.isInteger(chosen) ||
+      chosen < 1 ||
+      chosen > PACKAGE_MAX_INSTALLMENTS
+    ) {
+      throw new BadRequestException(
+        `O pacote pode ser parcelado em até ${PACKAGE_MAX_INSTALLMENTS}x.`,
+      );
+    }
+    return chosen;
+  }
+
+  /**
+   * Monta a assinatura de um tier (spec 035).
+   *
+   * - **Pacote:** o preço é dividido em 6 competências mensais da base, para a
+   *   receita seguir por competência; o cupom desconta do valor inteiro, uma
+   *   vez, e a diferença de centavos fica na última.
+   * - **Assinatura:** a mensalidade, projetada como a do Mensal antigo, com o
+   *   cupom valendo pelas `durationMonths` primeiras.
+   */
+  private buildTierSubscription(
+    studentId: string,
+    plan: TierPlan,
+    tier: PlanTier,
+    paymentMethod: PaymentMethod,
+    coupon: ResolvedCoupon | null,
+    today: string = todayInAppTimezone(),
+  ): Subscription {
+    const isPackage = plan === TIER_PLANS.PACKAGE;
+    const price = (isPackage ? tier.packagePrice : tier.monthlyPrice) ?? 0;
+    const regime = regimeOf({ plan, tierName: tier.name, priceSnapshot: price });
+
+    const charges: Charge[] = [];
+    let totalAmount: number;
+    if (isPackage) {
+      totalAmount = coupon ? applyDiscount(price, coupon.discount) : price;
+      const fatia = round2(totalAmount / regime.installments);
+      for (let index = 1; index <= regime.installments; index++) {
+        const ultima = index === regime.installments;
+        charges.push({
+          index,
+          dueDate: addMonths(today, index - 1),
+          amount: ultima
+            ? round2(totalAmount - fatia * (regime.installments - 1))
+            : fatia,
+          status: CHARGE_STATUS.PENDING,
+        });
+      }
+    } else {
+      totalAmount = price;
+      for (let index = 1; index <= RECURRING_SCHEDULE_MONTHS; index++) {
+        charges.push({
+          index,
+          dueDate: addMonths(today, index - 1),
+          amount: this.amountFor(price, coupon, index),
+          status: CHARGE_STATUS.PENDING,
+        });
+      }
+    }
+
+    const now = new Date().toISOString();
+    return new Subscription({
+      id: studentId,
+      studentId,
+      plan,
+      status: SUBSCRIPTION_STATUS.PENDING,
+      paymentMethod,
+      totalAmount,
+      installments: regime.installments,
+      installmentAmount: charges[0].amount,
+      paidInstallments: 0,
+      charges,
+      startDate: today,
+      nextChargeDate: charges[0].dueDate,
+      tierId: tier.id,
+      tierName: tier.name,
+      priceSnapshot: price,
+      fidelityUntil: isPackage ? undefined : fidelityUntilOf(today),
+      couponCode: coupon?.code,
+      couponDiscount: coupon?.discount,
+      couponRemainingCharges: coupon ? coupon.remaining : undefined,
+      createdAt: now,
+      updatedAt: now,
+    });
+  }
+
+  /**
    * Monta a assinatura e o cronograma. O plano mensal é recorrente: ele tem
    * uma parcela conceitual (a mensalidade) mas o cronograma projeta as
    * próximas renovações, para o aluno enxergar as datas à frente (§2).
@@ -1122,7 +1298,7 @@ export class SubscriptionService {
     coupon: ResolvedCoupon | null,
     today: string = todayInAppTimezone(),
   ): Subscription {
-    const config = planConfig(plan);
+    const config = planConfig(plan as LegacyPlan);
     const scheduled = config.recurring
       ? RECURRING_SCHEDULE_MONTHS
       : config.installments;
@@ -1233,10 +1409,28 @@ export class SubscriptionService {
     // delegava o formulário ao provedor. Sem redirecionamento e com tokenização
     // no cliente, a ordem se inverte.
     if (!isPix) {
-      const config = planConfig(subscription.plan);
+      const config = regimeOf(subscription);
+      // **Pacote do tier: parcelas livres até 12x**, com os juros do
+      // comprador (spec 035 §4). O formulário mostra de 1x a 12x com o total
+      // que o Mercado Pago calcula; quem trava o teto é `cardInstallmentsFor`.
+      if (subscription.plan === TIER_PLANS.PACKAGE) {
+        return {
+          card: {
+            amount: subscription.totalAmount,
+            installments: PACKAGE_MAX_INSTALLMENTS,
+            chargeIndex: charge.index,
+            installmentsFree: true,
+          },
+        };
+      }
       return {
         card: {
-          amount: subscription.totalAmount,
+          // A assinatura do tier cobra o ciclo. Os planos antigos seguem
+          // como sempre: o total (o Mensal antigo tem total = mensalidade).
+          amount:
+            subscription.plan === TIER_PLANS.SUBSCRIPTION
+              ? charge.amount
+              : subscription.totalAmount,
           // Do catálogo, nunca do cliente: é o mesmo valor que o backend vai
           // exigir na cobrança, e mandá-lo daqui é o que permite ao formulário
           // travar o seletor de parcelas na opção certa.
@@ -1286,11 +1480,17 @@ export class SubscriptionService {
     email: string,
     customer: { name?: string; cellphone?: string; taxId?: string },
   ) {
-    const config = planConfig(subscription.plan);
+    const config = regimeOf(subscription);
+    // O pacote do tier é uma compra à vista: o PIX dele é do valor inteiro,
+    // e é a mesma order que quita as 6 competências (spec 035 §4).
+    const amount =
+      subscription.plan === TIER_PLANS.PACKAGE
+        ? subscription.totalAmount
+        : charge.amount;
     return {
-      amount: charge.amount,
+      amount,
       description: `${config.label} — parcela ${charge.index}`,
-      externalId: `${subscription.studentId}-${charge.index}-${toCents(charge.amount)}`,
+      externalId: `${subscription.studentId}-${charge.index}-${toCents(amount)}`,
       customer: { email, ...customer },
       product: { key: subscription.plan, label: `Plano ${config.label}` },
     };
@@ -1368,7 +1568,7 @@ export class SubscriptionService {
     // O `dueDate` de cada uma **não** muda: a receita continua distribuída por
     // competência mensal, que é como ela de fato ocorre. O que muda é só a
     // verdade sobre o que já foi pago.
-    const quitadas = planConfig(subscription.plan).recurring
+    const quitadas = regimeOf(subscription).recurring
       ? [charge]
       : subscription.charges;
 
@@ -1406,7 +1606,8 @@ export class SubscriptionService {
    * uma no fim da fila para a janela de meses à frente continuar cheia.
    */
   private extendRecurringSchedule(subscription: Subscription): void {
-    if (!planConfig(subscription.plan).recurring) return;
+    const regime = regimeOf(subscription);
+    if (!regime.recurring) return;
 
     const pending = subscription.charges.filter(
       (charge) => charge.status !== CHARGE_STATUS.PAID,
@@ -1428,11 +1629,7 @@ export class SubscriptionService {
       subscription.charges.push({
         index,
         dueDate: addMonths(last.dueDate, index - last.index),
-        amount: this.amountFor(
-          planConfig(subscription.plan).installmentAmount,
-          coupon,
-          index,
-        ),
+        amount: this.amountFor(regime.installmentAmount, coupon, index),
         status: CHARGE_STATUS.PENDING,
       });
     }
