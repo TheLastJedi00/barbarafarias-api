@@ -6,6 +6,7 @@ import {
   Param,
   Patch,
   Post,
+  Query,
 } from '@nestjs/common';
 import { SubscriptionService } from './subscription.service';
 import {
@@ -15,10 +16,20 @@ import {
   ChoosePlanDto,
   ChoosePlanResponseDto,
   SubscriptionDto,
+  ValidateCouponQueryDto,
 } from './dto/subscription.dto';
 import { Charge, PLAN_CONFIGS } from './subscription.entity';
-import type { PlanConfig, SubscriptionPlan } from './subscription.entity';
-import { buildTerms } from './plan-terms';
+import type {
+  LegacyPlan,
+  PlanConfig,
+  SubscriptionPlan,
+} from './subscription.entity';
+import { buildTerms, buildTierTerms } from './plan-terms';
+import { PlanTierService } from '../plan-tiers/plan-tier.service';
+import { isPlanTierId } from '../plan-tiers/plan-tier.model';
+import type { PlanTierId } from '../plan-tiers/plan-tier.model';
+import { TIER_PLANS } from './subscription.entity';
+import type { TierPlan } from './subscription.entity';
 import type { PlanAcceptanceView } from './plan-acceptance.entity';
 import { Roles } from '../decorators/roles.decorator';
 import { Public } from '../decorators/public.decorator';
@@ -35,7 +46,10 @@ import { ROLES } from '../types/role';
  */
 @Controller('subscriptions')
 export class SubscriptionController {
-  constructor(private readonly service: SubscriptionService) {}
+  constructor(
+    private readonly service: SubscriptionService,
+    private readonly planTiers: PlanTierService,
+  ) {}
 
   /**
    * Catálogo dos planos: alimenta o seletor (RF2) e, desde a spec 034, a
@@ -64,10 +78,33 @@ export class SubscriptionController {
   @Get('plans/:plan/terms')
   @Roles(ROLES.STUDENT, ROLES.MANAGER)
   terms(@Param('plan') plan: SubscriptionPlan) {
-    if (!PLAN_CONFIGS[plan]) {
+    if (!(plan in PLAN_CONFIGS)) {
       throw new BadRequestException('Plano inválido');
     }
-    return buildTerms(plan);
+    return buildTerms(plan as LegacyPlan);
+  }
+
+  /**
+   * O contrato de um tier num dos dois jeitos de comprar (spec 035), com o
+   * preço que vale agora — o mesmo que a contratação vai congelar. Mesmo
+   * acesso do contrato dos planos antigos: o aluno lê antes de pagar, a
+   * gerente lê na tela de contratos.
+   */
+  @Get('tiers/:tierId/terms')
+  @Roles(ROLES.STUDENT, ROLES.MANAGER)
+  async tierTerms(
+    @Param('tierId') tierId: PlanTierId,
+    @Query('plan') plan: TierPlan,
+  ) {
+    if (!isPlanTierId(tierId) || !Object.values(TIER_PLANS).includes(plan)) {
+      throw new BadRequestException('Plano inválido');
+    }
+    const tier = await this.planTiers.getEffective(tierId);
+    try {
+      return buildTierTerms(tier, plan);
+    } catch (error) {
+      throw new BadRequestException((error as Error).message);
+    }
   }
 
   /**
@@ -87,8 +124,11 @@ export class SubscriptionController {
    */
   @Get('coupons/:code')
   @Roles(ROLES.STUDENT)
-  validateCoupon(@Param('code') code: string) {
-    return this.service.validateCoupon(code);
+  validateCoupon(
+    @Param('code') code: string,
+    @Query() query: ValidateCouponQueryDto,
+  ) {
+    return this.service.validateCoupon(code, query);
   }
 
   @Get('me')
@@ -165,6 +205,17 @@ export class SubscriptionController {
   @Roles(ROLES.STUDENT)
   cancel(@CurrentUser() user: AuthenticatedUser): Promise<SubscriptionDto> {
     return this.service.cancelSubscription(user.sub);
+  }
+
+  /**
+   * Desistência do **pacote** do tier em até 7 dias do pagamento (CDC art.
+   * 49): estorna tudo e encerra o acesso. A assinatura desiste por
+   * `me/cancel`, que já sabe a janela dela (spec 035 §4/§5).
+   */
+  @Post('me/withdraw')
+  @Roles(ROLES.STUDENT)
+  withdraw(@CurrentUser() user: AuthenticatedUser): Promise<SubscriptionDto> {
+    return this.service.withdraw(user.sub);
   }
 
   @Get('me/charges')

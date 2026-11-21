@@ -6,6 +6,8 @@ import {
   IsString,
 } from 'class-validator';
 import { LEVELS } from '../../types/student.level';
+import { PLAN_TIER_ID_LIST } from '../../plan-tiers/plan-tier.model';
+import type { PlanTierId } from '../../plan-tiers/plan-tier.model';
 
 export class UpdateUserDto {
   @IsString()
@@ -50,4 +52,13 @@ export class UpdateUserDto {
   @IsString()
   @IsOptional()
   profileImageUrl?: string;
+
+  /**
+   * Troca manual do tier pela **gerente** (spec 035, decisão 7): mudar de
+   * serviço depende de haver horário, então não é self-service. Não mexe em
+   * cobrança nem em prazo — só no que a agenda e as turmas leem.
+   */
+  @IsIn(PLAN_TIER_ID_LIST, { message: 'Plano inválido' })
+  @IsOptional()
+  planTier?: PlanTierId;
 }

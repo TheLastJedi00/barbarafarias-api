@@ -591,6 +591,36 @@ export class MercadoPagoGateway extends CardGateway implements PixGateway {
     }
   }
 
+  /**
+   * Estorno total de um pagamento de ciclo, em `POST /v1/payments/{id}/refunds`.
+   *
+   * Vai por `fetch` com o token de **Assinaturas**: o pagamento nasceu do
+   * `preapproval`, e é a conta dele que o devolve. Corpo vazio = estorno total.
+   * Falha estoura com o status — engolir erro de estorno deixaria a tela
+   * dizendo "valor devolvido" com o dinheiro ainda lá.
+   */
+  async refundPayment(paymentId: string, reference: string): Promise<void> {
+    const { subscriptionsToken } = this.require();
+    const response = await fetch(
+      `${MERCADOPAGO_BASE_URL}/v1/payments/${encodeURIComponent(paymentId)}/refunds`,
+      {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${subscriptionsToken}`,
+          'Content-Type': 'application/json',
+          'X-Idempotency-Key': idempotencyKeyFor(`refund|${reference}`),
+        },
+        body: '{}',
+      },
+    );
+    if (!response.ok) {
+      const detalhe = await response.text().catch(() => '');
+      throw new Error(
+        `Estorno do pagamento ${paymentId} recusado: ${response.status} ${detalhe}`.trim(),
+      );
+    }
+  }
+
   /** Traduz a order para o desfecho que a regra de negócio entende. */
   protected resultOfOrder(order: OrderResponse): CheckoutResult {
     const payment = order.transactions?.payments?.[0];
