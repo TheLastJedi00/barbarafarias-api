@@ -5,6 +5,7 @@ import { SupplyModule } from './supply/supply.module';
 import { ConfigModule } from '@nestjs/config';
 import { AuthModule } from './auth/auth.module';
 import { TurmaModule } from './turmas/turma.module';
+import { ContractModule } from './contracts/contract.module';
 import { AgendaModule } from './agenda/agenda.module';
 import { CurriculumModule } from './curriculum/curriculum.module';
 import { ArticleModule } from './articles/article.module';
@@ -38,6 +39,7 @@ import { FirebaseAuthModule } from './firestore/firebase-auth.module';
     SupplyModule,
     AuthModule,
     TurmaModule,
+    ContractModule,
     AgendaModule,
     CurriculumModule,
     ArticleModule,
