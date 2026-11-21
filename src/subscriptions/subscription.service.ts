@@ -87,11 +87,7 @@ import {
   SubscriptionDto,
   ValidateCouponQueryDto,
 } from './dto/subscription.dto';
-import {
-  addDays,
-  toZonedDateString,
-  todayInAppTimezone,
-} from '../common/time';
+import { addDays, toZonedDateString, todayInAppTimezone } from '../common/time';
 import { randomUUID } from 'node:crypto';
 
 /** Desconto aplicado a uma parcela, já resolvido contra o cupom. */
@@ -123,7 +119,8 @@ function couponModeOf(
   plan: SubscriptionPlan,
   method: PaymentMethod,
 ): CouponPaymentMode {
-  if (plan === TIER_PLANS.SUBSCRIPTION) return COUPON_PAYMENT_MODES.SUBSCRIPTION;
+  if (plan === TIER_PLANS.SUBSCRIPTION)
+    return COUPON_PAYMENT_MODES.SUBSCRIPTION;
   return method === PAYMENT_METHODS.PIX_RECURRING
     ? COUPON_PAYMENT_MODES.PACKAGE_PIX
     : COUPON_PAYMENT_MODES.PACKAGE_CARD;
@@ -490,7 +487,10 @@ export class SubscriptionService {
     ]);
 
     const porAluno = new Map(
-      subscriptions.map((subscription) => [subscription.studentId, subscription]),
+      subscriptions.map((subscription) => [
+        subscription.studentId,
+        subscription,
+      ]),
     );
 
     // Qual aceite de cada aluna é o vigente. A assinatura é **uma** e é
@@ -687,7 +687,9 @@ export class SubscriptionService {
 
     const charge = this.nextPendingCharge(subscription);
     if (!charge?.gatewayChargeId) {
-      throw new BadRequestException('Não há cobrança em aberto para recomeçar.');
+      throw new BadRequestException(
+        'Não há cobrança em aberto para recomeçar.',
+      );
     }
 
     const paga = await this.paidOutcomeOf(
@@ -1566,7 +1568,11 @@ export class SubscriptionService {
   ): Subscription {
     const isPackage = plan === TIER_PLANS.PACKAGE;
     const price = (isPackage ? tier.packagePrice : tier.monthlyPrice) ?? 0;
-    const regime = regimeOf({ plan, tierName: tier.name, priceSnapshot: price });
+    const regime = regimeOf({
+      plan,
+      tierName: tier.name,
+      priceSnapshot: price,
+    });
 
     const charges: Charge[] = [];
     let totalAmount: number;

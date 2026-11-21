@@ -14,13 +14,21 @@ import {
 
 describe('discountFor', () => {
   it('em reais, nunca mais que o valor', () => {
-    expect(discountFor({ discountType: 'amount', discountValue: 100 }, 1800)).toBe(100);
-    expect(discountFor({ discountType: 'amount', discountValue: 5000 }, 1800)).toBe(1800);
+    expect(
+      discountFor({ discountType: 'amount', discountValue: 100 }, 1800),
+    ).toBe(100);
+    expect(
+      discountFor({ discountType: 'amount', discountValue: 5000 }, 1800),
+    ).toBe(1800);
   });
 
   it('em percentual, arredondado ao centavo', () => {
-    expect(discountFor({ discountType: 'percent', discountValue: 10 }, 1800)).toBe(180);
-    expect(discountFor({ discountType: 'percent', discountValue: 15 }, 333.33)).toBe(50);
+    expect(
+      discountFor({ discountType: 'percent', discountValue: 10 }, 1800),
+    ).toBe(180);
+    expect(
+      discountFor({ discountType: 'percent', discountValue: 15 }, 333.33),
+    ).toBe(50);
   });
 
   it('cupom antigo, sem tipo, é em reais', () => {
@@ -30,17 +38,21 @@ describe('discountFor', () => {
 
 describe('Cupom por tier — pacote', () => {
   it('desconta do valor inteiro, uma vez, e reparte o resto nas 6 competências', async () => {
-    const { service, subscriptions } = buildTier({ coupon: { discountValue: 100 } });
+    const { service, subscriptions } = buildTier({
+      coupon: { discountValue: 100 },
+    });
 
-    await service.choosePlan('aluno-1', { ...PACOTE_PIX, couponCode: 'bemvinda' });
+    await service.choosePlan('aluno-1', {
+      ...PACOTE_PIX,
+      couponCode: 'bemvinda',
+    });
 
     const saved = subscriptions.store.get('aluno-1')!;
     expect(saved.totalAmount).toBe(1700);
     expect(saved.couponCode).toBe('BEMVINDA');
-    expect(saved.charges.reduce((sum, charge) => sum + charge.amount, 0)).toBeCloseTo(
-      1700,
-      2,
-    );
+    expect(
+      saved.charges.reduce((sum, charge) => sum + charge.amount, 0),
+    ).toBeCloseTo(1700, 2);
     expect(saved.charges.map((charge) => charge.amount)).toEqual([
       283.33, 283.33, 283.33, 283.33, 283.33, 283.35,
     ]);
@@ -51,7 +63,10 @@ describe('Cupom por tier — pacote', () => {
       coupon: { discountType: 'percent', discountValue: 10 },
     });
 
-    await service.choosePlan('aluno-1', { ...PACOTE_PIX, couponCode: 'BEMVINDA' });
+    await service.choosePlan('aluno-1', {
+      ...PACOTE_PIX,
+      couponCode: 'BEMVINDA',
+    });
 
     expect(subscriptions.store.get('aluno-1')!.totalAmount).toBe(1620);
     expect(pix.createPixCharge).toHaveBeenCalledWith(
@@ -74,9 +89,14 @@ describe('Cupom por tier — pacote', () => {
   });
 
   it('restrito ao PIX: recusado no cartão', async () => {
-    const { service } = buildTier({ coupon: { paymentModes: ['PACKAGE_PIX'] } });
+    const { service } = buildTier({
+      coupon: { paymentModes: ['PACKAGE_PIX'] },
+    });
     await expect(
-      service.choosePlan('aluno-1', { ...PACOTE_CARTAO, couponCode: 'BEMVINDA' }),
+      service.choosePlan('aluno-1', {
+        ...PACOTE_CARTAO,
+        couponCode: 'BEMVINDA',
+      }),
     ).rejects.toThrow(/forma de pagamento/);
     await expect(
       service.choosePlan('aluno-1', { ...PACOTE_PIX, couponCode: 'BEMVINDA' }),
@@ -84,8 +104,13 @@ describe('Cupom por tier — pacote', () => {
   });
 
   it('restrito ao PIX: trocar para o cartão depois também é recusado', async () => {
-    const { service } = buildTier({ coupon: { paymentModes: ['PACKAGE_PIX'] } });
-    await service.choosePlan('aluno-1', { ...PACOTE_PIX, couponCode: 'BEMVINDA' });
+    const { service } = buildTier({
+      coupon: { paymentModes: ['PACKAGE_PIX'] },
+    });
+    await service.choosePlan('aluno-1', {
+      ...PACOTE_PIX,
+      couponCode: 'BEMVINDA',
+    });
 
     await expect(
       service.changePaymentMethod('aluno-1', {
@@ -112,10 +137,17 @@ describe('Cupom por tier — pacote', () => {
 describe('Cupom por tier — assinatura', () => {
   it('vale pelas mensalidades da duração', async () => {
     const { service, subscriptions } = buildTier({
-      coupon: { discountValue: 20, durationMonths: 2, paymentModes: ['SUBSCRIPTION'] },
+      coupon: {
+        discountValue: 20,
+        durationMonths: 2,
+        paymentModes: ['SUBSCRIPTION'],
+      },
     });
 
-    await service.choosePlan('aluno-1', { ...ASSINATURA, couponCode: 'BEMVINDA' });
+    await service.choosePlan('aluno-1', {
+      ...ASSINATURA,
+      couponCode: 'BEMVINDA',
+    });
 
     const saved = subscriptions.store.get('aluno-1')!;
     expect(saved.charges.slice(0, 4).map((charge) => charge.amount)).toEqual([
@@ -125,10 +157,17 @@ describe('Cupom por tier — assinatura', () => {
 
   it('percentual sobre a mensalidade', async () => {
     const { service, subscriptions } = buildTier({
-      coupon: { discountType: 'percent', discountValue: 25, durationMonths: null },
+      coupon: {
+        discountType: 'percent',
+        discountValue: 25,
+        durationMonths: null,
+      },
     });
 
-    await service.choosePlan('aluno-1', { ...ASSINATURA, couponCode: 'BEMVINDA' });
+    await service.choosePlan('aluno-1', {
+      ...ASSINATURA,
+      couponCode: 'BEMVINDA',
+    });
 
     expect(subscriptions.store.get('aluno-1')!.charges[0].amount).toBe(240);
   });
@@ -147,7 +186,10 @@ describe('Cupom por tier — contagem de usos', () => {
   it('conta no pagamento confirmado, não na aplicação', async () => {
     const { service, coupons } = buildTier({ coupon: {} });
 
-    await service.choosePlan('aluno-1', { ...PACOTE_PIX, couponCode: 'BEMVINDA' });
+    await service.choosePlan('aluno-1', {
+      ...PACOTE_PIX,
+      couponCode: 'BEMVINDA',
+    });
     expect(coupons.incrementUsage).not.toHaveBeenCalled();
 
     await service.handleMercadoPagoEvent(orderPaga('pix_1'));
@@ -164,7 +206,10 @@ describe('Cupom por tier — contagem de usos', () => {
       provider: 'MERCADOPAGO',
       outcome: 'PENDING',
     });
-    await service.choosePlan('aluno-1', { ...ASSINATURA, couponCode: 'BEMVINDA' });
+    await service.choosePlan('aluno-1', {
+      ...ASSINATURA,
+      couponCode: 'BEMVINDA',
+    });
     await service.payWithCard('aluno-1', CARTAO);
 
     for (const id of [1, 2]) {
@@ -186,7 +231,10 @@ describe('Cupom por tier — contagem de usos', () => {
   it('falha ao contar não derruba a confirmação do pagamento', async () => {
     const { service, coupons, subscriptions } = buildTier({ coupon: {} });
     coupons.incrementUsage.mockRejectedValue(new Error('firestore fora'));
-    await service.choosePlan('aluno-1', { ...PACOTE_PIX, couponCode: 'BEMVINDA' });
+    await service.choosePlan('aluno-1', {
+      ...PACOTE_PIX,
+      couponCode: 'BEMVINDA',
+    });
 
     await service.handleMercadoPagoEvent(orderPaga('pix_1'));
 

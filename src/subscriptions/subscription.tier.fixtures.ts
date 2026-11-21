@@ -176,4 +176,3 @@ export function orderPaga(id: string) {
     order: { id, status: 'processed', status_detail: 'accredited' },
   };
 }
-

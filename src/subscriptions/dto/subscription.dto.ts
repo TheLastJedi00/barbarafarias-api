@@ -36,10 +36,7 @@ import type {
   SubscriptionPlan,
 } from '../subscription.entity';
 import type { ChargeOutcome } from '../payment.gateway';
-import {
-  COUPON_PAYMENT_MODES,
-  DISCOUNT_TYPES,
-} from '../coupon.entity';
+import { COUPON_PAYMENT_MODES, DISCOUNT_TYPES } from '../coupon.entity';
 import type { CouponPaymentMode, DiscountType } from '../coupon.entity';
 
 /**

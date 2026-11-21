@@ -1,7 +1,4 @@
-import {
-  BadRequestException,
-  ConflictException,
-} from '@nestjs/common';
+import { BadRequestException, ConflictException } from '@nestjs/common';
 import { addMonths } from './subscription.service';
 import {
   CHARGE_STATUS,
@@ -240,9 +237,9 @@ describe('Tier — assinatura com fidelidade', () => {
       gatewayPaymentId: '987',
     });
     // As renovações projetadas seguem pela mensalidade congelada.
-    expect(saved.charges.slice(1).every((charge) => charge.amount === 320)).toBe(
-      true,
-    );
+    expect(
+      saved.charges.slice(1).every((charge) => charge.amount === 320),
+    ).toBe(true);
   });
 });
 
@@ -264,7 +261,10 @@ describe('Tier — o que não se vende', () => {
   it('pacote ou assinatura sem tier é 400', async () => {
     const { service } = buildTier();
     await expect(
-      service.choosePlan('aluno-1', { ...PACOTE_PIX, tierId: undefined } as any),
+      service.choosePlan('aluno-1', {
+        ...PACOTE_PIX,
+        tierId: undefined,
+      } as any),
     ).rejects.toThrow(BadRequestException);
   });
 });
