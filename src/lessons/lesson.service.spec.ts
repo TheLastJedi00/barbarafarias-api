@@ -56,7 +56,7 @@ describe('LessonService.ensureLessons', () => {
       agendaService as any,
       new LessonAccessService(),
       { findById: jest.fn() } as any,
-      { findById: jest.fn() } as any,
+      { findById: jest.fn(), findAll: jest.fn().mockResolvedValue([]) } as any,
       makeupService as any,
       notifications as any,
       { priceLesson: jest.fn(async (lesson: any) => lesson) } as any,
