@@ -35,7 +35,7 @@ describe('termo da matrícula (spec 036)', () => {
     expect(termo.version).toBe(ENROLLMENT_TERMS_VERSION);
     expect(termo.planLabel).toContain('Grupo semanal · terça 19:00');
     expect(texto).toContain('01/12/2026');
-    expect(texto).toContain('R$ 150,00');
+    expect(termo.summary).toMatch(/R\$\s150,00/);
     expect(texto).toContain('mínimo de 5');
     expect(texto).toContain('pacote de 6 meses');
     expect(texto).toContain('abatido');
