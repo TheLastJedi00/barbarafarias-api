@@ -1,4 +1,5 @@
-import { Body, Controller, Get, Post, Query } from '@nestjs/common';
+import { Body, Controller, Get, Header, Post, Query } from '@nestjs/common';
+import { Public } from '../decorators/public.decorator';
 import { Roles } from '../decorators/roles.decorator';
 import { ROLES } from '../types/role';
 import {
@@ -20,6 +21,18 @@ import {
 @Controller('enrollments')
 export class EnrollmentController {
   constructor(private readonly enrollments: EnrollmentService) {}
+
+  /**
+   * Turmas abertas, para a Academy (spec 036 T5). Pública e com cache curto:
+   * as vagas mudam a cada sinal pago, e 5 minutos de atraso só fazem o
+   * excedente bater no 409 da matrícula — nunca vender vaga que não existe.
+   */
+  @Public()
+  @Get('turmas')
+  @Header('Cache-Control', 'public, s-maxage=300, stale-while-revalidate=60')
+  openTurmas() {
+    return this.enrollments.openTurmas();
+  }
 
   /** O termo da matrícula, para ler antes de pagar o sinal. */
   @Get('terms')

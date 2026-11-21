@@ -84,6 +84,21 @@ export interface EnrollmentCardResponse {
   warning?: string;
 }
 
+/** Uma turma aberta na vitrine pública: nada de quem já se matriculou. */
+export interface OpenTurma {
+  id: string;
+  name: string;
+  tierId: string;
+  dayOfWeek: number;
+  hour: number;
+  weeksOfMonth?: number[];
+  startDate: string;
+  teacherName?: string;
+  minStudents: number;
+  seatsLeft: number;
+  enrollmentFee: number;
+}
+
 /** A matrícula do aluno com a turma, para o Meu Plano (espera). */
 export interface MyEnrollmentView {
   enrollment: Enrollment;
@@ -370,6 +385,53 @@ export class EnrollmentService {
   }
 
   // -------------------------------------------------------- leitura
+
+  /**
+   * Turmas abertas para a vitrine (spec 036 T5): em formação, com início
+   * futuro, vaga e tier com matrícula aberta. Conta só matrículas pagas, e
+   * não devolve nome de aluno nenhum — a rota é pública.
+   */
+  async openTurmas(): Promise<OpenTurma[]> {
+    const today = todayInAppTimezone();
+    const candidates = (await this.turmas.findAll()).filter(
+      (turma) =>
+        !!turma.tierId &&
+        turma.status === TURMA_STATUS.FORMING &&
+        !!turma.startDate &&
+        turma.startDate > today,
+    );
+    const tiers = new Map<string, PlanTier>();
+    const open: OpenTurma[] = [];
+    for (const turma of candidates) {
+      if (!tiers.has(turma.tierId!)) {
+        tiers.set(
+          turma.tierId!,
+          await this.planTiers.getEffective(turma.tierId!),
+        );
+      }
+      const tier = tiers.get(turma.tierId!)!;
+      if (!opensEnrollment(tier)) continue;
+      const paid = (await this.enrollments.findByTurma(turma.id!)).filter(
+        countsForSeat,
+      ).length;
+      const seatsLeft = (turma.maxStudents ?? 0) - paid;
+      if (seatsLeft <= 0) continue;
+      open.push({
+        id: turma.id!,
+        name: turma.name,
+        tierId: turma.tierId!,
+        dayOfWeek: turma.dayOfWeek!,
+        hour: turma.hour!,
+        ...(turma.weeksOfMonth ? { weeksOfMonth: turma.weeksOfMonth } : {}),
+        startDate: turma.startDate!,
+        teacherName: turma.teacherName,
+        minStudents: turma.minStudents ?? 0,
+        seatsLeft,
+        enrollmentFee: tier.enrollmentFee!,
+      });
+    }
+    return open.sort((a, b) => a.startDate.localeCompare(b.startDate));
+  }
 
   /** A matrícula mais recente do aluno, com a turma. `null` sem nenhuma. */
   async mine(requester: AuthenticatedUser): Promise<MyEnrollmentView | null> {
