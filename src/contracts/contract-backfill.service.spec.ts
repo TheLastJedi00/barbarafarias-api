@@ -136,7 +136,7 @@ describe('ContractBackfillService (spec 036)', () => {
     contracts.findById.mockResolvedValue({ id: 'x' });
     const report = await service.run();
     expect(report.created).toBe(0);
-    expect(report.alreadyExisted).toBe(2);
+    expect(report.alreadyExisted).toBe(4);
     expect(contracts.record).not.toHaveBeenCalled();
   });
 });

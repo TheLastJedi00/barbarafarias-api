@@ -1,9 +1,4 @@
-import {
-  ConflictException,
-  Inject,
-  Injectable,
-  Logger,
-} from '@nestjs/common';
+import { ConflictException, Inject, Injectable, Logger } from '@nestjs/common';
 import { randomBytes } from 'node:crypto';
 import { Auth } from 'firebase-admin/auth';
 import { AdminRepository } from './admin.repository';
@@ -107,7 +102,10 @@ export class AuthMigrationService {
           report.emailDuplicado.push({ uid: user.id, email });
           continue;
         }
-        report.erros.push({ uid: user.id, motivo: String(error?.message ?? error) });
+        report.erros.push({
+          uid: user.id,
+          motivo: String(error?.message ?? error),
+        });
       }
     }
 
@@ -157,7 +155,9 @@ export class AuthMigrationService {
       credentials.map((c) => c.id),
     );
     report.apagados = credentials.length;
-    this.logger.warn(`Coleção credentials apagada: ${report.apagados} documentos.`);
+    this.logger.warn(
+      `Coleção credentials apagada: ${report.apagados} documentos.`,
+    );
     return report;
   }
 

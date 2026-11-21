@@ -14,7 +14,10 @@ describe('AdminService.migrateRoles', () => {
    * Contas do Firebase por uid. `undefined` = conta ausente, que é o caso de
    * quem ainda não passou pela migração da Task 83.
    */
-  let contas: Record<string, { customClaims?: Record<string, any> } | undefined>;
+  let contas: Record<
+    string,
+    { customClaims?: Record<string, any> } | undefined
+  >;
 
   function setup(users: any[], credentials: any[], agenda: any[] = []) {
     repository = {
@@ -143,7 +146,12 @@ describe('AdminService.migrateRoles', () => {
   describe('migração dos slots de agenda', () => {
     const legacySlot = {
       id: '2_15',
-      data: { dayOfWeek: 2, hour: 15, occupantType: 'student', studentId: 's1' },
+      data: {
+        dayOfWeek: 2,
+        hour: 15,
+        occupantType: 'student',
+        studentId: 's1',
+      },
     };
 
     it('reescreve o docId dos slots antigos com a gerente como dona', async () => {

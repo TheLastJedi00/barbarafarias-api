@@ -56,11 +56,9 @@ export class AdminRepository {
     for (let i = 0; i < updates.length; i += CHUNK) {
       const batch = this.db.batch();
       for (const update of updates.slice(i, i + CHUNK)) {
-        batch.set(
-          this.db.collection(collection).doc(update.id),
-          update.data,
-          { merge: true },
-        );
+        batch.set(this.db.collection(collection).doc(update.id), update.data, {
+          merge: true,
+        });
       }
       await batch.commit();
     }

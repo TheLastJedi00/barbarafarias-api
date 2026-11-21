@@ -1,5 +1,8 @@
 import { ConflictException } from '@nestjs/common';
-import { AuthMigrationService, CLEANUP_CONFIRMATION } from './auth-migration.service';
+import {
+  AuthMigrationService,
+  CLEANUP_CONFIRMATION,
+} from './auth-migration.service';
 import { ROLES } from '../types/role';
 
 describe('AuthMigrationService', () => {
@@ -14,7 +17,9 @@ describe('AuthMigrationService', () => {
   let existentes: Set<string>;
 
   function notFound() {
-    return Object.assign(new Error('not found'), { code: 'auth/user-not-found' });
+    return Object.assign(new Error('not found'), {
+      code: 'auth/user-not-found',
+    });
   }
 
   function setup(users: any[], credentials: any[] = []) {
@@ -147,13 +152,22 @@ describe('AuthMigrationService', () => {
     });
 
     it('apaga quando confirmado e todos têm conta', async () => {
-      setup([], [{ id: 'u1', data: {} }, { id: 'u2', data: {} }]);
+      setup(
+        [],
+        [
+          { id: 'u1', data: {} },
+          { id: 'u2', data: {} },
+        ],
+      );
       existentes.add('u1');
       existentes.add('u2');
 
       const report = await service.cleanupCredentials(CLEANUP_CONFIRMATION);
 
-      expect(repository.deleteAll).toHaveBeenCalledWith('credentials', ['u1', 'u2']);
+      expect(repository.deleteAll).toHaveBeenCalledWith('credentials', [
+        'u1',
+        'u2',
+      ]);
       expect(report.apagados).toBe(2);
     });
 

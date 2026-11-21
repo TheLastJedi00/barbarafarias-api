@@ -43,6 +43,11 @@ import { StoreModule } from '../store/store.module';
     PlanAcceptanceRepository,
     PaymentAccessService,
   ],
-  exports: [SubscriptionService, SubscriptionRepository, PaymentAccessService],
+  exports: [
+    SubscriptionService,
+    SubscriptionRepository,
+    PaymentAccessService,
+    PlanAcceptanceRepository,
+  ],
 })
 export class SubscriptionModule {}
