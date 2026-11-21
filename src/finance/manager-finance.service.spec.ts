@@ -143,7 +143,9 @@ describe('ManagerFinanceService — tiers (spec 035)', () => {
         : [],
     );
 
-    expect((await service.getMonthlyOverview('2026-08')).fidelityBreaks).toBe(2);
+    expect((await service.getMonthlyOverview('2026-08')).fidelityBreaks).toBe(
+      2,
+    );
   });
 });
 
