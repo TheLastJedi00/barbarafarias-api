@@ -1,5 +1,7 @@
 import { SubscriptionController } from './subscription.controller';
 import { ROLES_KEY } from '../decorators/roles.decorator';
+import { IS_PUBLIC_KEY } from '../decorators/public.decorator';
+import { PLAN_CONFIGS } from './subscription.entity';
 import { ROLES } from '../types/role';
 
 /**
@@ -28,5 +30,48 @@ describe('SubscriptionController — papéis', () => {
     // O texto do plano é catálogo e pode ser lido por quem contrata; a lista de
     // quem aceitou é de pessoas, e não sai do lado da gerente.
     expect(rolesOf('acceptances')).toEqual([ROLES.MANAGER]);
+  });
+
+  /*
+   * Spec 034: a landing da Academy mostra os preços antes do login. O
+   * catálogo é o mesmo texto de qualquer página de preços — e só isso pode
+   * sair por esta rota sem token.
+   */
+  it('deixa o catálogo dos planos aberto a quem não está logado', () => {
+    const isPublic: unknown = Reflect.getMetadata(
+      IS_PUBLIC_KEY,
+      SubscriptionController.prototype.plans,
+    );
+    expect(isPublic).toBe(true);
+    expect(rolesOf('plans')).toBeUndefined();
+  });
+
+  it('não abre o contrato do plano junto com o catálogo', () => {
+    const isPublic: unknown = Reflect.getMetadata(
+      IS_PUBLIC_KEY,
+      SubscriptionController.prototype.terms,
+    );
+    expect(isPublic).toBeUndefined();
+  });
+
+  it('devolve só os campos do catálogo', () => {
+    const controller = new SubscriptionController({} as never);
+    const plans = controller.plans();
+    expect(plans).toHaveLength(Object.keys(PLAN_CONFIGS).length);
+    for (const plan of plans) {
+      expect(Object.keys(plan).sort()).toEqual(
+        [
+          'plan',
+          'label',
+          'totalAmount',
+          'installments',
+          'installmentAmount',
+          'payerTotal',
+          'payerInstallment',
+          'recurring',
+          'description',
+        ].sort(),
+      );
+    }
   });
 });
