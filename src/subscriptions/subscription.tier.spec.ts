@@ -1,4 +1,8 @@
-import { BadRequestException, ConflictException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  GoneException,
+} from '@nestjs/common';
 import { addMonths } from './subscription.service';
 import {
   CHARGE_STATUS,
