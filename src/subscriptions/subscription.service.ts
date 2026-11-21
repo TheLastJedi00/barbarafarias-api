@@ -63,6 +63,7 @@ import type {
   TierPlan,
 } from './subscription.entity';
 import { PlanTierService } from '../plan-tiers/plan-tier.service';
+import type { PlanTierId } from '../plan-tiers/plan-tier.model';
 import {
   FIDELITY_MONTHS,
   PACKAGE_MONTHS,
@@ -589,6 +590,71 @@ export class SubscriptionService {
       linhas.push({ label: 'Cupom', value: aceite.couponCode });
     }
     return linhas;
+  }
+
+  /**
+   * O plano de quem se matriculou numa turma que a gerente confirmou (spec
+   * 036 §5): o preço vigente **hoje**, o cupom da matrícula, o sinal abatido e
+   * o cronograma, a fidelidade e o acesso contados do **início da turma**.
+   *
+   * Nasce pendente e no cartão: o aluno paga no Meu Plano (o pacote ainda
+   * pode trocar para PIX lá, e o QR sai na troca). Não grava aceite de plano:
+   * o que ele aceitou foi o termo da matrícula, que já descreve este plano e
+   * virou contrato.
+   */
+  async createFromEnrollment(input: {
+    studentId: string;
+    tierId: PlanTierId;
+    plan: TierPlan;
+    couponCode?: string;
+    credit: number;
+    startDate: string;
+  }): Promise<Subscription> {
+    const existing = await this.subscriptions.findByStudent(input.studentId);
+    if (existing && existing.status !== SUBSCRIPTION_STATUS.CANCELLED) {
+      throw new ConflictException(
+        'O aluno já tem um plano vivo; a troca é feita à mão pela gestão.',
+      );
+    }
+    const tier = await this.planTiers.getEffective(input.tierId);
+    const price =
+      input.plan === TIER_PLANS.PACKAGE ? tier.packagePrice : tier.monthlyPrice;
+    if (!price) {
+      throw new ConflictException(
+        `O plano ${tier.name} está sem preço para ${input.plan === TIER_PLANS.PACKAGE ? 'pacote' : 'assinatura'}.`,
+      );
+    }
+    const paymentMethod = PAYMENT_METHODS.CREDIT_CARD;
+
+    let coupon: ResolvedCoupon | null = null;
+    if (input.couponCode) {
+      try {
+        coupon = await this.resolveCoupon(input.couponCode, {
+          plan: input.plan,
+          paymentMethod,
+          tier,
+        });
+      } catch (error) {
+        // O cupom foi conferido na matrícula; se esgotou ou saiu do ar até a
+        // confirmação, o plano segue sem ele em vez de travar a turma.
+        this.logger.warn(
+          `Cupom ${input.couponCode} de ${input.studentId} não aplicado na confirmação: ${(error as Error).message}`,
+        );
+      }
+    }
+
+    const subscription = this.buildTierSubscription(
+      input.studentId,
+      input.plan,
+      tier,
+      paymentMethod,
+      coupon,
+      input.startDate,
+      input.credit,
+    );
+    await this.subscriptions.save(subscription);
+    await this.syncUser(subscription);
+    return subscription;
   }
 
   /** Todos os aceites, para a página de contratos da gerente (§7.4). */
@@ -1475,6 +1541,12 @@ export class SubscriptionService {
         ...(subscription.fidelityBrokenAt
           ? { fidelityBrokenAt: subscription.fidelityBrokenAt }
           : {}),
+        // Plano de turma (spec 036): pago antes do início, o acesso só abre
+        // no início. A data envelhece sozinha, como `accessUntil`.
+        accessFrom:
+          subscription.startDate > todayInAppTimezone()
+            ? subscription.startDate
+            : null,
       });
     } catch (error) {
       // O espelho é conveniência de listagem; a assinatura já está gravada.
@@ -1677,6 +1749,7 @@ export class SubscriptionService {
     paymentMethod: PaymentMethod,
     coupon: ResolvedCoupon | null,
     today: string = todayInAppTimezone(),
+    credit: number = 0,
   ): Subscription {
     const isPackage = plan === TIER_PLANS.PACKAGE;
     const price = (isPackage ? tier.packagePrice : tier.monthlyPrice) ?? 0;
@@ -1690,6 +1763,8 @@ export class SubscriptionService {
     let totalAmount: number;
     if (isPackage) {
       totalAmount = coupon ? applyDiscount(price, coupon.discount) : price;
+      // O sinal da turma (spec 036) sai do total, depois do cupom.
+      if (credit > 0) totalAmount = applyDiscount(totalAmount, credit);
       const fatia = round2(totalAmount / regime.installments);
       for (let index = 1; index <= regime.installments; index++) {
         const ultima = index === regime.installments;
@@ -1711,6 +1786,10 @@ export class SubscriptionService {
           amount: this.amountFor(price, coupon, index),
           status: CHARGE_STATUS.PENDING,
         });
+      }
+      // Na assinatura, o sinal sai da primeira mensalidade (spec 036 §5).
+      if (credit > 0) {
+        charges[0].amount = applyDiscount(charges[0].amount, credit);
       }
     }
 
@@ -1735,6 +1814,7 @@ export class SubscriptionService {
       couponCode: coupon?.code,
       couponDiscount: coupon?.discount,
       couponRemainingCharges: coupon ? coupon.remaining : undefined,
+      ...(credit > 0 ? { enrollmentCredit: credit } : {}),
       createdAt: now,
       updatedAt: now,
     });

@@ -101,6 +101,8 @@ export class UserRepository {
       /** Ausente = não mexe (a assinatura antiga não apaga o tier). */
       planTier?: string;
       fidelityBrokenAt?: string;
+      /** Spec 036: início da turma; `null` limpa (plano que já começou). */
+      accessFrom?: string | null;
     },
   ): Promise<void> {
     await this.db
@@ -115,6 +117,9 @@ export class UserRepository {
           ...(state.planTier ? { planTier: state.planTier } : {}),
           ...(state.fidelityBrokenAt
             ? { fidelityBrokenAt: state.fidelityBrokenAt }
+            : {}),
+          ...(state.accessFrom !== undefined
+            ? { accessFrom: state.accessFrom }
             : {}),
         },
         { merge: true },
