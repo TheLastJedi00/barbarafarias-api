@@ -237,4 +237,22 @@ describe('TurmaLifecycleService (spec 036)', () => {
       );
     });
   });
+
+  describe('visão da gerente', () => {
+    it('cada turma com pagos, pendentes e o que falta para o mínimo', async () => {
+      const t = build({
+        enrollments: [
+          ...pagas(),
+          matriculaPaga({ id: 'pend', status: 'PENDING' }),
+          matriculaPaga({ id: 'dev', status: 'REFUNDED' }),
+        ],
+      });
+      const [linha] = await t.service.overview();
+      expect(linha).toMatchObject({
+        turma: { id: 't1' },
+        paid: 2,
+        pending: 1,
+      });
+    });
+  });
 });

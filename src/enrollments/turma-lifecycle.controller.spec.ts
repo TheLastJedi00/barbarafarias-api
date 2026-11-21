@@ -23,6 +23,7 @@ describe('ciclo da turma — rotas (spec 036)', () => {
       'postpone',
       'cancel',
       'enrollments',
+      'overview',
     ] as const) {
       expect(rolesOf(method)).toEqual([ROLES.MANAGER]);
     }
