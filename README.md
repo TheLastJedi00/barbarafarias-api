@@ -1560,7 +1560,7 @@ Status da assinatura: `PENDING` (aguardando o primeiro pagamento) → `ACTIVE` �
 
 | Método | Rota | Auth | Descrição |
 |---|---|---|---|
-| `GET` | `/subscriptions/plans` | autenticado | Catálogo dos três planos |
+| `GET` | `/subscriptions/plans` | público | Catálogo dos três planos; aberto desde a spec 034 porque a landing da Academy mostra os preços antes do login |
 | `GET` | `/subscriptions/coupons/:code` | `student` | Valida um cupom e devolve o desconto (RF16) |
 | `GET` | `/subscriptions/me` | `student` | Assinatura do aluno logado (`null` se não houver) |
 | `POST` | `/subscriptions/me` | `student` | Escolher plano — devolve PIX ou `checkoutUrl` |
