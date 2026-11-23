@@ -77,6 +77,7 @@ describe('PracticeService', () => {
     decks = {
       findById: jest.fn().mockResolvedValue(deck('student_u1', 62)),
       findMany: jest.fn(async (ids: string[]) => ids.map((id) => deck(id, 40))),
+      watchDeck: jest.fn(),
     };
     flashcards = {
       startStudentDeck: jest
@@ -215,6 +216,62 @@ describe('PracticeService', () => {
       const mission = (await service.today('u1')) as MissionView;
       expect(mission.cards.filter((c) => c.source === 'topic')).toHaveLength(5);
       expect(mission.cards).toHaveLength(10);
+    });
+  });
+
+  describe('watchDeckProgress', () => {
+    function watch() {
+      const events: unknown[] = [];
+      const onError = jest.fn();
+      const unsubscribe = jest.fn();
+      let change!: (deck: FlashcardDeck | null) => void;
+      decks.watchDeck.mockImplementation((_id, onChange, _onError) => {
+        change = onChange;
+        return unsubscribe;
+      });
+      const stop = service.watchDeckProgress(
+        'u1',
+        (event) => events.push(event),
+        onError,
+      );
+      return { events, change, stop, unsubscribe };
+    }
+
+    it('ouve o baralho do próprio aluno e traduz cada mudança', () => {
+      const { events, change, stop, unsubscribe } = watch();
+      expect(decks.watchDeck.mock.calls[0][0]).toBe('student_u1');
+
+      change(
+        deck('student_u1', 0, {
+          status: 'generating',
+          progress: { generated: 25, total: 62 },
+        }),
+      );
+      change(deck('student_u1', 0, { status: 'generating' }));
+      change(deck('student_u1', 62));
+      change(deck('student_u1', 0, { status: 'error' }));
+      change(null);
+
+      expect(events).toEqual([
+        { status: 'generating', generated: 25, total: 62 },
+        { status: 'generating', generated: 0, total: 62 },
+        { status: 'ready', generated: 62, total: 62 },
+        { status: 'error', generated: 0, total: 62 },
+        { status: 'missing', generated: 0, total: 62 },
+      ]);
+      stop();
+      expect(unsubscribe).toHaveBeenCalled();
+    });
+
+    it('geração travada há mais de 5 min vira erro', () => {
+      const { events, change } = watch();
+      change(
+        deck('student_u1', 0, {
+          status: 'generating',
+          updatedAt: '2020-01-01T00:00:00.000Z',
+        }),
+      );
+      expect(events).toEqual([{ status: 'error', generated: 0, total: 62 }]);
     });
   });
 
