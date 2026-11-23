@@ -1,4 +1,5 @@
-import { Body, Controller, Get, Post } from '@nestjs/common';
+import { Body, Controller, Get, Post, Res } from '@nestjs/common';
+import type { Response } from 'express';
 import {
   CurrentUser,
   type AuthenticatedUser,
@@ -24,9 +25,15 @@ export class PracticeController {
     return this.service.status(user.sub);
   }
 
+  /** 202 com `{ generating, generated, total }` enquanto o baralho do aluno é gerado. */
   @Get('today')
-  today(@CurrentUser() user: AuthenticatedUser) {
-    return this.service.today(user.sub);
+  async today(
+    @CurrentUser() user: AuthenticatedUser,
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    const result = await this.service.today(user.sub);
+    if ('generating' in result) res.status(202);
+    return result;
   }
 
   @Post('today/answers')

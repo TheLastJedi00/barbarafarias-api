@@ -2,14 +2,15 @@ import {
   BadRequestException,
   ForbiddenException,
   Injectable,
-  ServiceUnavailableException,
 } from '@nestjs/common';
 import { todayInAppTimezone } from '../common/time';
 import { CurriculumService } from '../curriculum/curriculum.service';
 import { FlashcardDeckRepository } from '../flashcards/flashcard-deck.repository';
+import { DeckProgress } from '../flashcards/deck-progress';
 import {
   cardKey,
   FlashcardDeck,
+  STUDENT_DECK_SIZE,
   studentDeckId,
   topicDeckId,
 } from '../flashcards/flashcard.model';
@@ -52,6 +53,13 @@ export interface MissionView extends MissionDay {
   streak: number;
   summary: PracticeSummary | null;
 }
+
+/** O baralho do aluno ainda está sendo gerado (fix 037): a tela mostra a barra. */
+export interface DeckPendingView extends DeckProgress {
+  generating: true;
+}
+
+export type TodayView = MissionView | DeckPendingView;
 
 export interface AnswerView {
   score: number;
@@ -99,7 +107,7 @@ export class PracticeService {
     };
   }
 
-  async today(uid: string): Promise<MissionView> {
+  async today(uid: string): Promise<TodayView> {
     const user = await this.users.findById(uid);
     if (!user) throw new ForbiddenException(NO_PRACTICE_ACCESS);
     const deckIds = await this.eligibleTopicDecks(uid, user);
@@ -118,9 +126,15 @@ export class PracticeService {
     if (existing) return view(existing);
 
     const [studentDeck, topicDecks] = await Promise.all([
-      this.readyStudentDeck(uid),
+      this.decks.findById(studentDeckId(uid)),
       this.decks.findMany(deckIds),
     ]);
+    if (studentDeck?.status !== 'ready' || studentDeck.cards.length === 0) {
+      return {
+        generating: true,
+        ...(await this.studentDeckProgress(uid, studentDeck)),
+      };
+    }
     const cards = buildMission({
       student: candidates(studentDeck),
       pool: topicDecks.filter((d) => d.status === 'ready').flatMap(candidates),
@@ -166,18 +180,22 @@ export class PracticeService {
    * (rede de segurança dos alunos que já existiam e de geração que falhou).
    * Em geração recente, outra requisição já está nisso: pede para voltar.
    */
-  private async readyStudentDeck(uid: string): Promise<FlashcardDeck> {
-    const deck = await this.decks.findById(studentDeckId(uid));
-    if (deck?.status === 'ready' && deck.cards.length > 0) return deck;
+  /**
+   * Andamento do baralho do aluno que ainda não está pronto. Geração recente
+   * segue de pé e só tem o andamento lido; ausente, com erro ou travada
+   * começa de novo em segundo plano — o pedido nunca espera a IA.
+   */
+  private async studentDeckProgress(
+    uid: string,
+    deck: FlashcardDeck | null,
+  ): Promise<DeckProgress> {
     if (
       deck?.status === 'generating' &&
       Date.now() - Date.parse(deck.updatedAt) < GENERATING_WINDOW_MS
     ) {
-      throw new ServiceUnavailableException(
-        'Suas palavras estão sendo preparadas. Tente de novo em instantes.',
-      );
+      return deck.progress ?? { generated: 0, total: STUDENT_DECK_SIZE };
     }
-    return this.flashcards.generateStudentDeck(uid);
+    return this.flashcards.startStudentDeck(uid);
   }
 
   /**
