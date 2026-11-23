@@ -2277,15 +2277,21 @@ O vocabulário saiu do material personalizado (o `TopicSchema` não tem mais `wo
 | Método | Rota | Descrição |
 |---|---|---|
 | `GET` | `/practice/today/status` | `{ available, pending, answered, total, streak, summary }` — leve, para o ícone do header |
-| `GET` | `/practice/today` | Monta (uma vez por dia de Brasília) e devolve a missão: `{ day, cards, answers, score, completedAt?, streak, summary }` |
+| `GET` | `/practice/today` | Monta (uma vez por dia de Brasília) e devolve a missão: `{ day, cards, answers, score, completedAt?, streak, summary }`. Com o baralho do aluno ainda não pronto: **202** `{ generating: true, generated, total }` |
+| `GET` | `/practice/deck/progress` | `text/event-stream` com `data: { status, generated, total }` (`status`: `generating`, `ready`, `error` ou `missing`). Ouve `flashcardDecks/student_{uid}` pelo `onSnapshot`; fecha no `ready`/`error`/`missing`, em 55 s ou quando o cliente sai (o front reabre) |
 | `POST` | `/practice/today/answers` | `{ cardKey, correct }` — a primeira resposta vale; repetir é ignorado |
 
 - **Sem `@RequiresActivePlan`:** o comprador da loja também pratica. O serviço decide: aluno do
   plano em dia usa os tópicos do **nível dele**; comprador da loja, os tópicos dos **módulos
   comprados e vigentes**. Nenhum dos dois = 403.
-- **As 2 do aluno são obrigatórias:** sem o baralho dele pronto, a missão gera ali mesmo (rede
-  de segurança de quem já existia antes da spec); geração em curso há menos de 5 min = 503
-  "tente em instantes".
+- **As 2 do aluno são obrigatórias:** sem o baralho dele pronto, o `today` não monta a missão
+  (fix 037). Baralho ausente, com erro ou travado (geração há 5 min ou mais) começa a gerar em
+  segundo plano (`waitUntil`) e o pedido responde **202** na hora; geração em curso só devolve o
+  andamento. Essa é a rede de segurança de quem já existia antes da spec. A tela acompanha por
+  `GET /practice/deck/progress` e pede a missão de novo quando chega `ready`.
+- **Andamento real:** o baralho do aluno é gerado com `generateContentStream`; a API conta as
+  cartas que já chegaram inteiras (`deck-progress.ts`) e grava `progress` a cada 5 cartas.
+  Aluno sem objetivo nem questionário recebe 422 na hora, sem baralho "gerando" para sempre.
 - **Montagem** (`mission-builder.ts`, puro): revisões primeiro (as erradas; no banco, no máximo
   4), depois nunca vistas, depois as vistas há mais tempo. Banco curto completa com cartas do
   aluno. As 2 do aluno nunca ficam vizinhas.
@@ -2968,7 +2974,8 @@ Baralhos de flashcards (spec 037). Um doc por baralho.
     "pronounce": "string — respelling para brasileiro, tônica em maiúsculas",
     "partOfSpeech": "string", "example": "string", "exampleTranslation": "string"
   }],
-  "generatedAt": "ISO?", "updatedAt": "ISO", "error": "string?"
+  "generatedAt": "ISO?", "updatedAt": "ISO", "error": "string?",
+  "progress": "{ generated, total }? — andamento da geração (fix 037): o do aluno grava 0/62 ao começar e a cada 5 cartas; pronto = cartas/cartas"
 }
 ```
 
