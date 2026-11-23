@@ -86,6 +86,26 @@ describe('FlashcardDeckRepository', () => {
       status: 'ready',
       sourceTitle: 'Greetings',
       error: null,
+      progress: { generated: 0, total: 0 },
+    });
+  });
+
+  it('grava o andamento no início e durante a geração', async () => {
+    const db = makeDb(docs);
+    const repo = new FlashcardDeckRepository(db as any);
+    await repo.markGenerating(
+      { id: 'student_u1', kind: 'student', studentId: 'u1' },
+      { generated: 0, total: 62 },
+    );
+    await repo.saveProgress('student_u1', { generated: 10, total: 62 });
+
+    expect(db.writes[0].data).toMatchObject({
+      status: 'generating',
+      progress: { generated: 0, total: 62 },
+    });
+    expect(db.writes[1].merge).toBe(true);
+    expect(db.writes[1].data).toMatchObject({
+      progress: { generated: 10, total: 62 },
     });
   });
 
