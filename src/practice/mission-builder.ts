@@ -226,8 +226,17 @@ function shuffle<T>(items: T[], random: () => number): T[] {
 }
 
 function toMissionCard(candidate: Candidate, source: CardSource): MissionCard {
-  const { id: _id, ...card } = candidate.card;
-  return { ...card, key: candidate.key, source };
+  const { card } = candidate;
+  return {
+    key: candidate.key,
+    source,
+    english: card.english,
+    portuguese: card.portuguese,
+    pronounce: card.pronounce,
+    partOfSpeech: card.partOfSpeech,
+    example: card.example,
+    exampleTranslation: card.exampleTranslation,
+  };
 }
 
 export interface AnswerResult {
