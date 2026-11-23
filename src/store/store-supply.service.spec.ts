@@ -48,7 +48,6 @@ const topic = (title: string) => ({
   curiosity: 'c',
   roleplayInstruction: 'r',
   roleplayDialog: ['a'],
-  words: [{ english: 'w', portuguese: 'p', pronounce: 'x' }],
   music: { title: 't', artist: 'a', youtube: 'y' },
 });
 

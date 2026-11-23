@@ -1,12 +1,5 @@
 import { z } from 'zod';
 
-export const WordSchema = z.object({
-  english: z.string(),
-  portuguese: z.string(),
-  pronounce: z.string(),
-});
-export type Word = z.infer<typeof WordSchema>;
-
 export const MusicSchema = z.object({
   title: z.string(),
   artist: z.string(),
@@ -21,7 +14,6 @@ export const TopicSchema = z.object({
   curiosity: z.string(),
   roleplayInstruction: z.string(),
   roleplayDialog: z.array(z.string()),
-  words: z.array(WordSchema),
   music: MusicSchema,
 });
 export type Topic = z.infer<typeof TopicSchema>;
