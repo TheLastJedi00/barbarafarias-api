@@ -39,7 +39,7 @@ export function storeStudentInfo(
 }
 
 /** Bloco de dados do aluno, comum às duas etapas. */
-function studentBlock(student: StudentInfo): string {
+export function studentBlock(student: StudentInfo): string {
   if (student.profile) {
     return `Dados do aluno:
 Nome: ${student.firstName}
