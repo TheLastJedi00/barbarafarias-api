@@ -90,7 +90,6 @@ const topic = {
   curiosity: 'Curiosidade',
   roleplayInstruction: 'Faça um diálogo',
   roleplayDialog: ['A: Hi'],
-  words: [{ english: 'hello', portuguese: 'olá', pronounce: 'rêlou' }],
   music: { title: 'Hello', artist: 'Adele', youtube: 'https://y.tube/x' },
 };
 

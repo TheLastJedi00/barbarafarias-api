@@ -37,6 +37,13 @@ describe('prompts', () => {
       expect(prompt).toContain('Objetivos pessoais do aluno: Viajar');
       expect(prompt).toContain('Prognóstico da Teacher: Boa base');
     });
+
+    /** Spec 037: vocabulário saiu do material e foi para os flashcards. */
+    it('não pede mais vocabulário (words) no tópico', () => {
+      const prompt = buildTopicPrompt('Base', student, 'Trabalho', 'Reuniões');
+      expect(prompt).not.toContain('"words"');
+      expect(prompt).not.toContain('pronounce');
+    });
   });
 
   describe('comprador da loja (spec 033)', () => {

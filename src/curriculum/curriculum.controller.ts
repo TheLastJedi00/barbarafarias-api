@@ -31,6 +31,19 @@ export class CurriculumController {
     return this.service.upsertPrincipal(dto);
   }
 
+  /** Prompt de Flashcards (spec 037). */
+  @Get('flashcards')
+  @Roles(ROLES.TEACHER)
+  getFlashcardsPrompt() {
+    return this.service.getFlashcardsPrompt();
+  }
+
+  @Put('flashcards')
+  @Roles(ROLES.TEACHER)
+  upsertFlashcardsPrompt(@Body() dto: UpsertPrincipalDto) {
+    return this.service.upsertFlashcardsPrompt(dto);
+  }
+
   @Get('levels/:level')
   @Roles(ROLES.TEACHER)
   getLevel(@Param('level') level: string) {

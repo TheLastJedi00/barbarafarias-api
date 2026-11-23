@@ -44,8 +44,20 @@ export interface AccessGrantOptions {
  */
 export { missingOnboardingFields } from './onboarding';
 
+/**
+ * Quem quer saber que os dados de um aluno que alimentam a IA (objetivo,
+ * prognóstico, questionário) acabaram de ser gravados. Spec 037: o baralho de
+ * flashcards do aluno nasce aqui, na matrícula.
+ *
+ * Um registro de ouvintes em vez de injetar o serviço de flashcards: aquele
+ * módulo já depende deste, e a dependência ao contrário fecharia um ciclo.
+ */
+export type StudentContextListener = (user: User) => void;
+
 @Injectable()
 export class UserService {
+  private readonly contextListeners: StudentContextListener[] = [];
+
   constructor(
     private userRepository: UserRepository,
     private authService: AuthService,
@@ -69,6 +81,7 @@ export class UserService {
       const user = new User({ ...userFields, role });
       user.id = uid;
       const id = await this.userRepository.save(user, uid);
+      this.notifyStudentContext(user);
       return new ResponseUserDto(id, user.fullName);
     } catch (error) {
       // rollback: evita conta órfã caso a gravação do usuário falhe
@@ -178,6 +191,7 @@ export class UserService {
     // so partial updates don't wipe fields nor depend on the request body id
     const user = new User({ ...foundUser, ...dto, id });
     await this.userRepository.update(user);
+    this.notifyStudentContext(user);
     return user;
   }
 
@@ -405,6 +419,7 @@ export class UserService {
       user.onboardedAt = concluido;
     }
     await this.userRepository.update(user);
+    this.notifyStudentContext(user);
     return user;
   }
 
@@ -426,10 +441,26 @@ export class UserService {
       englishContact: dto.englishContact,
       answeredAt: new Date().toISOString(),
     };
-    await this.userRepository.update(
-      new User({ ...foundUser, careerProfile, id }),
-    );
+    const user = new User({ ...foundUser, careerProfile, id });
+    await this.userRepository.update(user);
+    this.notifyStudentContext(user);
     return careerProfile;
+  }
+
+  onStudentContextChanged(listener: StudentContextListener): void {
+    this.contextListeners.push(listener);
+  }
+
+  /** Avisa os ouvintes; a falha de um deles nunca desfaz a gravação que já aconteceu. */
+  private notifyStudentContext(user: User): void {
+    if (resolveRole(user) !== ROLES.STUDENT) return;
+    for (const listener of this.contextListeners) {
+      try {
+        listener(user);
+      } catch {
+        // o ouvinte registra o próprio erro; a resposta ao usuário segue
+      }
+    }
   }
 
   async findById(id: string): Promise<User> {

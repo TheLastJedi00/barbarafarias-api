@@ -14,7 +14,6 @@ const VALID_TOPIC = {
   curiosity: 'Curiosidade',
   roleplayInstruction: 'Faça um diálogo',
   roleplayDialog: ['A: Hi'],
-  words: [{ english: 'hello', portuguese: 'olá', pronounce: 'rêlou' }],
   music: { title: 'Hello', artist: 'Adele', youtube: 'https://y.tube/x' },
 };
 
@@ -183,7 +182,6 @@ describe('SupplyService (fluxo granular)', () => {
       genAi.generateJson.mockResolvedValue(VALID_TOPIC);
       const result = await service.generateTopic(topicDto);
       expect(result.topic).toBe('Greetings');
-      expect(result.words[0].english).toBe('hello');
     });
 
     /** A diretriz temática do módulo é o que dá coesão entre os tópicos. */

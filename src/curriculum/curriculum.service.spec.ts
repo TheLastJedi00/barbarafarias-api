@@ -1,5 +1,6 @@
 import { ConflictException } from '@nestjs/common';
 import { CurriculumService } from './curriculum.service';
+import { DEFAULT_FLASHCARDS_PROMPT } from './flashcards-prompt.default';
 
 describe('CurriculumService', () => {
   let service: CurriculumService;
@@ -10,6 +11,8 @@ describe('CurriculumService', () => {
     upsertLevel: jest.Mock;
     countVideosByTopic: jest.Mock;
     findStoreLockedModules: jest.Mock;
+    getFlashcardsPrompt: jest.Mock;
+    upsertFlashcardsPrompt: jest.Mock;
   };
 
   beforeEach(() => {
@@ -20,6 +23,8 @@ describe('CurriculumService', () => {
       upsertLevel: jest.fn().mockResolvedValue(undefined),
       countVideosByTopic: jest.fn().mockResolvedValue(new Map()),
       findStoreLockedModules: jest.fn().mockResolvedValue(new Set()),
+      getFlashcardsPrompt: jest.fn(),
+      upsertFlashcardsPrompt: jest.fn().mockResolvedValue(undefined),
     };
     service = new CurriculumService(repository as any);
   });
@@ -28,6 +33,29 @@ describe('CurriculumService', () => {
     it('retorna prompt vazio quando nada foi salvo', async () => {
       repository.getPrincipal.mockResolvedValue(null);
       expect(await service.getPrincipal()).toEqual({ prompt: '' });
+    });
+  });
+
+  describe('Prompt de Flashcards (spec 037)', () => {
+    it('nasce com o texto padrão enquanto ninguém salvou', async () => {
+      repository.getFlashcardsPrompt.mockResolvedValue(null);
+      const { prompt } = await service.getFlashcardsPrompt();
+      expect(prompt).toBe(DEFAULT_FLASHCARDS_PROMPT);
+      expect(prompt).toContain('pronounce');
+    });
+
+    it('devolve o texto salvo, mesmo vazio de propósito', async () => {
+      repository.getFlashcardsPrompt.mockResolvedValue({ prompt: '' });
+      expect(await service.getFlashcardsPrompt()).toEqual({ prompt: '' });
+    });
+
+    it('grava o texto', async () => {
+      expect(await service.upsertFlashcardsPrompt({ prompt: 'novo' })).toEqual({
+        prompt: 'novo',
+      });
+      expect(repository.upsertFlashcardsPrompt).toHaveBeenCalledWith({
+        prompt: 'novo',
+      });
     });
   });
 

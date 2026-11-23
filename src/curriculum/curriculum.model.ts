@@ -44,3 +44,9 @@ export interface PrincipalPrompt {
 
 /** Doc id fixo do Prompt Principal na coleção `curriculum`. */
 export const PRINCIPAL_DOC_ID = 'principal';
+
+/**
+ * Doc id do Prompt de Flashcards na coleção `curriculum` (spec 037): o
+ * contexto pedagógico das cartas, editável como o Prompt Principal.
+ */
+export const FLASHCARDS_PROMPT_DOC_ID = 'flashcards';

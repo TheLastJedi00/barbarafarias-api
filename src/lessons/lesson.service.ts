@@ -1,4 +1,9 @@
 import {
+  attachPracticeAverages,
+  LessonWithPractice,
+  studentIdsOf,
+} from './lesson-practice';
+import {
   BadRequestException,
   ForbiddenException,
   Injectable,
@@ -198,14 +203,37 @@ export class LessonService {
       to,
       teacherId,
     );
-    return this.sorted(await this.autoCloseOverdue(lessons));
+    return this.withPractice(this.sorted(await this.autoCloseOverdue(lessons)));
   }
 
   /** Aulas do dia — alimenta o painel "Aulas de hoje" da gerente. */
   async findByDate(date: string): Promise<Lesson[]> {
     await this.ensureLessons(date, date);
     const lessons = await this.lessonRepository.findByDate(date);
-    return this.sorted(await this.autoCloseOverdue(lessons));
+    return this.withPractice(this.sorted(await this.autoCloseOverdue(lessons)));
+  }
+
+  /**
+   * Média dos flashcards de cada aula (spec 037 §5.6), para a professora ver
+   * antes de entrar. Uma leitura em lote dos alunos; turmas, uma por turma.
+   */
+  private async withPractice(lessons: Lesson[]): Promise<LessonWithPractice[]> {
+    if (lessons.length === 0) return lessons;
+    const turmaIds = [
+      ...new Set(
+        lessons.map((l) => l.turmaId).filter((id): id is string => !!id),
+      ),
+    ];
+    const turmas = await Promise.all(
+      turmaIds.map((id) => this.turmaRepository.findById(id)),
+    );
+    const turmaStudents = new Map(
+      turmaIds.map((id, i) => [id, turmas[i]?.studentIds ?? []]),
+    );
+    const summaries = await this.userRepository.findPracticeSummaries(
+      studentIdsOf(lessons, turmaStudents),
+    );
+    return attachPracticeAverages(lessons, summaries, turmaStudents);
   }
 
   /** Aulas do aluno: as dele e as das turmas a que pertence. */
