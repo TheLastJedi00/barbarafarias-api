@@ -4,6 +4,7 @@ import {
   NotFoundException,
   UnprocessableEntityException,
 } from '@nestjs/common';
+import { BackgroundTasks } from '../common/background-tasks';
 import { CurriculumService } from '../curriculum/curriculum.service';
 import { GeminiProvider } from '../supply/gemini/gemini.service';
 import { storeStudentInfo } from '../supply/prompts';
@@ -11,6 +12,7 @@ import { StudentInfo } from '../types/student.info';
 import { LEVELS, Level } from '../types/student.level';
 import { User } from '../users/user.entity';
 import { UserService } from '../users/user.service';
+import { countCompleteCards, DeckProgress } from './deck-progress';
 import { FlashcardDeckRepository } from './flashcard-deck.repository';
 import {
   FlashcardDeck,
@@ -33,6 +35,8 @@ const MIN_STUDENT_CARDS = 46;
 /** Geração "em andamento" há mais que isso travou (a função caiu no meio). */
 const STUCK_AFTER_MS = 5 * 60 * 1000;
 const TEMPERATURE = 0.6;
+/** O andamento é gravado quando a contagem avança pelo menos isso. */
+const PROGRESS_STEP = 5;
 
 export type TopicDeckStatus = 'missing' | FlashcardDeck['status'];
 
@@ -92,6 +96,7 @@ export class FlashcardService {
     private readonly curriculum: CurriculumService,
     private readonly users: UserService,
     private readonly gemini: GeminiProvider,
+    private readonly background: BackgroundTasks,
   ) {}
 
   /** Gera (ou regera) o baralho de um tópico. Tópico só de vídeo não tem baralho. */
@@ -136,6 +141,29 @@ export class FlashcardService {
 
   /** Gera (ou regera) as 62 palavras do aluno, sem as que já estão nos tópicos do nível. */
   async generateStudentDeck(studentId: string): Promise<FlashcardDeck> {
+    const fill = await this.prepareStudentDeck(studentId);
+    return fill();
+  }
+
+  /**
+   * Como `generateStudentDeck`, mas responde assim que a geração está marcada
+   * e deixa a IA trabalhando em segundo plano (fix 037): o primeiro acesso à
+   * missão não fica preso esperando o Gemini, e a tela acompanha o andamento.
+   */
+  async startStudentDeck(studentId: string): Promise<DeckProgress> {
+    const fill = await this.prepareStudentDeck(studentId);
+    void this.background.run(`baralho do aluno ${studentId}`, fill);
+    return { generated: 0, total: STUDENT_DECK_SIZE };
+  }
+
+  /**
+   * Confere o contexto e marca a geração (0/62) antes de devolver o trabalho
+   * pesado: aluno sem contexto é recusado na hora, sem deixar um baralho
+   * "gerando" que nunca termina.
+   */
+  private async prepareStudentDeck(
+    studentId: string,
+  ): Promise<() => Promise<FlashcardDeck>> {
     const user = await this.users.findById(studentId);
     const student = studentContext(user);
     if (!student) {
@@ -146,27 +174,33 @@ export class FlashcardService {
     const level = levelOf(user);
 
     const id = studentDeckId(studentId);
-    await this.decks.markGenerating({ id, kind: 'student', studentId });
-
-    const [levelCurriculum, flashcards, topicDecks] = await Promise.all([
-      this.curriculum.getLevel(level),
-      this.curriculum.getFlashcardsPrompt(),
-      this.decks.findTopicDecksByLevel(level),
-    ]);
-    const exclude = new Set(
-      topicDecks.flatMap((d) => d.cards.map((c) => wordKey(c.english))),
+    await this.decks.markGenerating(
+      { id, kind: 'student', studentId },
+      { generated: 0, total: STUDENT_DECK_SIZE },
     );
 
-    const prompt = buildStudentDeckPrompt({
-      flashcardsPrompt: flashcards.prompt,
-      levelPrompt: levelCurriculum.prompt,
-      level,
-      student,
-      count: STUDENT_REQUEST,
-    });
-    return this.generate(id, prompt, STUDENT_DECK_SIZE, MIN_STUDENT_CARDS, {
-      exclude,
-    });
+    return async () => {
+      const [levelCurriculum, flashcards, topicDecks] = await Promise.all([
+        this.curriculum.getLevel(level),
+        this.curriculum.getFlashcardsPrompt(),
+        this.decks.findTopicDecksByLevel(level),
+      ]);
+      const exclude = new Set(
+        topicDecks.flatMap((d) => d.cards.map((c) => wordKey(c.english))),
+      );
+
+      const prompt = buildStudentDeckPrompt({
+        flashcardsPrompt: flashcards.prompt,
+        levelPrompt: levelCurriculum.prompt,
+        level,
+        student,
+        count: STUDENT_REQUEST,
+      });
+      return this.generate(id, prompt, STUDENT_DECK_SIZE, MIN_STUDENT_CARDS, {
+        exclude,
+        progress: true,
+      });
+    };
   }
 
   /**
@@ -245,14 +279,24 @@ export class FlashcardService {
     prompt: string,
     size: number,
     min: number,
-    options: { sourceTitle?: string; exclude?: Set<string> },
+    options: {
+      sourceTitle?: string;
+      exclude?: Set<string>;
+      /** Recebe aos pedaços e grava `progress` (só o baralho do aluno). */
+      progress?: boolean;
+    },
   ): Promise<FlashcardDeck> {
     try {
-      const { cards: generated } = await this.gemini.generateJson(
-        prompt,
-        GeneratedDeckSchema,
-        { temperature: TEMPERATURE },
-      );
+      const { cards: generated } = options.progress
+        ? await this.gemini.streamJson(
+            prompt,
+            GeneratedDeckSchema,
+            this.progressWriter(id, size),
+            { temperature: TEMPERATURE },
+          )
+        : await this.gemini.generateJson(prompt, GeneratedDeckSchema, {
+            temperature: TEMPERATURE,
+          });
       const cards = toDeckCards(generated, size, options.exclude);
       if (cards.length < min) {
         throw new Error(
@@ -279,5 +323,16 @@ export class FlashcardService {
         'Não foi possível gerar os flashcards agora. Tente de novo em instantes.',
       );
     }
+  }
+
+  /** Grava o andamento quando avança `PROGRESS_STEP` cartas (limitado ao tamanho do baralho). */
+  private progressWriter(id: string, total: number) {
+    let saved = 0;
+    return async (text: string) => {
+      const generated = Math.min(countCompleteCards(text), total);
+      if (generated - saved < PROGRESS_STEP) return;
+      saved = generated;
+      await this.decks.saveProgress(id, { generated, total });
+    };
   }
 }

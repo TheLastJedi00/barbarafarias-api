@@ -2,6 +2,7 @@ import { Inject, Injectable } from '@nestjs/common';
 import { Firestore } from 'firebase-admin/firestore';
 import { FIRESTORE } from '../firestore/firestore.module';
 import { Level } from '../types/student.level';
+import type { DeckProgress } from './deck-progress';
 import {
   Flashcard,
   FLASHCARD_DECKS_COLLECTION,
@@ -43,17 +44,28 @@ export class FlashcardDeckRepository {
   }
 
   /** Marca o início da geração, sem apagar as cartas antigas (regerar não deixa o baralho vazio). */
-  async markGenerating(identity: DeckIdentity): Promise<void> {
+  async markGenerating(
+    identity: DeckIdentity,
+    progress?: DeckProgress,
+  ): Promise<void> {
     await this.collection()
       .doc(identity.id)
       .set(
         {
           ...identity,
           status: 'generating',
+          ...(progress ? { progress } : {}),
           updatedAt: new Date().toISOString(),
         },
         { merge: true },
       );
+  }
+
+  /** Andamento durante a geração (fix 037). Não mexe no status. */
+  async saveProgress(id: string, progress: DeckProgress): Promise<void> {
+    await this.collection()
+      .doc(id)
+      .set({ progress, updatedAt: new Date().toISOString() }, { merge: true });
   }
 
   async saveCards(
@@ -72,6 +84,7 @@ export class FlashcardDeckRepository {
           generatedAt: now,
           updatedAt: now,
           error: null,
+          progress: { generated: cards.length, total: cards.length },
         },
         { merge: true },
       );
@@ -86,6 +99,23 @@ export class FlashcardDeckRepository {
       },
       { merge: true },
     );
+  }
+
+  /**
+   * Ouve um baralho (fix 037): o primeiro aviso é o estado atual, os outros
+   * são as mudanças. Ausente chega como `null`. Devolve o cancelamento.
+   */
+  watchDeck(
+    id: string,
+    onChange: (deck: FlashcardDeck | null) => void,
+    onError: (error: Error) => void,
+  ): () => void {
+    return this.collection()
+      .doc(id)
+      .onSnapshot(
+        (doc) => onChange(doc.exists ? this.read(doc.id, doc.data()!) : null),
+        onError,
+      );
   }
 
   async deleteMany(ids: string[]): Promise<void> {
@@ -110,6 +140,7 @@ export class FlashcardDeckRepository {
       generatedAt: data.generatedAt,
       updatedAt: data.updatedAt ?? '',
       error: data.error ?? undefined,
+      progress: data.progress,
     };
   }
 

@@ -2,14 +2,15 @@ import {
   BadRequestException,
   ForbiddenException,
   Injectable,
-  ServiceUnavailableException,
 } from '@nestjs/common';
 import { todayInAppTimezone } from '../common/time';
 import { CurriculumService } from '../curriculum/curriculum.service';
 import { FlashcardDeckRepository } from '../flashcards/flashcard-deck.repository';
+import { DeckProgress } from '../flashcards/deck-progress';
 import {
   cardKey,
   FlashcardDeck,
+  STUDENT_DECK_SIZE,
   studentDeckId,
   topicDeckId,
 } from '../flashcards/flashcard.model';
@@ -51,6 +52,18 @@ export interface PracticeStatus {
 export interface MissionView extends MissionDay {
   streak: number;
   summary: PracticeSummary | null;
+}
+
+/** O baralho do aluno ainda está sendo gerado (fix 037): a tela mostra a barra. */
+export interface DeckPendingView extends DeckProgress {
+  generating: true;
+}
+
+export type TodayView = MissionView | DeckPendingView;
+
+/** Um aviso da conexão de andamento. `missing`: não há geração a acompanhar. */
+export interface DeckProgressEvent extends DeckProgress {
+  status: 'missing' | 'generating' | 'ready' | 'error';
 }
 
 export interface AnswerView {
@@ -99,7 +112,7 @@ export class PracticeService {
     };
   }
 
-  async today(uid: string): Promise<MissionView> {
+  async today(uid: string): Promise<TodayView> {
     const user = await this.users.findById(uid);
     if (!user) throw new ForbiddenException(NO_PRACTICE_ACCESS);
     const deckIds = await this.eligibleTopicDecks(uid, user);
@@ -118,9 +131,15 @@ export class PracticeService {
     if (existing) return view(existing);
 
     const [studentDeck, topicDecks] = await Promise.all([
-      this.readyStudentDeck(uid),
+      this.decks.findById(studentDeckId(uid)),
       this.decks.findMany(deckIds),
     ]);
+    if (studentDeck?.status !== 'ready' || studentDeck.cards.length === 0) {
+      return {
+        generating: true,
+        ...(await this.studentDeckProgress(uid, studentDeck)),
+      };
+    }
     const cards = buildMission({
       student: candidates(studentDeck),
       pool: topicDecks.filter((d) => d.status === 'ready').flatMap(candidates),
@@ -166,18 +185,39 @@ export class PracticeService {
    * (rede de segurança dos alunos que já existiam e de geração que falhou).
    * Em geração recente, outra requisição já está nisso: pede para voltar.
    */
-  private async readyStudentDeck(uid: string): Promise<FlashcardDeck> {
-    const deck = await this.decks.findById(studentDeckId(uid));
-    if (deck?.status === 'ready' && deck.cards.length > 0) return deck;
+  /**
+   * Acompanha o baralho do próprio aluno pelo `onSnapshot` (fix 037). Só
+   * números saem daqui — nada das cartas. Geração travada vira `error`, para
+   * a tela oferecer tentar de novo em vez de esperar para sempre.
+   */
+  watchDeckProgress(
+    uid: string,
+    onEvent: (event: DeckProgressEvent) => void,
+    onError: (error: Error) => void,
+  ): () => void {
+    return this.decks.watchDeck(
+      studentDeckId(uid),
+      (deck) => onEvent(progressEvent(deck)),
+      onError,
+    );
+  }
+
+  /**
+   * Andamento do baralho do aluno que ainda não está pronto. Geração recente
+   * segue de pé e só tem o andamento lido; ausente, com erro ou travada
+   * começa de novo em segundo plano — o pedido nunca espera a IA.
+   */
+  private async studentDeckProgress(
+    uid: string,
+    deck: FlashcardDeck | null,
+  ): Promise<DeckProgress> {
     if (
       deck?.status === 'generating' &&
       Date.now() - Date.parse(deck.updatedAt) < GENERATING_WINDOW_MS
     ) {
-      throw new ServiceUnavailableException(
-        'Suas palavras estão sendo preparadas. Tente de novo em instantes.',
-      );
+      return deck.progress ?? { generated: 0, total: STUDENT_DECK_SIZE };
     }
-    return this.flashcards.generateStudentDeck(uid);
+    return this.flashcards.startStudentDeck(uid);
   }
 
   /**
@@ -252,4 +292,24 @@ function levelOf(user: User): Level {
   return (LEVELS as readonly string[]).includes(user.level)
     ? (user.level as Level)
     : 'A1';
+}
+
+function progressEvent(deck: FlashcardDeck | null): DeckProgressEvent {
+  const total = STUDENT_DECK_SIZE;
+  if (!deck) return { status: 'missing', generated: 0, total };
+  if (deck.status === 'ready' && deck.cards.length > 0) {
+    return {
+      status: 'ready',
+      generated: deck.cards.length,
+      total: deck.cards.length,
+    };
+  }
+  const stuck = Date.now() - Date.parse(deck.updatedAt) >= GENERATING_WINDOW_MS;
+  if (deck.status === 'generating' && !stuck) {
+    return {
+      status: 'generating',
+      ...(deck.progress ?? { generated: 0, total }),
+    };
+  }
+  return { status: 'error', generated: 0, total };
 }

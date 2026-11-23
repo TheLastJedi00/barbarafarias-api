@@ -62,7 +62,8 @@ describe('FlashcardService', () => {
   let repo: Record<string, jest.Mock>;
   let curriculumService: Record<string, jest.Mock>;
   let users: Record<string, jest.Mock>;
-  let gemini: { generateJson: jest.Mock };
+  let gemini: { generateJson: jest.Mock; streamJson: jest.Mock };
+  let background: { run: jest.Mock };
 
   beforeEach(() => {
     repo = {
@@ -71,6 +72,7 @@ describe('FlashcardService', () => {
       markGenerating: jest.fn().mockResolvedValue(undefined),
       saveCards: jest.fn().mockResolvedValue(undefined),
       markError: jest.fn().mockResolvedValue(undefined),
+      saveProgress: jest.fn().mockResolvedValue(undefined),
       deleteMany: jest.fn().mockResolvedValue(undefined),
     };
     curriculumService = {
@@ -78,12 +80,18 @@ describe('FlashcardService', () => {
       getFlashcardsPrompt: jest.fn().mockResolvedValue({ prompt: 'FLASH' }),
     };
     users = { findById: jest.fn() };
-    gemini = { generateJson: jest.fn() };
+    gemini = { generateJson: jest.fn(), streamJson: jest.fn() };
+    background = {
+      run: jest.fn((_label: string, task: () => Promise<unknown>) =>
+        task().then(() => undefined),
+      ),
+    };
     service = new FlashcardService(
       repo as any,
       curriculumService as any,
       users as any,
       gemini as any,
+      background as any,
     );
   });
 
@@ -195,16 +203,15 @@ describe('FlashcardService', () => {
       repo.findTopicDecksByLevel.mockResolvedValue([
         deck({ cards: cards(10).map((c, i) => ({ ...c, id: `c${i}` })) }),
       ]);
-      gemini.generateJson.mockResolvedValue({ cards: cards(80) });
+      gemini.streamJson.mockResolvedValue({ cards: cards(80) });
 
       await service.generateStudentDeck('u1');
 
-      expect(repo.markGenerating).toHaveBeenCalledWith({
-        id: 'student_u1',
-        kind: 'student',
-        studentId: 'u1',
-      });
-      const prompt = gemini.generateJson.mock.calls[0][0] as string;
+      expect(repo.markGenerating).toHaveBeenCalledWith(
+        { id: 'student_u1', kind: 'student', studentId: 'u1' },
+        { generated: 0, total: STUDENT_DECK_SIZE },
+      );
+      const prompt = gemini.streamJson.mock.calls[0][0] as string;
       expect(prompt).toContain('exatamente 72');
       expect(prompt).toContain('apresentar campanhas');
       const saved = repo.saveCards.mock.calls[0][1];
@@ -229,12 +236,69 @@ describe('FlashcardService', () => {
         deck({ status: 'generating', updatedAt: new Date().toISOString() }),
       );
       expect(await service.ensureStudentDeck('u1')).toBe(false);
-      expect(gemini.generateJson).not.toHaveBeenCalled();
+      expect(gemini.streamJson).not.toHaveBeenCalled();
+    });
+
+    it('grava o andamento a cada 5 cartas, sem passar do tamanho do baralho', async () => {
+      users.findById.mockResolvedValue(aluna);
+      const json = (n: number) =>
+        `{"cards":[${cards(n)
+          .map((c) => JSON.stringify(c))
+          .join(',')},{"engl`;
+      gemini.streamJson.mockImplementation(
+        async (_p: string, _s: unknown, onProgress: (t: string) => unknown) => {
+          for (const n of [0, 3, 5, 7, 10, 11, 72]) await onProgress(json(n));
+          return { cards: cards(80) };
+        },
+      );
+
+      await service.generateStudentDeck('u1');
+
+      expect(repo.saveProgress.mock.calls).toEqual([
+        ['student_u1', { generated: 5, total: STUDENT_DECK_SIZE }],
+        ['student_u1', { generated: 10, total: STUDENT_DECK_SIZE }],
+        [
+          'student_u1',
+          { generated: STUDENT_DECK_SIZE, total: STUDENT_DECK_SIZE },
+        ],
+      ]);
+      expect(repo.saveCards).toHaveBeenCalledTimes(1);
+    });
+
+    it('startStudentDeck marca 0/62, responde na hora e gera em segundo plano', async () => {
+      users.findById.mockResolvedValue(aluna);
+      let finish!: (value: unknown) => void;
+      gemini.streamJson.mockReturnValue(
+        new Promise((resolve) => (finish = resolve)),
+      );
+
+      const progress = await service.startStudentDeck('u1');
+
+      expect(progress).toEqual({ generated: 0, total: STUDENT_DECK_SIZE });
+      expect(repo.markGenerating).toHaveBeenCalledTimes(1);
+      expect(background.run).toHaveBeenCalledWith(
+        'baralho do aluno u1',
+        expect.any(Function),
+      );
+      expect(repo.saveCards).not.toHaveBeenCalled();
+
+      finish({ cards: cards(80) });
+      await background.run.mock.results[0].value;
+      expect(repo.saveCards).toHaveBeenCalledTimes(1);
+    });
+
+    it('startStudentDeck sem contexto recusa na hora, sem marcar geração', async () => {
+      users.findById.mockResolvedValue({ ...aluna, objective: '' });
+      await expect(service.startStudentDeck('u1')).rejects.toThrow(
+        UnprocessableEntityException,
+      );
+      expect(repo.markGenerating).not.toHaveBeenCalled();
+      expect(background.run).not.toHaveBeenCalled();
     });
 
     it('ensureStudentDeck gera quando falta, deu erro ou a geração travou', async () => {
       users.findById.mockResolvedValue(aluna);
-      gemini.generateJson.mockResolvedValue({ cards: cards(80) });
+      gemini.streamJson.mockResolvedValue({ cards: cards(80) });
 
       repo.findById.mockResolvedValueOnce(null);
       expect(await service.ensureStudentDeck('u1')).toBe(true);

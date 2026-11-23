@@ -1,8 +1,5 @@
-import {
-  ForbiddenException,
-  ServiceUnavailableException,
-} from '@nestjs/common';
-import { PracticeService } from './practice.service';
+import { ForbiddenException } from '@nestjs/common';
+import { MissionView, PracticeService } from './practice.service';
 import { emptyProgress, MissionDay } from './mission-builder';
 import { FlashcardDeck } from '../flashcards/flashcard.model';
 
@@ -80,9 +77,12 @@ describe('PracticeService', () => {
     decks = {
       findById: jest.fn().mockResolvedValue(deck('student_u1', 62)),
       findMany: jest.fn(async (ids: string[]) => ids.map((id) => deck(id, 40))),
+      watchDeck: jest.fn(),
     };
     flashcards = {
-      generateStudentDeck: jest.fn().mockResolvedValue(deck('student_u1', 62)),
+      startStudentDeck: jest
+        .fn()
+        .mockResolvedValue({ generated: 0, total: 62 }),
     };
     curriculum = { getLevel: jest.fn().mockResolvedValue(curriculumB1) };
     users = { findById: jest.fn().mockResolvedValue(planStudent) };
@@ -99,7 +99,7 @@ describe('PracticeService', () => {
 
   describe('today (T15)', () => {
     it('aluno do plano: banco com os tópicos do nível, sem os só de vídeo', async () => {
-      const mission = await service.today('u1');
+      const mission = (await service.today('u1')) as MissionView;
 
       expect(decks.findMany).toHaveBeenCalledWith([
         'topic_B1_t1',
@@ -155,21 +155,57 @@ describe('PracticeService', () => {
       await expect(service.today('u1')).rejects.toThrow(ForbiddenException);
     });
 
-    it('baralho do aluno faltando: gera ali mesmo', async () => {
+    it('baralho do aluno faltando: começa a gerar e responde o andamento na hora', async () => {
       decks.findById.mockResolvedValue(null);
-      const mission = await service.today('u1');
-      expect(flashcards.generateStudentDeck).toHaveBeenCalledWith('u1');
-      expect(mission.cards).toHaveLength(10);
+
+      const result = await service.today('u1');
+
+      expect(flashcards.startStudentDeck).toHaveBeenCalledWith('u1');
+      expect(result).toEqual({ generating: true, generated: 0, total: 62 });
+      expect(repo.createDay).not.toHaveBeenCalled();
     });
 
-    it('baralho do aluno em geração agora: pede para voltar em instantes', async () => {
+    it('baralho do aluno em geração agora: devolve o andamento gravado, sem gerar outro', async () => {
+      decks.findById.mockResolvedValue(
+        deck('student_u1', 0, {
+          status: 'generating',
+          progress: { generated: 20, total: 62 },
+        }),
+      );
+
+      expect(await service.today('u1')).toEqual({
+        generating: true,
+        generated: 20,
+        total: 62,
+      });
+      expect(flashcards.startStudentDeck).not.toHaveBeenCalled();
+    });
+
+    it('geração sem andamento gravado (anterior ao fix) conta do zero', async () => {
       decks.findById.mockResolvedValue(
         deck('student_u1', 0, { status: 'generating' }),
       );
-      await expect(service.today('u1')).rejects.toThrow(
-        ServiceUnavailableException,
+      expect(await service.today('u1')).toEqual({
+        generating: true,
+        generated: 0,
+        total: 62,
+      });
+    });
+
+    it('baralho com erro ou geração travada: começa de novo', async () => {
+      decks.findById.mockResolvedValueOnce(
+        deck('student_u1', 0, { status: 'error' }),
       );
-      expect(flashcards.generateStudentDeck).not.toHaveBeenCalled();
+      await service.today('u1');
+      decks.findById.mockResolvedValueOnce(
+        deck('student_u1', 0, {
+          status: 'generating',
+          updatedAt: '2020-01-01T00:00:00.000Z',
+        }),
+      );
+      await service.today('u1');
+
+      expect(flashcards.startStudentDeck).toHaveBeenCalledTimes(2);
     });
 
     it('baralhos de tópico ainda não prontos ficam de fora', async () => {
@@ -177,9 +213,65 @@ describe('PracticeService', () => {
         deck('topic_B1_t1', 40, { status: 'generating' }),
         deck('topic_B1_t2', 5),
       ]);
-      const mission = await service.today('u1');
+      const mission = (await service.today('u1')) as MissionView;
       expect(mission.cards.filter((c) => c.source === 'topic')).toHaveLength(5);
       expect(mission.cards).toHaveLength(10);
+    });
+  });
+
+  describe('watchDeckProgress', () => {
+    function watch() {
+      const events: unknown[] = [];
+      const onError = jest.fn();
+      const unsubscribe = jest.fn();
+      let change!: (deck: FlashcardDeck | null) => void;
+      decks.watchDeck.mockImplementation((_id, onChange, _onError) => {
+        change = onChange;
+        return unsubscribe;
+      });
+      const stop = service.watchDeckProgress(
+        'u1',
+        (event) => events.push(event),
+        onError,
+      );
+      return { events, change, stop, unsubscribe };
+    }
+
+    it('ouve o baralho do próprio aluno e traduz cada mudança', () => {
+      const { events, change, stop, unsubscribe } = watch();
+      expect(decks.watchDeck.mock.calls[0][0]).toBe('student_u1');
+
+      change(
+        deck('student_u1', 0, {
+          status: 'generating',
+          progress: { generated: 25, total: 62 },
+        }),
+      );
+      change(deck('student_u1', 0, { status: 'generating' }));
+      change(deck('student_u1', 62));
+      change(deck('student_u1', 0, { status: 'error' }));
+      change(null);
+
+      expect(events).toEqual([
+        { status: 'generating', generated: 25, total: 62 },
+        { status: 'generating', generated: 0, total: 62 },
+        { status: 'ready', generated: 62, total: 62 },
+        { status: 'error', generated: 0, total: 62 },
+        { status: 'missing', generated: 0, total: 62 },
+      ]);
+      stop();
+      expect(unsubscribe).toHaveBeenCalled();
+    });
+
+    it('geração travada há mais de 5 min vira erro', () => {
+      const { events, change } = watch();
+      change(
+        deck('student_u1', 0, {
+          status: 'generating',
+          updatedAt: '2020-01-01T00:00:00.000Z',
+        }),
+      );
+      expect(events).toEqual([{ status: 'error', generated: 0, total: 62 }]);
     });
   });
 
@@ -205,7 +297,7 @@ describe('PracticeService', () => {
 
   describe('answer', () => {
     it('aplica na transação e devolve o placar', async () => {
-      const today = await service.today('u1');
+      const today = (await service.today('u1')) as MissionView;
       repo.answer.mockImplementation(async (_uid, _day, apply) =>
         apply(today, emptyProgress()),
       );
