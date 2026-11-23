@@ -3001,7 +3001,9 @@ Progresso da missão diária (spec 037). **Doc ID:** uid do aluno.
    `npx ts-node scripts/037/prompts.ts --project barbarafarias --principal <arquivo> --apply`
    (sem `--apply` só mostra). Dev não tinha essas linhas.
 3. Baralhos dos tópicos que já existem: **Prompt Manager › Gerar os que faltam**, nível a nível
-   (um tópico por requisição).
+   (um tópico por requisição) — ou, sem sessão de gerente no ambiente,
+   `npx ts-node scripts/037/backfill-topic-decks.ts --project <id> --apply` (retomável, pula os
+   prontos; usa a chave do Gemini do `.env`). Em prod rodou assim em 2026-11-22.
 4. Deploy do FE.
 5. `words` legado: `npx ts-node scripts/037/remove-legacy-words.ts --project <id>` simula; com
    `--apply` salva backup em `scripts/037/backup/` e grava.
