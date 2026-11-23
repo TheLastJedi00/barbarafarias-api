@@ -11,6 +11,7 @@ import { isPurchaseActive } from '../store/store-purchase.model';
 import {
   CurriculumModule,
   LevelCurriculum,
+  FLASHCARDS_PROMPT_DOC_ID,
   PRINCIPAL_DOC_ID,
   PrincipalPrompt,
 } from './curriculum.model';
@@ -49,6 +50,23 @@ export class CurriculumRepository {
     await this.db
       .collection(this.collection)
       .doc(PRINCIPAL_DOC_ID)
+      .set({ prompt: data.prompt }, { merge: true });
+  }
+
+  /** Prompt de Flashcards (spec 037); `null` = nunca salvo, vale o padrão. */
+  async getFlashcardsPrompt(): Promise<PrincipalPrompt | null> {
+    const doc = await this.db
+      .collection(this.collection)
+      .doc(FLASHCARDS_PROMPT_DOC_ID)
+      .get();
+    if (!doc.exists) return null;
+    return { prompt: (doc.get('prompt') as string | undefined) ?? '' };
+  }
+
+  async upsertFlashcardsPrompt(data: PrincipalPrompt): Promise<void> {
+    await this.db
+      .collection(this.collection)
+      .doc(FLASHCARDS_PROMPT_DOC_ID)
       .set({ prompt: data.prompt }, { merge: true });
   }
 
