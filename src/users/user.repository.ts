@@ -1,3 +1,4 @@
+import type { PracticeSummary } from '../practice/mission-builder';
 import { Inject, Injectable } from '@nestjs/common';
 import { User } from './user.entity';
 import { FieldValue, Firestore } from 'firebase-admin/firestore';
@@ -60,6 +61,28 @@ export class UserRepository {
       return plainToInstance(User, { ...data, id: data?.id ?? doc.id });
     }
     return null;
+  }
+
+  /**
+   * Médias dos flashcards de vários alunos numa leitura em lote, só com o campo
+   * que interessa (spec 037: a lista de aulas mostra a média de cada um).
+   */
+  async findPracticeSummaries(
+    ids: string[],
+  ): Promise<Map<string, PracticeSummary>> {
+    const summaries = new Map<string, PracticeSummary>();
+    if (ids.length === 0) return summaries;
+    const refs = [...new Set(ids)].map((id) =>
+      this.db.collection('users').doc(id),
+    );
+    const docs = await this.db.getAll(...refs, {
+      fieldMask: ['practiceSummary'],
+    });
+    for (const doc of docs) {
+      const summary = doc.get('practiceSummary') as PracticeSummary | undefined;
+      if (doc.exists && summary) summaries.set(doc.id, summary);
+    }
+    return summaries;
   }
 
   async findByEmail(email: string): Promise<User | null> {

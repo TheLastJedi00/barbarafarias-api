@@ -5,6 +5,7 @@ import type {
   SubscriptionStatus,
 } from '../subscriptions/subscription.entity';
 import type { CareerProfile } from './career-profile';
+import type { PracticeSummary } from '../practice/mission-builder';
 
 /** Slot recorrente (dia da semana + hora), usado como reposição pré-combinada. */
 export interface WeeklySlot {
@@ -118,6 +119,12 @@ export class User {
   lessonsPerWeek?: number;
   meetUrl?: string; // sala fixa do aluno
   makeupSlot?: WeeklySlot;
+  /**
+   * Média da missão diária de flashcards (spec 037), copiada aqui pelo
+   * `PracticeRepository` quando uma missão é completada. O card do aluno e as
+   * aulas da professora a leem sem consultar a coleção `practice`.
+   */
+  practiceSummary?: PracticeSummary;
 
   constructor(data: Partial<User>) {
     Object.assign(this, data);
