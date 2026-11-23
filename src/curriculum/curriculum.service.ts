@@ -15,6 +15,7 @@ import {
 import { CreateVideoTopicDto } from './dto/create-video-topic.dto';
 import { UpsertLevelDto } from './dto/upsert-level.dto';
 import { UpsertPrincipalDto } from './dto/upsert-principal.dto';
+import { DEFAULT_FLASHCARDS_PROMPT } from './flashcards-prompt.default';
 
 /** Projeção enxuta e ordenada que o fluxo de geração paralela consome. */
 export interface Blueprint {
@@ -38,6 +39,26 @@ export class CurriculumService {
   async upsertPrincipal(dto: UpsertPrincipalDto): Promise<PrincipalPrompt> {
     const data: PrincipalPrompt = { prompt: dto.prompt };
     await this.repository.upsertPrincipal(data);
+    return data;
+  }
+
+  /**
+   * Prompt de Flashcards (spec 037). Sem doc gravado vale o texto padrão, e é
+   * ele que o Prompt Manager mostra para a Teacher editar.
+   */
+  async getFlashcardsPrompt(): Promise<PrincipalPrompt> {
+    return (
+      (await this.repository.getFlashcardsPrompt()) ?? {
+        prompt: DEFAULT_FLASHCARDS_PROMPT,
+      }
+    );
+  }
+
+  async upsertFlashcardsPrompt(
+    dto: UpsertPrincipalDto,
+  ): Promise<PrincipalPrompt> {
+    const data: PrincipalPrompt = { prompt: dto.prompt };
+    await this.repository.upsertFlashcardsPrompt(data);
     return data;
   }
 

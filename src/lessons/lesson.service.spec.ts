@@ -55,7 +55,10 @@ describe('LessonService.ensureLessons', () => {
       lessonRepository as any,
       agendaService as any,
       new LessonAccessService(),
-      { findById: jest.fn() } as any,
+      {
+        findById: jest.fn(),
+        findPracticeSummaries: jest.fn().mockResolvedValue(new Map()),
+      } as any,
       { findById: jest.fn(), findAll: jest.fn().mockResolvedValue([]) } as any,
       makeupService as any,
       notifications as any,
@@ -255,7 +258,11 @@ describe('LessonService.ensureLessons', () => {
     it('só o próprio aluno avisa a ausência', async () => {
       scheduled();
       await expect(
-        service.studentCancel({ sub: 's2', role: 'student' } as any, 'l1', at(-5 * 60)),
+        service.studentCancel(
+          { sub: 's2', role: 'student' } as any,
+          'l1',
+          at(-5 * 60),
+        ),
       ).rejects.toThrow(ForbiddenException);
     });
 

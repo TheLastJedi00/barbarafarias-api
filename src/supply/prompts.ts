@@ -39,7 +39,7 @@ export function storeStudentInfo(
 }
 
 /** Bloco de dados do aluno, comum às duas etapas. */
-function studentBlock(student: StudentInfo): string {
+export function studentBlock(student: StudentInfo): string {
   if (student.profile) {
     return `Dados do aluno:
 Nome: ${student.firstName}
@@ -97,7 +97,7 @@ ${student.firstName}, em português, de 2 a 4 frases.
 Cada introdução deve dizer o que o módulo vai abordar (apoiando-se nos títulos
 dos tópicos acima) e conectar isso ${connectionHint(student)}. Fale com o aluno na segunda pessoa, com tom acolhedor.
 NÃO repita o título do módulo como primeira frase e NÃO gere conteúdo de
-tópico (nada de description, examples, curiosity, roleplay, words ou music).
+tópico (nada de description, examples, curiosity, roleplay ou music).
 Responda SOMENTE com um array JSON de strings, uma por módulo, na MESMA ORDEM
 da estrutura acima e com exatamente ${blueprint.modules.length} ${
     blueprint.modules.length === 1 ? 'item' : 'itens'
@@ -140,7 +140,6 @@ Responda SOMENTE com um objeto JSON no formato:
   "curiosity": "...",
   "roleplayInstruction": "...",
   "roleplayDialog": ["..."],
-  "words": [ { "english": "...", "portuguese": "...", "pronounce": "..." } ],
   "music": { "title": "...", "artist": "...", "youtube": "..." }
 }`;
 }

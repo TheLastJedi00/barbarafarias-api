@@ -59,3 +59,4 @@ report.[0-9]*.[0-9]*.[0-9]*.[0-9]*.json
 # Firebase Service Account Key
 /serviceAccountKey.json
 .vercel
+scripts/037/backup/
