@@ -76,6 +76,69 @@ describe('UserService', () => {
     });
   });
 
+  describe('aviso de contexto do aluno (spec 037)', () => {
+    let listener: jest.Mock;
+    beforeEach(() => {
+      listener = jest.fn();
+      service.onStudentContextChanged(listener);
+    });
+
+    it('avisa ao matricular aluno, com o id já atribuído', async () => {
+      await service.createUser({
+        fullName: 'Ana',
+        email: 'a@x.com',
+        password: 's',
+        isTeacher: false,
+        objective: 'campanhas',
+      } as any);
+      expect(listener).toHaveBeenCalledTimes(1);
+      expect(listener.mock.calls[0][0]).toMatchObject({
+        objective: 'campanhas',
+      });
+      expect(listener.mock.calls[0][0].id).toBeTruthy();
+    });
+
+    it('não avisa ao cadastrar professora', async () => {
+      await service.createUser({
+        fullName: 'Bia',
+        email: 'b@x.com',
+        password: 's',
+        isTeacher: true,
+      } as any);
+      expect(listener).not.toHaveBeenCalled();
+    });
+
+    it('avisa quando o aluno edita o perfil e quando responde o questionário', async () => {
+      userRepository.findById.mockResolvedValue({
+        id: 'u1',
+        fullName: 'Ana',
+        role: ROLES.STUDENT,
+      });
+      await service.updateOwnProfile('u1', { objective: 'viajar' } as any);
+      await service.setCareerProfile('u1', {
+        workArea: 'saude',
+        careerStage: 'pleno',
+        englishContact: 'nenhum',
+      } as any);
+      expect(listener).toHaveBeenCalledTimes(2);
+      expect(listener.mock.calls[1][0].careerProfile.workArea).toBe('saude');
+    });
+
+    it('um ouvinte que falha não derruba a gravação', async () => {
+      listener.mockImplementation(() => {
+        throw new Error('quebrou');
+      });
+      userRepository.findById.mockResolvedValue({
+        id: 'u1',
+        fullName: 'Ana',
+        role: ROLES.STUDENT,
+      });
+      await expect(
+        service.updateOwnProfile('u1', { objective: 'x' } as any),
+      ).resolves.toBeDefined();
+    });
+  });
+
   describe('inviteUser (spec 018)', () => {
     it('cria a conta, grava o documento mínimo e manda o e-mail de entrada', async () => {
       const result = await service.inviteUser('novo@x.com');
