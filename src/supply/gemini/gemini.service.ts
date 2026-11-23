@@ -76,6 +76,51 @@ export class GeminiProvider {
     }
   }
 
+  /**
+   * Como o `generateJson`, mas recebe a resposta aos pedaços (fix 037) e
+   * avisa `onProgress` com o texto acumulado a cada um — é o que permite
+   * mostrar uma barra de andamento real. O aviso é esperado (mantém a ordem),
+   * e a falha dele só é registrada: andamento não derruba a geração.
+   */
+  async streamJson<T>(
+    prompt: string,
+    schema: ZodType<T>,
+    onProgress: (text: string) => void | Promise<void>,
+    options: GenerationOptions = {},
+  ): Promise<T> {
+    let text = '';
+    try {
+      const result = await this.model(options).generateContentStream(prompt);
+      for await (const chunk of result.stream) {
+        text += chunk.text();
+        try {
+          await onProgress(text);
+        } catch (error) {
+          this.logger.warn(
+            `Aviso de andamento falhou: ${error instanceof Error ? error.message : String(error)}`,
+          );
+        }
+      }
+    } catch (error) {
+      this.logger.error('Falha ao gerar conteúdo com o Gemini', error?.stack);
+      throw new Error(
+        `Failed to generate content with Gemini: ${error.message}`,
+      );
+    }
+    try {
+      const clean = text
+        .replace(/```json/g, '')
+        .replace(/```/g, '')
+        .trim();
+      return schema.parse(JSON.parse(clean));
+    } catch (error) {
+      this.logger.error('Resposta da IA em formato inválido', error?.stack);
+      throw new InternalServerErrorException(
+        'A IA retornou um formato inválido.',
+      );
+    }
+  }
+
   /** Um `GenerativeModel` por combinação de modelo e temperatura, reaproveitado. */
   private model(options: GenerationOptions): GenerativeModel {
     const name = options.model || this.defaultModel;
