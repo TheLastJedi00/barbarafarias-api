@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import type { DeckProgress } from './deck-progress';
 import { Level } from '../types/student.level';
 
 /**
@@ -60,6 +61,8 @@ export interface FlashcardDeck {
   generatedAt?: string;
   updatedAt: string;
   error?: string;
+  /** Andamento da geração (fix 037); só o baralho do aluno grava durante. */
+  progress?: DeckProgress;
 }
 
 export function topicDeckId(level: Level, topicId: string): string {
