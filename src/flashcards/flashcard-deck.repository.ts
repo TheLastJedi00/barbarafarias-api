@@ -101,6 +101,23 @@ export class FlashcardDeckRepository {
     );
   }
 
+  /**
+   * Ouve um baralho (fix 037): o primeiro aviso é o estado atual, os outros
+   * são as mudanças. Ausente chega como `null`. Devolve o cancelamento.
+   */
+  watchDeck(
+    id: string,
+    onChange: (deck: FlashcardDeck | null) => void,
+    onError: (error: Error) => void,
+  ): () => void {
+    return this.collection()
+      .doc(id)
+      .onSnapshot(
+        (doc) => onChange(doc.exists ? this.read(doc.id, doc.data()!) : null),
+        onError,
+      );
+  }
+
   async deleteMany(ids: string[]): Promise<void> {
     if (ids.length === 0) return;
     const batch = this.db.batch();

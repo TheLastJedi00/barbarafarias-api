@@ -102,9 +102,10 @@ export class GeminiProvider {
         }
       }
     } catch (error) {
-      this.logger.error('Falha ao gerar conteúdo com o Gemini', error?.stack);
+      const failure = error instanceof Error ? error : new Error(String(error));
+      this.logger.error('Falha ao gerar conteúdo com o Gemini', failure.stack);
       throw new Error(
-        `Failed to generate content with Gemini: ${error.message}`,
+        `Failed to generate content with Gemini: ${failure.message}`,
       );
     }
     try {
@@ -114,7 +115,10 @@ export class GeminiProvider {
         .trim();
       return schema.parse(JSON.parse(clean));
     } catch (error) {
-      this.logger.error('Resposta da IA em formato inválido', error?.stack);
+      this.logger.error(
+        'Resposta da IA em formato inválido',
+        error instanceof Error ? error.stack : String(error),
+      );
       throw new InternalServerErrorException(
         'A IA retornou um formato inválido.',
       );

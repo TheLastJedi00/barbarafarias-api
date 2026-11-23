@@ -61,6 +61,11 @@ export interface DeckPendingView extends DeckProgress {
 
 export type TodayView = MissionView | DeckPendingView;
 
+/** Um aviso da conexão de andamento. `missing`: não há geração a acompanhar. */
+export interface DeckProgressEvent extends DeckProgress {
+  status: 'missing' | 'generating' | 'ready' | 'error';
+}
+
 export interface AnswerView {
   score: number;
   answered: number;
@@ -181,6 +186,23 @@ export class PracticeService {
    * Em geração recente, outra requisição já está nisso: pede para voltar.
    */
   /**
+   * Acompanha o baralho do próprio aluno pelo `onSnapshot` (fix 037). Só
+   * números saem daqui — nada das cartas. Geração travada vira `error`, para
+   * a tela oferecer tentar de novo em vez de esperar para sempre.
+   */
+  watchDeckProgress(
+    uid: string,
+    onEvent: (event: DeckProgressEvent) => void,
+    onError: (error: Error) => void,
+  ): () => void {
+    return this.decks.watchDeck(
+      studentDeckId(uid),
+      (deck) => onEvent(progressEvent(deck)),
+      onError,
+    );
+  }
+
+  /**
    * Andamento do baralho do aluno que ainda não está pronto. Geração recente
    * segue de pé e só tem o andamento lido; ausente, com erro ou travada
    * começa de novo em segundo plano — o pedido nunca espera a IA.
@@ -270,4 +292,24 @@ function levelOf(user: User): Level {
   return (LEVELS as readonly string[]).includes(user.level)
     ? (user.level as Level)
     : 'A1';
+}
+
+function progressEvent(deck: FlashcardDeck | null): DeckProgressEvent {
+  const total = STUDENT_DECK_SIZE;
+  if (!deck) return { status: 'missing', generated: 0, total };
+  if (deck.status === 'ready' && deck.cards.length > 0) {
+    return {
+      status: 'ready',
+      generated: deck.cards.length,
+      total: deck.cards.length,
+    };
+  }
+  const stuck = Date.now() - Date.parse(deck.updatedAt) >= GENERATING_WINDOW_MS;
+  if (deck.status === 'generating' && !stuck) {
+    return {
+      status: 'generating',
+      ...(deck.progress ?? { generated: 0, total }),
+    };
+  }
+  return { status: 'error', generated: 0, total };
 }
