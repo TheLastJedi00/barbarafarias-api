@@ -2267,6 +2267,52 @@ primeiras leituras uma delas perde sem erro. O texto vem de `default-identity.ts
 - **Modelo:** `GEMINI_ART_MODEL` (padrão `gemini-2.5-flash`), temperatura 0.7. O material
   pedagógico segue no `GEMINI_MODEL`.
 
+### 🃏 Praticando em Casa — `/practice` e `/flashcards` (Spec 037)
+
+Missão diária de flashcards do aluno: **10 cartas por dia, 2 do baralho dele e 8 dos tópicos**.
+O vocabulário saiu do material personalizado (o `TopicSchema` não tem mais `words`).
+
+#### Aluno — `/practice` (só `student`)
+
+| Método | Rota | Descrição |
+|---|---|---|
+| `GET` | `/practice/today/status` | `{ available, pending, answered, total, streak, summary }` — leve, para o ícone do header |
+| `GET` | `/practice/today` | Monta (uma vez por dia de Brasília) e devolve a missão: `{ day, cards, answers, score, completedAt?, streak, summary }` |
+| `POST` | `/practice/today/answers` | `{ cardKey, correct }` — a primeira resposta vale; repetir é ignorado |
+
+- **Sem `@RequiresActivePlan`:** o comprador da loja também pratica. O serviço decide: aluno do
+  plano em dia usa os tópicos do **nível dele**; comprador da loja, os tópicos dos **módulos
+  comprados e vigentes**. Nenhum dos dois = 403.
+- **As 2 do aluno são obrigatórias:** sem o baralho dele pronto, a missão gera ali mesmo (rede
+  de segurança de quem já existia antes da spec); geração em curso há menos de 5 min = 503
+  "tente em instantes".
+- **Montagem** (`mission-builder.ts`, puro): revisões primeiro (as erradas; no banco, no máximo
+  4), depois nunca vistas, depois as vistas há mais tempo. Banco curto completa com cartas do
+  aluno. As 2 do aluno nunca ficam vizinhas.
+- **Nota fixa e média:** a nota do dia (acertos, 0–10) fixa ao responder as 10. Só missão
+  completa entra na média (`scoreSum / missionsCompleted`, uma casa), copiada em
+  `users.practiceSummary` na mesma transação.
+
+#### Gestão — `/flashcards`
+
+| Método | Rota | Papel | Descrição |
+|---|---|---|---|
+| `GET` | `/flashcards/topics/:level` | teacher | Estado do baralho de cada tópico comum do nível (`missing`, `generating`, `ready`, `error`; `stale` se o tópico foi renomeado). Apaga baralhos de tópico removido |
+| `POST` | `/flashcards/topics/:level/:topicId/generate` | teacher | Gera/regera 40 cartas de um tópico — **um por requisição** |
+| `GET` | `/flashcards/students/:id` | manager | Estado do baralho do aluno |
+| `POST` | `/flashcards/students/:id/generate` | manager | Regera as 62 palavras do aluno |
+| `GET`/`PUT` | `/curriculum/flashcards` | teacher | Prompt de Flashcards (sem doc gravado, vale o texto de `flashcards-prompt.default.ts`) |
+
+- **Baralho do aluno na matrícula:** `POST /users` (com objetivo), a edição do perfil e o
+  questionário da loja avisam o `StudentDeckListener`, que gera em segundo plano
+  (`BackgroundTasks` → `waitUntil` da Vercel). Baralho pronto não é regerado sozinho.
+- **Prompt:** Prompt de Flashcards + prompt do nível + tópico (ou dados do aluno) + formato em
+  código (JSON mode + Zod). Pede 44/72 e guarda 40/62 depois de tirar repetidas; o do aluno
+  também tira as palavras que já estão nos baralhos de tópico do nível.
+- **Aulas:** `GET /lessons` e `GET /lessons/day` devolvem `practiceAverage`, `practiceCount` e,
+  na turma, `practiceTotal` (média das médias de quem tem missão), lidos em lote de
+  `users.practiceSummary`.
+
 ## 📊 Estrutura de Dados e Coleções do Firestore
 
 Abaixo está a estrutura de dados armazenada em cada coleção do banco de dados:
@@ -2906,6 +2952,61 @@ Contratos em PDF (spec 036 §6). **Imutáveis**: o repositório só cria.
 
 `users` ganhou `accessFrom` (spec 036): plano de turma pago antes do início só dá acesso a
 partir desta data.
+
+### 23. `flashcardDecks`
+Baralhos de flashcards (spec 037). Um doc por baralho.
+- **Doc ID:** `topic_{level}_{topicId}` (40 cartas) ou `student_{uid}` (62 cartas)
+```json
+{
+  "kind": "'topic' | 'student'",
+  "status": "'generating' | 'ready' | 'error'",
+  "level": "string? — só no de tópico (a consulta por nível depende disso)",
+  "moduleId": "string?", "topicId": "string?", "studentId": "string?",
+  "sourceTitle": "string? — título do tópico na geração; diferente do atual = desatualizado",
+  "cards": [{
+    "id": "'c01'..", "english": "string", "portuguese": "string",
+    "pronounce": "string — respelling para brasileiro, tônica em maiúsculas",
+    "partOfSpeech": "string", "example": "string", "exampleTranslation": "string"
+  }],
+  "generatedAt": "ISO?", "updatedAt": "ISO", "error": "string?"
+}
+```
+
+### 24. `practice`
+Progresso da missão diária (spec 037). **Doc ID:** uid do aluno.
+```json
+{
+  "streak": "number", "bestStreak": "number", "lastCompletedDay": "'YYYY-MM-DD'?",
+  "totalCorrect": "number", "totalAnswered": "number",
+  "scoreSum": "number", "missionsCompleted": "number",
+  "months": { "YYYY-MM": { "scoreSum": "number", "missions": "number" } },
+  "seen": { "{deckId}:{cardId}": { "day": "'YYYY-MM-DD'", "correct": "boolean" } },
+  "retry": ["{deckId}:{cardId}"]
+}
+```
+- `seen` é podado a 90 dias a cada resposta; `months` é a base do histórico mensal futuro.
+- **Subcoleção `practice/{uid}/days/{YYYY-MM-DD}`** — a missão do dia, nunca apagada:
+  `{ day, cards: [{ key, source: 'student' | 'topic', english, portuguese, pronounce,
+  partOfSpeech, example, exampleTranslation }], answers: { [key]: { correct, at } }, score,
+  completedAt? }`. As cartas são **cópia**: regerar um baralho não muda o dia.
+
+`users` ganhou `practiceSummary` (spec 037): `{ average, missions }`.
+
+`curriculum` ganhou o doc `flashcards` (spec 037): `{ prompt }`, o Prompt de Flashcards.
+
+#### Implantação da spec 037
+
+1. Deploy do BE.
+2. Prompt Principal **de produção** sem as duas linhas de `words`:
+   `npx ts-node scripts/037/prompts.ts --project barbarafarias --principal <arquivo> --apply`
+   (sem `--apply` só mostra). Dev não tinha essas linhas.
+3. Baralhos dos tópicos que já existem: **Prompt Manager › Gerar os que faltam**, nível a nível
+   (um tópico por requisição).
+4. Deploy do FE.
+5. `words` legado: `npx ts-node scripts/037/remove-legacy-words.ts --project <id>` simula; com
+   `--apply` salva backup em `scripts/037/backup/` e grava.
+
+Os scripts alcançam dev pela chave do `.env` e prod pelo login do Firebase CLI (`firebase login`).
 
 ---
 
