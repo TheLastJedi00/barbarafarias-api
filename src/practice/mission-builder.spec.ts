@@ -6,6 +6,7 @@ import {
   MISSION_SIZE,
   MissionDay,
   practiceSummary,
+  PracticeSummary,
   pruneSeen,
   PracticeProgress,
 } from './mission-builder';
@@ -232,7 +233,7 @@ describe('applyAnswer (T16)', () => {
       missionsCompleted: 10,
       months: { '2026-11': { scoreSum: 80, missions: 10 } },
     };
-    let summary = null;
+    let summary: PracticeSummary | null = null;
     d.cards.forEach((c, i) => {
       const r = applyAnswer(d, progress, c.key, i < 7, 'now');
       d = r.day;

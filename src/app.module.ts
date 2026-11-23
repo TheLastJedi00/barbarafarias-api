@@ -25,6 +25,7 @@ import { BrandStudioModule } from './brand-studio/brand-studio.module';
 import { StoreModule } from './store/store.module';
 import { PlanTierModule } from './plan-tiers/plan-tier.module';
 import { FlashcardModule } from './flashcards/flashcard.module';
+import { PracticeModule } from './practice/practice.module';
 import { AuthGuard } from './guards/auth.guard';
 import { RolesGuard } from './guards/roles.guard';
 import { ActivePlanGuard } from './guards/active-plan.guard';
@@ -60,6 +61,7 @@ import { FirebaseAuthModule } from './firestore/firebase-auth.module';
     BrandStudioModule,
     StoreModule,
     FlashcardModule,
+    PracticeModule,
   ],
   providers: [
     {
