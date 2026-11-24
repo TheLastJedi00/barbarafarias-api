@@ -115,9 +115,10 @@ export function toDeckCards(
     const key = wordKey(card.english);
     if (!key || seen.has(key)) continue;
     seen.add(key);
+    // `id` depois do spread: carta já numerada (a 2ª chamada do aluno) é renumerada.
     cards.push({
-      id: `c${String(cards.length + 1).padStart(2, '0')}`,
       ...card,
+      id: `c${String(cards.length + 1).padStart(2, '0')}`,
     });
     if (cards.length === size) break;
   }

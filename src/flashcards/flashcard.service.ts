@@ -15,7 +15,9 @@ import { UserService } from '../users/user.service';
 import { countCompleteCards, DeckProgress } from './deck-progress';
 import { FlashcardDeckRepository } from './flashcard-deck.repository';
 import {
+  Flashcard,
   FlashcardDeck,
+  GeneratedCard,
   GeneratedDeckSchema,
   STUDENT_DECK_SIZE,
   studentDeckId,
@@ -32,6 +34,8 @@ const STUDENT_REQUEST = 72;
 /** Abaixo disso a resposta é tratada como falha, não como baralho curto. */
 const MIN_TOPIC_CARDS = 30;
 const MIN_STUDENT_CARDS = 46;
+/** Na segunda chamada do aluno, pede o que falta mais esta folga. */
+const REFILL_MARGIN = 10;
 /** Geração "em andamento" há mais que isso travou (a função caiu no meio). */
 const STUCK_AFTER_MS = 5 * 60 * 1000;
 const TEMPERATURE = 0.6;
@@ -185,21 +189,33 @@ export class FlashcardService {
         this.curriculum.getFlashcardsPrompt(),
         this.decks.findTopicDecksByLevel(level),
       ]);
-      const exclude = new Set(
-        topicDecks.flatMap((d) => d.cards.map((c) => wordKey(c.english))),
-      );
+      // Uma grafia por palavra: a da primeira carta em que ela aparece.
+      const topicWords = new Map<string, string>();
+      for (const card of topicDecks.flatMap((d) => d.cards)) {
+        const key = wordKey(card.english);
+        if (key && !topicWords.has(key)) topicWords.set(key, card.english);
+      }
+      const prompt = (count: number, kept: Flashcard[] = []) =>
+        buildStudentDeckPrompt({
+          flashcardsPrompt: flashcards.prompt,
+          levelPrompt: levelCurriculum.prompt,
+          level,
+          student,
+          count,
+          avoid: [...topicWords.values(), ...kept.map((c) => c.english)],
+        });
 
-      const prompt = buildStudentDeckPrompt({
-        flashcardsPrompt: flashcards.prompt,
-        levelPrompt: levelCurriculum.prompt,
-        level,
-        student,
-        count: STUDENT_REQUEST,
-      });
-      return this.generate(id, prompt, STUDENT_DECK_SIZE, MIN_STUDENT_CARDS, {
-        exclude,
-        progress: true,
-      });
+      return this.generate(
+        id,
+        prompt(STUDENT_REQUEST),
+        STUDENT_DECK_SIZE,
+        MIN_STUDENT_CARDS,
+        {
+          exclude: new Set(topicWords.keys()),
+          progress: true,
+          refill: (kept, missing) => prompt(missing + REFILL_MARGIN, kept),
+        },
+      );
     };
   }
 
@@ -284,20 +300,36 @@ export class FlashcardService {
       exclude?: Set<string>;
       /** Recebe aos pedaços e grava `progress` (só o baralho do aluno). */
       progress?: boolean;
+      /**
+       * Prompt da segunda chamada quando a primeira não enche o baralho
+       * (só o do aluno, fix 037-2): recebe as cartas aceitas e quantas faltam.
+       */
+      refill?: (kept: Flashcard[], missing: number) => string;
     },
   ): Promise<FlashcardDeck> {
     try {
-      const { cards: generated } = options.progress
-        ? await this.gemini.streamJson(
-            prompt,
-            GeneratedDeckSchema,
-            this.progressWriter(id, size),
-            { temperature: TEMPERATURE },
-          )
-        : await this.gemini.generateJson(prompt, GeneratedDeckSchema, {
-            temperature: TEMPERATURE,
+      const first = await this.request(id, prompt, size, options.progress, 0);
+      let cards = toDeckCards(first, size, options.exclude);
+      if (cards.length < size && options.refill) {
+        const missing = size - cards.length;
+        this.logger.warn(
+          `Baralho ${id}: ${cards.length}/${size} na primeira resposta; pedindo as ${missing} que faltam.`,
+        );
+        if (options.progress) {
+          await this.decks.saveProgress(id, {
+            generated: cards.length,
+            total: size,
           });
-      const cards = toDeckCards(generated, size, options.exclude);
+        }
+        const more = await this.request(
+          id,
+          options.refill(cards, missing),
+          size,
+          options.progress,
+          cards.length,
+        );
+        cards = toDeckCards([...cards, ...more], size, options.exclude);
+      }
       if (cards.length < min) {
         throw new Error(
           `A IA devolveu ${cards.length} palavras aproveitáveis; o mínimo é ${min}.`,
@@ -325,11 +357,35 @@ export class FlashcardService {
     }
   }
 
-  /** Grava o andamento quando avança `PROGRESS_STEP` cartas (limitado ao tamanho do baralho). */
-  private progressWriter(id: string, total: number) {
-    let saved = 0;
+  /** Uma chamada ao Gemini; com `progress`, aos pedaços e contando a partir de `offset`. */
+  private async request(
+    id: string,
+    prompt: string,
+    size: number,
+    progress: boolean | undefined,
+    offset: number,
+  ): Promise<GeneratedCard[]> {
+    const { cards } = progress
+      ? await this.gemini.streamJson(
+          prompt,
+          GeneratedDeckSchema,
+          this.progressWriter(id, size, offset),
+          { temperature: TEMPERATURE },
+        )
+      : await this.gemini.generateJson(prompt, GeneratedDeckSchema, {
+          temperature: TEMPERATURE,
+        });
+    return cards;
+  }
+
+  /**
+   * Grava o andamento quando avança `PROGRESS_STEP` cartas (limitado ao
+   * tamanho do baralho). `offset` = cartas já aceitas antes desta chamada.
+   */
+  private progressWriter(id: string, total: number, offset = 0) {
+    let saved = offset;
     return async (text: string) => {
-      const generated = Math.min(countCompleteCards(text), total);
+      const generated = Math.min(offset + countCompleteCards(text), total);
       if (generated - saved < PROGRESS_STEP) return;
       saved = generated;
       await this.decks.saveProgress(id, { generated, total });
