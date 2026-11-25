@@ -28,6 +28,12 @@ export interface TopicDeckPromptInput extends BaseInput {
 
 export interface StudentDeckPromptInput extends BaseInput {
   student: StudentInfo;
+  /**
+   * Palavras que o aluno já vê nos baralhos dos tópicos do nível (e, na
+   * segunda chamada, as já aceitas). Sem a lista a IA escolhe justamente esse
+   * vocabulário, e o filtro do BE descarta mais da metade (fix 037-2).
+   */
+  avoid?: string[];
 }
 
 export function buildTopicDeckPrompt(input: TopicDeckPromptInput): string {
@@ -55,7 +61,15 @@ Palavras do dia a dia de ${student.firstName}, tiradas de ${base} acima.
 Pense nas situações que essa pessoa vive (trabalho, rotina, metas) e escolha o
 vocabulário que ela precisa nelas. Nada de temas genéricos de livro didático
 (cores, números, família, clima) a menos que os dados peçam.`,
+    avoidBlock(input.avoid ?? []),
   ]);
+}
+
+function avoidBlock(words: string[]): string {
+  if (words.length === 0) return '';
+  return `PALAVRAS QUE JÁ ESTÃO NOS OUTROS BARALHOS — NÃO USE nenhuma delas, nem
+outra forma da mesma palavra (plural, conjugação, "to" do infinitivo):
+${words.join(', ')}`;
 }
 
 function compose(input: BaseInput, subject: string[]): string {

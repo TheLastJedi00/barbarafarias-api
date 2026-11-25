@@ -80,5 +80,41 @@ describe('prompts de flashcards', () => {
       expect(prompt).toContain('Leio no trabalho');
       expect(prompt).not.toContain('Prognóstico');
     });
+
+    const ana = {
+      firstName: 'Ana',
+      objectives: 'apresentar campanhas',
+      prognosis: '',
+    };
+
+    it('lista as palavras que já estão nos tópicos para a IA não repetir', () => {
+      const prompt = buildStudentDeckPrompt({
+        flashcardsPrompt: 'CONTEXTO',
+        levelPrompt: 'NIVEL',
+        level: 'A2',
+        student: ana,
+        count: 72,
+        avoid: ['deadline', 'to follow up', 'meeting'],
+      });
+      expect(prompt).toContain('NÃO USE');
+      expect(prompt).toContain('deadline, to follow up, meeting');
+      // a lista vem antes do formato, que fecha o prompt
+      expect(prompt.indexOf('deadline')).toBeLessThan(
+        prompt.indexOf('FORMATO:'),
+      );
+    });
+
+    it('sem palavras para evitar, não põe o bloco', () => {
+      const prompt = buildStudentDeckPrompt({
+        flashcardsPrompt: 'CONTEXTO',
+        levelPrompt: 'NIVEL',
+        level: 'A2',
+        student: ana,
+        count: 72,
+        avoid: [],
+      });
+      expect(prompt).not.toContain('NÃO USE');
+      expect(prompt).not.toMatch(/\n{3,}/);
+    });
   });
 });

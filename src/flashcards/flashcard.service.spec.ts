@@ -4,6 +4,7 @@ import {
 } from '@nestjs/common';
 import { FlashcardService, studentContext } from './flashcard.service';
 import {
+  Flashcard,
   FlashcardDeck,
   GeneratedCard,
   STUDENT_DECK_SIZE,
@@ -190,6 +191,10 @@ describe('FlashcardService', () => {
   });
 
   describe('baralho do aluno', () => {
+    const promptOf = (call: number) =>
+      (gemini.streamJson.mock.calls as unknown[][])[call][0] as string;
+    const savedCards = () =>
+      (repo.saveCards.mock.calls as unknown[][])[0][1] as Flashcard[];
     const aluna = {
       id: 'u1',
       fullName: 'Ana Souza',
@@ -218,6 +223,130 @@ describe('FlashcardService', () => {
       expect(saved).toHaveLength(STUDENT_DECK_SIZE);
       // w0..w9 já existem nos baralhos de tópico
       expect(saved[0].english).toBe('w10');
+    });
+
+    it('manda no prompt as palavras dos tópicos do nível, sem repetir', async () => {
+      users.findById.mockResolvedValue(aluna);
+      repo.findTopicDecksByLevel.mockResolvedValue([
+        deck({ cards: [{ ...cards(1, 'deadline')[0], id: 'c01' }] }),
+        deck({
+          cards: [
+            { ...cards(1, 'Deadline')[0], id: 'c01' },
+            { ...cards(1, 'meeting')[0], id: 'c02' },
+          ],
+        }),
+      ]);
+      gemini.streamJson.mockResolvedValue({ cards: cards(80) });
+
+      await service.generateStudentDeck('u1');
+
+      const prompt = promptOf(0);
+      expect(prompt).toContain('NÃO USE');
+      expect(prompt).toContain('deadline0, meeting0');
+      expect(prompt).not.toContain('Deadline0');
+    });
+
+    it('resposta curta: pede o que falta numa segunda chamada e junta as duas', async () => {
+      users.findById.mockResolvedValue(aluna);
+      // w0..w39 já estão nos tópicos: das 72 da primeira, sobram 32
+      repo.findTopicDecksByLevel.mockResolvedValue([
+        deck({ cards: cards(40).map((c, i) => ({ ...c, id: `c${i}` })) }),
+      ]);
+      gemini.streamJson
+        .mockResolvedValueOnce({ cards: cards(72) })
+        .mockResolvedValueOnce({
+          cards: [...cards(3, 'w4'), ...cards(40, 'extra')],
+        });
+
+      await service.generateStudentDeck('u1');
+
+      expect(gemini.streamJson).toHaveBeenCalledTimes(2);
+      const refill = promptOf(1);
+      // pede as 30 que faltam com folga e evita as 32 já aceitas
+      expect(refill).toContain('exatamente 40');
+      expect(refill).toContain('w40');
+      expect(refill).toContain('w71');
+      const saved = savedCards();
+      expect(saved).toHaveLength(STUDENT_DECK_SIZE);
+      expect(saved[0]).toMatchObject({ id: 'c01', english: 'w40' });
+      expect(saved[32]).toMatchObject({ id: 'c33', english: 'extra0' });
+      expect(new Set(saved.map((c) => c.id)).size).toBe(STUDENT_DECK_SIZE);
+      expect(repo.markError).not.toHaveBeenCalled();
+    });
+
+    it('a segunda chamada continua o andamento de onde a primeira parou', async () => {
+      users.findById.mockResolvedValue(aluna);
+      repo.findTopicDecksByLevel.mockResolvedValue([
+        deck({ cards: cards(40).map((c, i) => ({ ...c, id: `c${i}` })) }),
+      ]);
+      const json = (n: number) =>
+        `{"cards":[${cards(n)
+          .map((c) => JSON.stringify(c))
+          .join(',')},{"engl`;
+      gemini.streamJson
+        .mockResolvedValueOnce({ cards: cards(72) })
+        .mockImplementationOnce(
+          async (
+            _p: string,
+            _s: unknown,
+            onProgress: (t: string) => unknown,
+          ) => {
+            for (const n of [3, 5, 40]) await onProgress(json(n));
+            return { cards: cards(40, 'extra') };
+          },
+        );
+
+      await service.generateStudentDeck('u1');
+
+      expect(repo.saveProgress.mock.calls).toEqual([
+        ['student_u1', { generated: 32, total: STUDENT_DECK_SIZE }],
+        ['student_u1', { generated: 37, total: STUDENT_DECK_SIZE }],
+        [
+          'student_u1',
+          { generated: STUDENT_DECK_SIZE, total: STUDENT_DECK_SIZE },
+        ],
+      ]);
+    });
+
+    it('baralho cheio na primeira resposta não faz segunda chamada', async () => {
+      users.findById.mockResolvedValue(aluna);
+      gemini.streamJson.mockResolvedValue({ cards: cards(72) });
+      await service.generateStudentDeck('u1');
+      expect(gemini.streamJson).toHaveBeenCalledTimes(1);
+    });
+
+    it('acima do mínimo depois da segunda chamada, guarda o baralho mais curto', async () => {
+      users.findById.mockResolvedValue(aluna);
+      repo.findTopicDecksByLevel.mockResolvedValue([
+        deck({ cards: cards(40).map((c, i) => ({ ...c, id: `c${i}` })) }),
+      ]);
+      gemini.streamJson
+        .mockResolvedValueOnce({ cards: cards(72) })
+        .mockResolvedValueOnce({ cards: cards(20, 'extra') });
+
+      await service.generateStudentDeck('u1');
+
+      expect(savedCards()).toHaveLength(52);
+    });
+
+    it('ainda abaixo do mínimo depois da segunda chamada, marca erro', async () => {
+      users.findById.mockResolvedValue(aluna);
+      repo.findTopicDecksByLevel.mockResolvedValue([
+        deck({ cards: cards(60).map((c, i) => ({ ...c, id: `c${i}` })) }),
+      ]);
+      gemini.streamJson
+        .mockResolvedValueOnce({ cards: cards(72) })
+        .mockResolvedValueOnce({ cards: cards(72) });
+
+      await expect(service.generateStudentDeck('u1')).rejects.toThrow(
+        UnprocessableEntityException,
+      );
+      expect(gemini.streamJson).toHaveBeenCalledTimes(2);
+      expect(repo.markError).toHaveBeenCalledWith(
+        'student_u1',
+        expect.stringContaining('12 palavras aproveitáveis'),
+      );
+      expect(repo.saveCards).not.toHaveBeenCalled();
     });
 
     it('sem objetivo nem questionário, recusa com mensagem clara', async () => {
